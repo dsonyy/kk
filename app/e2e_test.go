@@ -71,7 +71,7 @@ func newEnv(t *testing.T, extra ...string) *env {
 	sock := fmt.Sprintf("kk-test-%d", time.Now().UnixNano())
 	e.vars = append([]string{
 		"KK_HOME=" + e.home, "KK_ADDR=" + e.addr, "KK_TMUX=" + sock, "FAKE_HOME=" + e.fake, "CODEX_HOME=" + codex,
-		"PATH=" + fakeBin + ":" + os.Getenv("PATH"), "KK_START_TIMEOUT=2s", "KK_SOURCE=" + root,
+		"PATH=" + fakeBin + ":" + os.Getenv("PATH"), "KK_START_TIMEOUT=2s", "KK_SOURCE=" + root, "HOME=" + root,
 	}, extra...)
 	if !hasVar(extra, "KK_NO_COORDINATOR") && !hasVar(extra, "KK_COORDINATOR") {
 		e.vars = append(e.vars, "KK_NO_COORDINATOR=1")
@@ -315,16 +315,20 @@ func TestCodexConversation(t *testing.T) {
 func TestCursorConversation(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "cursor", "-C", e.work, "hi cursor")
-	c := e.waitFor("running", id, func(c convView) bool { return c.Status == statusWorking })
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(e.mustKK("screen", id), "cursor answer: hi cursor") {
-		if time.Now().After(deadline) {
-			t.Fatalf("screen: %s", e.mustKK("screen", id))
-		}
-		time.Sleep(100 * time.Millisecond)
+	c := e.waitFor("cursor answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: hi cursor") })
+	if !hasEvent(c, kindUser, "hi cursor") || !hasEvent(c, kindTool, "ls") || !c.Unread || c.Session == "" {
+		t.Fatalf("conversation: %+v", c)
 	}
-	if c.Title != "hi cursor" {
-		t.Fatalf("title: %q", c.Title)
+	e.mustKK("send", id, "line one\nline two")
+	e.waitFor("reply", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: line one\nline two") })
+	e.mustKK("send", id, "exit")
+	e.waitFor("exit", id, func(c convView) bool { return c.Status == statusExited })
+	e.mustKK("resume", id)
+	e.mustKK("send", id, "again")
+	e.waitFor("answer after resume", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: again") })
+	argv, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
+	if !strings.Contains(string(argv), `"--resume","`+c.Session+`"`) || !strings.Contains(string(argv), `"--plugin-dir"`) {
+		t.Fatalf("argv: %s", argv)
 	}
 }
 

@@ -41,8 +41,14 @@ func main() {
 		session = uuid()
 	}
 	dir := filepath.Join(os.Getenv("FAKE_HOME"), mode)
-	os.MkdirAll(dir, 0o755)
 	transcript = filepath.Join(dir, session+".jsonl")
+	if mode == "cursor-agent" {
+		wd, _ := os.Getwd()
+		slug := strings.Trim(regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(wd, "-"), "-")
+		dir = filepath.Join(os.Getenv("HOME"), ".cursor", "projects", slug, "agent-transcripts", session)
+		transcript = filepath.Join(dir, session+".jsonl")
+	}
+	os.MkdirAll(dir, 0o755)
 	if mode == "codex" && !resume {
 		write(map[string]any{"type": "session_meta", "payload": map[string]any{"session_id": session}})
 	}
@@ -88,6 +94,18 @@ func parseArgs(args []string) (prompt string, resume bool) {
 			for e, v := range s.Hooks {
 				hooks[e] = v[0].Hooks[0].Command
 			}
+		case a == "--plugin-dir":
+			var p struct {
+				Hooks map[string][]struct{ Command string } `json:"hooks"`
+			}
+			data, _ := os.ReadFile(filepath.Join(next(), "hooks", "hooks.json"))
+			json.Unmarshal(data, &p)
+			// Cursor CLI 2026.11 fires only these plugin hooks.
+			for _, e := range []string{"sessionStart", "preToolUse", "postToolUse"} {
+				if v := p.Hooks[e]; len(v) > 0 {
+					hooks[strings.ToUpper(e[:1])+e[1:]] = v[0].Command
+				}
+			}
 		case a == "-c":
 			if m := codexHook.FindStringSubmatch(next()); m != nil {
 				hooks[m[1]], _ = strconv.Unquote(m[2])
@@ -130,6 +148,9 @@ func hook(event string, extra map[string]any) {
 		return
 	}
 	payload := map[string]any{"session_id": session, "transcript_path": transcript, "hook_event_name": event}
+	if mode == "cursor-agent" && event == "SessionStart" {
+		payload["transcript_path"] = nil
+	}
 	for k, v := range extra {
 		payload[k] = v
 	}
@@ -155,6 +176,12 @@ func handle(prompt string) {
 		if prompt == "exit" {
 			os.Exit(0)
 		}
+		cursorLine(map[string]any{"role": "user", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "<timestamp>Monday</timestamp>\n<user_query>\n" + prompt + "\n</user_query>"}}}})
+		hook("PreToolUse", map[string]any{"tool_name": "Shell"})
+		cursorLine(map[string]any{"role": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "name": "Shell", "input": map[string]any{"command": "ls", "description": "List"}}}}})
+		hook("PostToolUse", map[string]any{"tool_name": "Shell"})
+		cursorLine(map[string]any{"role": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "echo: " + prompt}}}})
+		cursorLine(map[string]any{"type": "turn_ended", "status": "success"})
 		fmt.Printf("cursor answer: %s\n", prompt)
 		return
 	}
@@ -194,6 +221,13 @@ func handle(prompt string) {
 	}
 	fmt.Printf("agent: echo: %s\n", prompt)
 	hook("Stop", map[string]any{"last_assistant_message": "echo: " + prompt})
+}
+
+func cursorLine(v map[string]any) {
+	data, _ := json.Marshal(v)
+	f, _ := os.OpenFile(transcript, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f.Write(append(data, '\n'))
+	f.Close()
 }
 
 func userLine(prompt string) {

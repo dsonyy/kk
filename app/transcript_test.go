@@ -54,3 +54,26 @@ func TestParseRealCodexTranscript(t *testing.T) {
 		t.Fatalf("context %d", tail.Context)
 	}
 }
+
+func TestParseRealCursorTranscript(t *testing.T) {
+	tail := readFixture(t, "testdata/cursor.jsonl", parseCursor)
+	want := []Event{
+		{Kind: kindUser, Text: "Run ls, then reply with just: hi"},
+		{Kind: kindTool, Tool: "Shell", Input: "ls"},
+		{Kind: kindAssistant, Text: "hi"},
+		{Kind: kindUser, Text: "First line.\nSecond line: reply with just: ok"},
+		{Kind: kindAssistant, Text: "ok"},
+	}
+	if len(tail.Events) != len(want) {
+		t.Fatalf("events: %+v", tail.Events)
+	}
+	for i, w := range want {
+		got := tail.Events[i]
+		if got.Kind != w.Kind || got.Text != w.Text || got.Tool != w.Tool || got.Input != w.Input {
+			t.Fatalf("event %d: got %+v, want %+v", i, got, w)
+		}
+	}
+	if tail.Ended.IsZero() || tail.Waiting {
+		t.Fatalf("ended %v, waiting %v", tail.Ended, tail.Waiting)
+	}
+}

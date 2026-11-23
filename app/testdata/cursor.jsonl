@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Nov 23, 2026, 10:47 PM (UTC)</timestamp>\n<user_query>\nRun ls, then reply with just: hi\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"ls","description":"List directory contents"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"turn_ended","status":"success"}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,7 @@ func harnesses() []Harness {
 	return []Harness{
 		{Name: "claude", Label: "Claude Code", Models: []string{"", "opus", "sonnet", "haiku", "fable"}, Hooks: true},
 		{Name: "codex", Label: "Codex", Models: codexModels(), Hooks: true},
-		{Name: "cursor", Label: "Cursor", Models: cursorModels(), Hooks: false},
+		{Name: "cursor", Label: "Cursor", Models: cursorModels(), Hooks: true},
 	}
 }
 
@@ -83,6 +84,7 @@ func cursorModels() []string {
 	}
 	cursorCache.at = time.Now()
 	cursorCache.models = []string{""}
+	var listed []string
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "cursor-agent", "--list-models").Output()
@@ -92,8 +94,11 @@ func cursorModels() []string {
 	for _, line := range strings.Split(string(out), "\n") {
 		id, _, ok := strings.Cut(strings.TrimSpace(line), " - ")
 		if ok && id != "" && !strings.Contains(id, " ") {
-			cursorCache.models = append(cursorCache.models, id)
+			listed = append(listed, id)
 		}
+	}
+	if len(listed) > 0 {
+		cursorCache.models = listed
 	}
 	return cursorCache.models
 }
@@ -161,7 +166,11 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 		}
 		return argv, nil
 	case "cursor":
-		argv := []string{"cursor-agent"}
+		plugin, err := s.cursorPlugin()
+		if err != nil {
+			return nil, err
+		}
+		argv := []string{"cursor-agent", "--plugin-dir", plugin}
 		if c.Model != "" {
 			argv = append(argv, "--model", c.Model)
 		}
@@ -179,8 +188,41 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 	return nil, fmt.Errorf("unknown harness %q", c.Harness)
 }
 
+// cursorPlugin writes a Cursor plugin whose hooks report to kk. Cursor CLI 2026.11 fires only
+// sessionStart and the tool hooks; turns end in the transcript.
+func (s *Server) cursorPlugin() (string, error) {
+	dir := filepath.Join(s.store.dir, "hooks", "cursor")
+	if err := os.MkdirAll(filepath.Join(dir, ".cursor-plugin"), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "hooks"), 0o700); err != nil {
+		return "", err
+	}
+	manifest := `{"name":"kk","version":"1.0.0","description":"Reports agent state to kk"}`
+	if err := os.WriteFile(filepath.Join(dir, ".cursor-plugin", "plugin.json"), []byte(manifest), 0o600); err != nil {
+		return "", err
+	}
+	events := map[string]string{"sessionStart": "SessionStart", "beforeSubmitPrompt": "UserPromptSubmit", "preToolUse": "PreToolUse", "postToolUse": "PostToolUse", "stop": "Stop"}
+	hooks := map[string]any{}
+	for cursor, kk := range events {
+		hooks[cursor] = []any{map[string]string{"command": shellJoin([]string{s.bin, "hook", kk})}}
+	}
+	data, _ := json.MarshalIndent(map[string]any{"version": 1, "hooks": hooks}, "", "  ")
+	return dir, os.WriteFile(filepath.Join(dir, "hooks", "hooks.json"), data, 0o600)
+}
+
+var nonSlug = regexp.MustCompile(`[^A-Za-z0-9]+`)
+
+func cursorTranscript(dir, session string) string {
+	h, _ := os.UserHomeDir()
+	slug := strings.Trim(nonSlug.ReplaceAllString(dir, "-"), "-")
+	return filepath.Join(h, ".cursor", "projects", slug, "agent-transcripts", session, session+".jsonl")
+}
+
 func parserFor(harness string) func(*Tail, []byte) {
 	switch harness {
+	case "cursor":
+		return parseCursor
 	case "claude":
 		return parseClaude
 	case "codex":

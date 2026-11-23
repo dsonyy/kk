@@ -40,6 +40,11 @@ type Tail struct {
 	Title   string
 	Context int
 	Last    time.Time
+	// Ended is when the last turn ended, for harnesses whose transcript records it (Cursor).
+	Ended time.Time
+	// Waiting is true when the last message is the user's and no turn end follows.
+	Waiting bool
+	stamp   time.Time
 }
 
 func newTail(path string) *Tail {
@@ -67,6 +72,7 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 		return false, err
 	}
 	t.offset += int64(len(data))
+	t.stamp = st.ModTime()
 	data = append(t.partial, data...)
 	end := bytes.LastIndexByte(data, '\n')
 	if end < 0 {
@@ -357,6 +363,46 @@ func parseCodex(t *Tail, raw []byte) {
 			t.add(Event{Kind: kindNote, Text: "Conversation compacted", Time: at})
 		default:
 			t.addTool("", Event{Tool: it.Type, Detail: pretty(l.Payload.Item), Time: at})
+		}
+	}
+}
+
+// Cursor transcript: ~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl, without timestamps.
+
+var userQuery = regexp.MustCompile(`(?s)<user_query>\n?(.*?)\n?</user_query>`)
+
+func parseCursor(t *Tail, raw []byte) {
+	var l struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Message struct {
+			Content []claudeBlock `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &l) != nil {
+		return
+	}
+	at := t.stamp
+	if l.Type == "turn_ended" {
+		t.Ended, t.Waiting = at, false
+		return
+	}
+	for _, b := range l.Message.Content {
+		switch {
+		case l.Role == "user" && b.Type == "text":
+			text := b.Text
+			if m := userQuery.FindStringSubmatch(text); m != nil {
+				text = m[1]
+			}
+			t.add(Event{Kind: kindUser, Text: text, Time: at})
+			t.Waiting = true
+		case b.Type == "text" && strings.TrimSpace(b.Text) != "":
+			t.add(Event{Kind: kindAssistant, Text: b.Text, Time: at})
+		case b.Type == "thinking" && strings.TrimSpace(b.Thinking) != "":
+			t.add(Event{Kind: kindThinking, Text: b.Thinking, Time: at})
+		case b.Type == "tool_use":
+			input, detail := toolSummary(b.Input)
+			t.addTool("", Event{Tool: b.Name, Input: input, Detail: detail, Time: at})
 		}
 	}
 }

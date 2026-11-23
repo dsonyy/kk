@@ -396,6 +396,8 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		}
 		if p.TranscriptPath != "" {
 			c.Transcript = p.TranscriptPath
+		} else if c.Harness == "cursor" && c.Session != "" && c.Transcript == "" {
+			c.Transcript = cursorTranscript(c.Dir, c.Session)
 		}
 		c.Activity = now
 		switch event {
@@ -502,6 +504,12 @@ func (s *Server) tick() {
 				}
 				if t.Context != c.Context {
 					c.Context, changed = t.Context, true
+				}
+				if t.Ended.After(c.TurnEnded) && c.Status != statusExited {
+					c.Status, c.TurnEnded, changed = statusIdle, t.Ended, true
+				}
+				if t.Waiting && c.Status == statusIdle {
+					c.Status, changed = statusWorking, true
 				}
 			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
