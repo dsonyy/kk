@@ -1,4 +1,6 @@
 {"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Nov 23, 2026, 10:47 PM (UTC)</timestamp>\n<user_query>\nRun ls, then reply with just: hi\n</user_query>"}]}}
 {"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"ls","description":"List directory contents"}}]}}
 {"role":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Nov 23, 2026, 10:49 PM (UTC)</timestamp>\n<user_query>\nFirst line.\nSecond line: reply with just: ok\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}
 {"type":"turn_ended","status":"success"}
