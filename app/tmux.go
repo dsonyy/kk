@@ -63,7 +63,7 @@ func respawnWindow(id, dir string, env map[string]string, argv []string) error {
 func windows() (map[string]bool, error) {
 	out, err := tmux("", "list-panes", "-s", "-t", "="+tmuxSession, "-F", "#{window_id} #{pane_dead}")
 	if err != nil {
-		if strings.Contains(err.Error(), "can't find session") || strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "error connecting") {
+		if strings.Contains(err.Error(), "can't find") || strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "error connecting") {
 			return map[string]bool{}, nil
 		}
 		return nil, err

@@ -221,16 +221,6 @@ func (s *Server) launch(c *Conversation, resume bool) error {
 	if err != nil {
 		return err
 	}
-	env := map[string]string{"KK_CONVERSATION": c.ID, "KK_HOME": s.store.dir}
-	alive, _ := windows()
-	if _, ok := alive[c.Window]; ok && c.Window != "" {
-		err = respawnWindow(c.Window, c.Dir, env, argv)
-	} else {
-		c.Window, err = openWindow(c.ID, c.Dir, env, argv)
-	}
-	if err != nil {
-		return err
-	}
 	h, _ := findHarness(c.Harness)
 	c.Status = statusStarting
 	if !h.Hooks {
@@ -239,7 +229,27 @@ func (s *Server) launch(c *Conversation, resume bool) error {
 	c.Attention = ""
 	c.Closed = false
 	c.Launched = time.Now()
+	// Saved before the agent starts, because its first hook can arrive within milliseconds.
 	if err := s.store.put(*c); err != nil {
+		return err
+	}
+	env := map[string]string{"KK_CONVERSATION": c.ID, "KK_HOME": s.store.dir}
+	alive, _ := windows()
+	if _, ok := alive[c.Window]; ok && c.Window != "" {
+		err = respawnWindow(c.Window, c.Dir, env, argv)
+	} else {
+		var window string
+		window, err = openWindow(c.ID, c.Dir, env, argv)
+		*c, _ = s.store.update(c.ID, func(c *Conversation) bool {
+			c.Window = window
+			return true
+		})
+	}
+	if err != nil {
+		s.store.update(c.ID, func(c *Conversation) bool {
+			c.Status = statusExited
+			return true
+		})
 		return err
 	}
 	s.publish(c.ID)
@@ -488,7 +498,7 @@ func (s *Server) tick() {
 		events := s.readTail(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
-			if c.Status != statusExited && !alive[c.Window] {
+			if c.Status != statusExited && c.Window != "" && !alive[c.Window] {
 				c.Status, c.Attention, changed = statusExited, "", true
 			}
 			if c.Status == statusStarting && c.Attention == "" && now.Sub(c.Launched) > s.startTimeout {
