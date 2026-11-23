@@ -1,0 +1,10 @@
+[Unit]
+Description=kk, web conductor for coding agents
+
+[Service]
+ExecStart=%h/.local/bin/kk
+Restart=on-failure
+KillMode=process
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,20 @@
+{
+  "name": "kk-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "dependencies": {
+    "dompurify": "^3.5.0",
+    "marked": "^18.2.1",
+    "preact": "^11.2.0"
+  }
+}
