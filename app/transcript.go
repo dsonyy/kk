@@ -198,7 +198,8 @@ func parseClaude(t *Tail, raw []byte) {
 					t.add(Event{Kind: kindThinking, Text: b.Thinking, Time: l.Timestamp})
 				}
 			case "tool_use":
-				t.addTool(b.ID, Event{Tool: b.Name, Input: toolSummary(b.Input), Detail: pretty(b.Input), Time: l.Timestamp})
+				input, detail := toolSummary(b.Input)
+				t.addTool(b.ID, Event{Tool: b.Name, Input: input, Detail: detail, Time: l.Timestamp})
 			}
 		}
 	}
@@ -233,17 +234,29 @@ func blockText(raw json.RawMessage) string {
 
 var summaryKeys = []string{"command", "file_path", "path", "pattern", "url", "query", "description", "prompt", "skill"}
 
-func toolSummary(raw json.RawMessage) string {
+// toolSummary returns a one-line summary of a tool input and the detail worth showing when it is expanded.
+func toolSummary(raw json.RawMessage) (string, string) {
 	var m map[string]any
 	if json.Unmarshal(raw, &m) != nil {
-		return ""
+		return "", pretty(raw)
 	}
 	for _, k := range summaryKeys {
-		if s, ok := m[k].(string); ok && s != "" {
-			return firstLine(s, 160)
+		s, ok := m[k].(string)
+		if !ok || s == "" {
+			continue
 		}
+		summary := firstLine(s, 160)
+		delete(m, k)
+		delete(m, "description")
+		if len(m) > 0 {
+			return summary, pretty(raw)
+		}
+		if summary != s {
+			return summary, s
+		}
+		return summary, ""
 	}
-	return ""
+	return "", pretty(raw)
 }
 
 func pretty(raw json.RawMessage) string {

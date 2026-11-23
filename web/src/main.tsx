@@ -308,8 +308,8 @@ function ConversationView({ c, reload, side }: { c: Conversation; reload: () => 
           {c.attention && (
             <div class="box-warn">
               <p>{c.attention}</p>
-              {screen && <pre>{screen}</pre>}
               <Keys id={c.id} />
+              {screen && <pre>{screen}</pre>}
             </div>
           )}
         </div>

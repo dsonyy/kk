@@ -2,6 +2,7 @@
 Description=kk, web conductor for coding agents
 
 [Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin
 ExecStart=%h/.local/bin/kk
 Restart=on-failure
 KillMode=process

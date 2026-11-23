@@ -194,8 +194,12 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if err := decode(r, &in); err != nil {
 		return nil, err
 	}
-	if _, ok := findHarness(in.Harness); !ok {
+	h, ok := findHarness(in.Harness)
+	if !ok {
 		return nil, fail(400, "unknown harness %q, use claude, codex or cursor", in.Harness)
+	}
+	if in.Model == "" {
+		in.Model = h.Models[0]
 	}
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, fail(400, "prompt is empty")
