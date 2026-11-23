@@ -40,7 +40,7 @@ type ButtonProps = Omit<ComponentProps<"button">, "label"> & { label: string; ic
 export function Button({ label, icon, ...rest }: ButtonProps) {
   const [index, key] = useMnemonic(label);
   return (
-    <button type="button" {...rest} data-key={key}>
+    <button type="button" aria-label={label} {...rest} data-key={key}>
       {icon && <i class={`icon icon-${icon}`} />}
       <Underlined label={label} index={index} />
     </button>

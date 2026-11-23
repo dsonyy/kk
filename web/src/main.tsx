@@ -403,13 +403,15 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
   const [models, setModels] = useState<Record<string, string>>(() => JSON.parse(localStorage.getItem("kk.models") || "{}"));
   const [dir, setDir] = useState(localStorage.getItem("kk.dir") || "");
   const [busy, setBusy] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    promptRef.current?.focus();
     act(async () => {
       setHarnesses(await api<Harness[]>("GET", "/api/harnesses"));
       const d = await api<string[]>("GET", "/api/dirs");
       setDirs(d);
-      if (!localStorage.getItem("kk.dir") && d[0]) setDir(d[0]);
+      if (d[0]) setDir((cur) => cur || d[0]);
     });
     const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", esc);
@@ -442,7 +444,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
           <h1>New session</h1>
           <Field label="Prompt">
             <textarea
-              autofocus
+              ref={promptRef}
               value={prompt}
               onInput={(e) => setPrompt(e.currentTarget.value)}
               onKeyDown={(e) => {
