@@ -27,6 +27,10 @@ export type Conversation = {
   activity: string;
   status: "starting" | "working" | "idle" | "exited";
   attention?: string;
+  // Who has to act on an agent that stopped; empty while it works.
+  waiting_for: "" | "user" | "conductor";
+  // Why the conductor handed the agent to the user.
+  escalation?: string;
   closed?: boolean;
   context_tokens: number;
   unread: boolean;

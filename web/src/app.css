@@ -84,6 +84,9 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
 .dot.idle { background: var(--text-strong); }
 .dot.attention { background: var(--warn-text); }
+.dot.conductor { background: none; box-shadow: inset 0 0 0 1px var(--text-strong); }
+.dot.attention.conductor { box-shadow: inset 0 0 0 1px var(--warn-text); }
+.dot.exited.conductor { box-shadow: inset 0 0 0 1px var(--text-dim); }
 .dot.working, .dot.starting { background: var(--text-strong); animation: blink 1s steps(2, jump-none) infinite; }
 @keyframes blink { to { opacity: .2; } }
 .spinner { flex: none; width: 7px; height: 7px; background: var(--text-strong); animation: blink .6s steps(2, jump-none) infinite; }
@@ -112,6 +115,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .group > summary:hover .name, .group.unread .name { color: var(--text-strong); }
 .group.unread .name::before { content: "● "; font-size: 10px; vertical-align: 1px; }
 .group .state, .group .count { flex: none; font-size: 11px; }
+.group .state.user { color: var(--text-strong); }
+.group.warn > summary { border-color: var(--warn-line); }
 .group.attention > summary { border-color: var(--warn-line); animation: attention 1s ease-in-out infinite alternate; }
 .group.attention .state { color: var(--warn-text); }
 .tiles { list-style: none; margin: 0; padding: 2px 0 6px; display: flex; flex-direction: column; gap: 8px; }
@@ -132,6 +137,9 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile.on { border-color: var(--text-strong); background: var(--surface-2); }
 .tile .title { color: var(--text-strong); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
+.tile .state.user { color: var(--text-strong); }
+.tile .reason { padding-left: 8px; border-left: 2px solid var(--text-strong); color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile.warn { border-color: var(--warn-line); }
 .tile.unread { box-shadow: inset 3px 0 0 var(--text-strong); }
 .tile.unread .title::before { content: "● "; font-size: 10px; vertical-align: 1px; }
 .tile.exited { opacity: .6; }
@@ -170,6 +178,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .modes button.on { background: var(--surface-2); border-color: var(--text-strong); color: var(--text-strong); position: relative; }
 .conv-head .actions { flex: 0 1 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .status { color: var(--text-strong); }
+.status.conductor { color: var(--text); }
 .status.attention { color: var(--warn-text); }
 .feed { flex: 1; min-height: 0; overflow-y: auto; padding: var(--gap); background: var(--read-bg); }
 .feed-inner { display: flex; flex-direction: column; gap: 16px; }

@@ -85,14 +85,14 @@ export function SettingsView() {
             })}
           </table>
 
-          <h1>Coordinator</h1>
+          <h1>Conductor</h1>
           <label class="check">
             <input type="checkbox" checked={draft.coordinator} onChange={(e) => set("coordinator", e.currentTarget.checked)} />
-            Run the coordinator
+            Run the conductor
           </label>
           {note("coordinator", "Turning it on starts it now. Turning it off applies the next time kk starts.")}
           <Field label="Model">
-            {note("coordinator_model", "Used the next time the coordinator starts.")}
+            {note("coordinator_model", "Used the next time the conductor starts.")}
             <select value={draft.coordinator_model} onChange={(e) => set("coordinator_model", e.currentTarget.value)}>
               {(harnesses.find((h) => h.name === "claude")?.models ?? [draft.coordinator_model]).map((m) => (
                 <option value={m} key={m}>
@@ -102,14 +102,14 @@ export function SettingsView() {
             </select>
           </Field>
           <Field label="Compact after idle, minutes">
-            {note("compact_after_minutes", "kk compacts the coordinator's conversation after this much idle time.")}
+            {note("compact_after_minutes", "kk compacts the conductor's conversation after this much idle time.")}
             {number("compact_after_minutes")}
           </Field>
           <Field label="Compact above, tokens">
             {note("compact_tokens", "Only when the conversation is at least this large.")}
             {number("compact_tokens")}
           </Field>
-          <DirField label="Source directory" hint={noteText("source", "Where the kk source is. The coordinator is told to change kk there.")} value={draft.source} onValue={(dir) => set("source", dir)} />
+          <DirField label="Source directory" hint={noteText("source", "Where the kk source is. The conductor is told to change kk there.")} value={draft.source} onValue={(dir) => set("source", dir)} />
 
           <h1>Server</h1>
           <Field label="Address">
