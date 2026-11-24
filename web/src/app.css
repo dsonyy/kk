@@ -237,7 +237,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); }
 .field textarea { min-height: 160px; resize: vertical; color: var(--text); }
 .new-session > h1:not(:first-child) { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.past { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.past { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .past .tile { gap: 6px; padding: 10px 12px; min-width: 0; }
 .past .tile .title { font-size: 15px; }
 .past .tile .meta { font-size: 12px; }
