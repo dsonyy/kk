@@ -104,6 +104,8 @@ func logArgs(args []string) {
 		f, _ := os.OpenFile(filepath.Join(dir, "argv.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		json.NewEncoder(f).Encode(append([]string{mode}, args...))
 		f.Close()
+		wd, _ := os.Getwd()
+		os.WriteFile(filepath.Join(dir, "cwd.log"), []byte(wd+"\n"), 0o644)
 	}
 }
 

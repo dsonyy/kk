@@ -16,11 +16,13 @@ import (
 const coordinatorID = "coordinator"
 
 type Conversation struct {
-	ID          string    `yaml:"id" json:"id"`
-	Role        string    `yaml:"role,omitempty" json:"role,omitempty"`
-	Harness     string    `yaml:"harness" json:"harness"`
-	Model       string    `yaml:"model,omitempty" json:"model,omitempty"`
-	Dir         string    `yaml:"dir" json:"dir"`
+	ID      string `yaml:"id" json:"id"`
+	Role    string `yaml:"role,omitempty" json:"role,omitempty"`
+	Harness string `yaml:"harness" json:"harness"`
+	Model   string `yaml:"model,omitempty" json:"model,omitempty"`
+	Dir     string `yaml:"dir" json:"dir"`
+	// Repo is the directory the user chose when the agent runs in a worktree made for it.
+	Repo        string    `yaml:"repo,omitempty" json:"repo,omitempty"`
 	Prompt      string    `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	Title       string    `yaml:"title,omitempty" json:"title"`
 	Created     time.Time `yaml:"created" json:"created"`
@@ -163,9 +165,13 @@ func (s *Store) recentDirs() []string {
 	seen := map[string]bool{}
 	var dirs []string
 	for _, c := range s.list() {
-		if c.Role == "" && !seen[c.Dir] {
-			seen[c.Dir] = true
-			dirs = append(dirs, c.Dir)
+		dir := c.Dir
+		if c.Repo != "" {
+			dir = c.Repo
+		}
+		if c.Role == "" && !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
 		}
 	}
 	if len(dirs) == 0 {

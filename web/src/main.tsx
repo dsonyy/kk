@@ -3,12 +3,12 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Conversation, type Event, type Harness, type PastSession } from "./api";
+import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo } from "./api";
 import { Controls } from "./controls";
 import { Load } from "./load";
-import { PromptInput, useSkills } from "./prompt";
+import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { SettingsView } from "./settings";
-import { Button, Field, Scope } from "./mnemonic";
+import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import "./app.css";
 
@@ -245,7 +245,8 @@ function Feed({ events, live, running }: { events: Event[]; live: number; runnin
     else
       out.push(
         <div class={`msg ${e.kind}`} key={i} title={when(e.time)} data-event={i}>
-          {e.kind === "assistant" && i >= live ? <Reveal text={e.text ?? ""} /> : <Markdown text={e.text ?? ""} />}
+          {e.kind === "assistant" && i >= live ? <Reveal text={e.text ?? ""} /> : e.text && <Markdown text={e.text} />}
+          <Attachments items={e.attachments ?? []} />
         </div>,
       );
   });
@@ -339,7 +340,7 @@ const QUICK_REPLIES: [string, string][] = [
   ["Out-of-scope", "This is out of scope. Drop it and do not work on it."],
 ];
 
-type Pending = { text: string; expect: number };
+type Pending = { text: string; files: Attachment[]; expect: number };
 
 function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void }) {
   const [showTerminal, setShowTerminal] = useState(false);
@@ -397,14 +398,14 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
   const busy = !exited && !c.attention && (c.status !== "idle" || sending.length > 0);
   const last = c.events[c.events.length - 1];
 
-  const send = async (text: string) => {
-    const p = { text, expect: users + sending.length + 1 };
+  const send = async (text: string, files: Attachment[]) => {
+    const p = { text, files, expect: users + sending.length + 1 };
     const drop = () => setPending((q) => q.filter((x) => x !== p));
     stick.current = true;
     setPending([...sending, p]);
     setTimeout(drop, 30000);
     try {
-      await api("POST", `/api/conversations/${c.id}/send`, { text });
+      await api("POST", `/api/conversations/${c.id}/send`, { text: withPaths(text, files) });
       return true;
     } catch (e) {
       drop();
@@ -468,7 +469,8 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
             <Feed events={c.events} live={live.current} running={c.status === "working"} />
             {sending.map((p, i) => (
               <div class="msg user sending" key={`p${i}`}>
-                <Markdown text={p.text} />
+                {p.text.trim() && <Markdown text={p.text} />}
+                <Attachments items={p.files} />
               </div>
             ))}
             {busy && (
@@ -525,7 +527,7 @@ type ComposerProps = {
   c: Conversation;
   exited: boolean;
   onResume: () => void;
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, files: Attachment[]) => Promise<boolean>;
   insert: preact.RefObject<((text: string) => void) | undefined>;
 };
 
@@ -533,6 +535,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
   const skills = useSkills(c.harness, c.dir);
+  const attachments = useAttachments();
   insert.current = (quoted) => {
     setText((cur) => (cur.trim() ? cur.replace(/\n*$/, "\n\n") : "") + quoted);
     requestAnimationFrame(() => {
@@ -548,9 +551,14 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   }, [text]);
   const send = async () => {
     const body = text;
-    if (!body.trim()) return;
+    const files = attachments.items;
+    if (attachments.uploading || (!body.trim() && !files.length)) return;
     setText("");
-    if (!(await onSend(body))) setText((cur) => cur || body);
+    attachments.setItems([]);
+    if (!(await onSend(body, files as Attachment[]))) {
+      setText((cur) => cur || body);
+      attachments.setItems((cur) => [...files, ...cur]);
+    }
   };
   if (exited) {
     return (
@@ -569,6 +577,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         value={text}
         onValue={setText}
         skills={skills}
+        attachments={attachments}
         placeholder={c.role === COORDINATOR ? "Message the coordinator" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
@@ -577,7 +586,8 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
           }
         }}
       />
-      <Button label="Send" icon="send" class="primary" onClick={send} />
+      <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />
+      <Button label="Send" icon="send" class="primary" disabled={attachments.uploading} onClick={send} />
     </div>
   );
 }
@@ -626,6 +636,8 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [past, setPast] = useState<PastSession[]>([]);
   const [resume, setResume] = useState<PastSession>();
   const [filter, setFilter] = useState("");
+  const [worktree, setWorktree] = useState(localStorage.getItem("kk.worktree") === "1");
+  const [repo, setRepo] = useState<Repo>();
   const promptRef = useRef<HTMLTextAreaElement>(null);
   // Cursor keeps its history per directory; the others have one history for all directories.
   const pastDir = harness === "cursor" ? dir : "";
@@ -648,6 +660,22 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   }, [harness, pastDir]);
 
   useEffect(() => {
+    let stop = false;
+    const timer = setTimeout(
+      () =>
+        act(async () => {
+          const info = await api<Repo>("GET", `/api/repo?dir=${encodeURIComponent(dir)}`);
+          if (!stop) setRepo(info);
+        }),
+      200,
+    );
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [dir]);
+
+  useEffect(() => {
     promptRef.current?.focus();
     act(async () => setHarnesses(await api<Harness[]>("GET", "/api/harnesses")));
     act(async () => {
@@ -659,17 +687,22 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 
   const h = harnesses.find((x) => x.name === harness);
   const skills = useSkills(harness, dir);
+  const attachments = useAttachments();
+  const empty = !prompt.trim() && !attachments.items.length;
+  const blocked = busy || attachments.uploading || (!resume && empty);
   const model = h && h.models.includes(models[harness] ?? "") ? models[harness] ?? "" : h?.models[0] ?? "";
+  const inWorktree = worktree && !!repo?.git && !resume;
   const submit = (e?: SubmitEvent) => {
     e?.preventDefault();
-    if (busy || (!resume && !prompt.trim())) return;
+    if (blocked) return;
     setBusy(true);
     act(async () => {
       try {
-        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt, session: resume?.id });
+        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt: withPaths(prompt, attachments.items as Attachment[]), session: resume?.id, worktree: inWorktree });
         localStorage.setItem("kk.harness", harness);
         localStorage.setItem("kk.models", JSON.stringify({ ...models, [harness]: model }));
         localStorage.setItem("kk.dir", dir);
+        localStorage.setItem("kk.worktree", worktree ? "1" : "");
         onCreated();
       } finally {
         setBusy(false);
@@ -711,12 +744,25 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               ))}
             </datalist>
           </Field>
+          <div class="field">
+            <Check label="Worktree" checked={inWorktree} disabled={!repo?.git || !!resume} onChange={(e) => setWorktree(e.currentTarget.checked)} />
+            <span class="hint">
+              {resume
+                ? "An earlier session resumes in its own directory."
+                : !repo
+                  ? "Checking the directory."
+                  : !repo.git
+                    ? "The directory is not a git repository."
+                    : `The agent works in its own git worktree on a new branch off ${repo.branch}, apart from this checkout.`}
+            </span>
+          </div>
           <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput
               inputRef={promptRef}
               value={prompt}
               onValue={setPrompt}
               skills={skills}
+              attachments={attachments}
               onEnter={(e) => {
                 if (e.ctrlKey || e.metaKey) {
                   e.preventDefault();
@@ -729,8 +775,9 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
             </span>
           </Field>
           <div class="row">
+            <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />
             <Button label="Cancel" onClick={onClose} />
-            <Button label={resume ? "Resume" : "Start"} icon="play" class="primary" type="submit" disabled={busy || (!resume && !prompt.trim())} />
+            <Button label={resume ? "Resume" : "Start"} icon="play" class="primary" type="submit" disabled={blocked} />
           </div>
           <h1>Earlier sessions</h1>
           <input placeholder={`Filter ${past.length} earlier ${h?.label ?? harness} sessions`} value={filter} onInput={(e) => setFilter(e.currentTarget.value)} />
@@ -758,7 +805,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                     </span>
                     <span>Last {when(p.ended)}</span>
                   </div>
-                  {resume?.id === p.id && <Button label="Resume this session" icon="play" class="small primary" type="submit" disabled={busy} />}
+                  {resume?.id === p.id && <Button label="Resume this session" icon="play" class="small primary" type="submit" disabled={blocked} />}
                 </li>
               ))}
           </ul>

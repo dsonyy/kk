@@ -86,6 +86,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/stats", s.handleStats)
+	api("GET /api/repo", handleRepo)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
@@ -93,6 +94,8 @@ func (s *Server) routes() *http.ServeMux {
 		}
 		return dirs, nil
 	})
+	api("POST /api/attachments", s.handleUpload)
+	mux.HandleFunc("GET /api/attachments/{id}/{name}", s.handleAttachment)
 	api("GET /api/settings", s.handleSettings)
 	api("PUT /api/settings", s.handleSaveSettings)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
@@ -155,7 +158,9 @@ func (s *Server) view(c Conversation, events bool) convView {
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
-			v.Events = append(v.Events, t.Events...)
+			for _, e := range t.Events {
+				v.Events = append(v.Events, s.withAttachments(e))
+			}
 		}
 		s.mu.Unlock()
 	}
@@ -206,6 +211,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Prompt  string `json:"prompt"`
 		// Session resumes a session from the harness's own history instead of starting a new one.
 		Session string `json:"session"`
+		// Worktree starts the agent in a new git worktree of dir, on its own branch.
+		Worktree bool `json:"worktree"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -223,6 +230,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	}
 	now := time.Now()
 	if in.Session != "" {
+		if in.Worktree {
+			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
+		}
 		for _, c := range s.store.list() {
 			if c.Harness == in.Harness && c.Session == in.Session && !c.Closed {
 				return s.view(c, false), nil
@@ -244,6 +254,12 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "prompt is empty")
 	}
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now}
+	if in.Worktree {
+		c.Repo = dir
+		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}
@@ -617,7 +633,8 @@ func (s *Server) tick() {
 		events := s.readTail(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
-			if c.Status != statusExited && c.Window != "" && !alive[c.Window] {
+			// The list of windows may predate a launch that has just revived this one.
+			if c.Status != statusExited && c.Window != "" && !alive[c.Window] && now.Sub(c.Launched) > time.Second {
 				c.Status, c.Attention, changed = statusExited, "", true
 			}
 			if c.Status == statusStarting && c.Attention == "" && now.Sub(c.Launched) > startTimeout {

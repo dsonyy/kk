@@ -1,4 +1,4 @@
-import { createContext, type ComponentChildren, type ComponentProps } from "preact";
+import { createContext, type ComponentChildren, type ComponentProps, type TargetedEvent } from "preact";
 import { useContext, useRef } from "preact/hooks";
 
 // Keyboard mnemonics: every button and field label underlines its first free meaningful letter within its scope.
@@ -57,6 +57,16 @@ export function Field(props: { label: string; children: ComponentChildren }) {
   );
 }
 
+export function Check({ label, ...rest }: { label: string; checked: boolean; disabled?: boolean; onChange: (e: TargetedEvent<HTMLInputElement>) => void }) {
+  const [index, key] = useMnemonic(label);
+  return (
+    <label class="check" data-key={key}>
+      <input type="checkbox" {...rest} />
+      <Underlined label={label} index={index} />
+    </label>
+  );
+}
+
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.key.length !== 1 || !/[a-z]/i.test(e.key)) return;
   const target = e.target as HTMLElement;
@@ -72,6 +82,7 @@ document.addEventListener("keydown", (e) => {
   const scope = document.activeElement?.closest("[data-scope]");
   const el = candidates.find((c) => scope && scope.contains(c)) ?? candidates[0];
   e.preventDefault();
-  if (el.matches("label")) el.querySelector<HTMLElement>("input, select, textarea")?.focus();
-  else el.click();
+  const input = el.matches("label") && el.querySelector<HTMLInputElement>("input, select, textarea");
+  if (input && input.type !== "checkbox") input.focus();
+  else (input || el).click();
 });

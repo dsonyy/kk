@@ -27,7 +27,8 @@ const usage = `kk - web conductor for coding agents in tmux
   kk url                      print the web address
   kk ls                       list conversations
   kk show <id> [-n N]         show the last N events of a conversation
-  kk new <harness> [-m model] [-C dir] <prompt>
+  kk new <harness> [-m model] [-C dir] [-w] <prompt>
+                              start an agent; -w gives it its own git worktree and branch
   kk send <id> <text|->       type a message into the agent
   kk screen <id>              print the agent's tmux screen
   kk keys <id> <key>...       press keys in the agent's window
@@ -218,12 +219,16 @@ func runCLI(cmd string, args []string) error {
 				}
 			default:
 				fmt.Printf("[%s] %s\n", e.Kind, clip(e.Text, 4000))
+				for _, a := range e.Attachments {
+					fmt.Printf("[attachment] %s\n", a.Path)
+				}
 			}
 		}
 	case "new":
 		fs := flag.NewFlagSet("new", flag.ContinueOnError)
 		model := fs.String("m", "", "model")
 		dir := fs.String("C", ".", "directory")
+		worktree := fs.Bool("w", false, "start in a new git worktree on its own branch")
 		if err := need(1); err != nil {
 			return err
 		}
@@ -232,7 +237,7 @@ func runCLI(cmd string, args []string) error {
 		}
 		d, _ := filepath.Abs(*dir)
 		var c convView
-		if err := call("POST", "/api/conversations", map[string]string{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " ")}, &c); err != nil {
+		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree}, &c); err != nil {
 			return err
 		}
 		fmt.Println(c.ID)
