@@ -503,9 +503,9 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
                 key={label}
                 label={label}
                 class="small"
-                title={`Send now: ${reply}`}
+                title={`Add to the reply box: ${reply}`}
                 onClick={() => {
-                  send(quote.text + reply);
+                  composer.current?.(`${quote.text}${reply}\n\n`);
                   getSelection()?.removeAllRanges();
                 }}
               />
