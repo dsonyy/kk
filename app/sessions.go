@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,50 +17,72 @@ type PastSession struct {
 	Title    string    `json:"title"`
 	Dir      string    `json:"dir"`
 	Modified time.Time `json:"modified"`
+	// Messages counts what the user and the agent said, without tool calls.
+	Messages int       `json:"messages"`
+	Started  time.Time `json:"started"`
+	Ended    time.Time `json:"ended"`
 	path     string
 }
 
 const pastSessionLimit = 80
 
+// pastEntry keeps a transcript's reader between listings, so a growing transcript is only read from where it ended.
+type pastEntry struct {
+	sync.Mutex
+	tail  *Tail
+	ps    PastSession
+	first string
+}
+
 var pastCache = struct {
 	sync.Mutex
-	byPath map[string]PastSession
-}{byPath: map[string]PastSession{}}
+	byPath map[string]*pastEntry
+}{byPath: map[string]*pastEntry{}}
 
-// readHead parses the start of a transcript, enough for its directory and what it is about.
-func readHead(path string, parse func(*Tail, []byte)) (dir string, t *Tail) {
-	t = newTail(path)
-	f, err := os.Open(path)
-	if err != nil {
-		return "", t
-	}
-	defer f.Close()
-	rd := bufio.NewReaderSize(io.LimitReader(f, 4<<20), 1<<20)
-	for lines := 0; lines < 400; lines++ {
-		line, err := rd.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
+func (e *pastEntry) scan(parse func(*Tail, []byte)) PastSession {
+	e.Lock()
+	defer e.Unlock()
+	e.tail.read(func(t *Tail, line []byte) {
+		if e.ps.Dir == "" {
 			var meta struct {
 				Cwd     string `json:"cwd"`
 				Payload struct {
 					Cwd string `json:"cwd"`
 				} `json:"payload"`
 			}
-			if dir == "" && json.Unmarshal(line, &meta) == nil {
-				dir = meta.Cwd + meta.Payload.Cwd
+			if json.Unmarshal(line, &meta) == nil {
+				e.ps.Dir = meta.Cwd + meta.Payload.Cwd
 			}
-			parse(t, line)
 		}
-		if err != nil || (dir != "" && t.Title != "") {
-			break
+		parse(t, line)
+	})
+	for _, ev := range e.tail.Events {
+		if ev.Kind != kindUser && ev.Kind != kindAssistant {
+			continue
+		}
+		e.ps.Messages++
+		if e.first == "" && ev.Kind == kindUser {
+			e.first = firstLine(ev.Text, 80)
+		}
+		if e.ps.Started.IsZero() {
+			e.ps.Started = ev.Time
+		}
+		if ev.Time.After(e.ps.Ended) {
+			e.ps.Ended = ev.Time
 		}
 	}
-	return dir, t
+	// The events are counted and dropped; a whole history of transcripts does not fit in memory.
+	e.tail.Events, e.tail.tools = nil, map[string]int{}
+	ps := e.ps
+	if ps.Title = e.tail.Title; ps.Title == "" {
+		ps.Title = e.first
+	}
+	return ps
 }
 
 func pastSessions(harness, dir string) []PastSession {
 	home, _ := os.UserHomeDir()
 	var pattern string
-	id := func(path string) string { return strings.TrimSuffix(filepath.Base(path), ".jsonl") }
 	switch harness {
 	case "claude":
 		pattern = filepath.Join(home, ".claude", "projects", "*", "*.jsonl")
@@ -87,14 +106,25 @@ func pastSessions(harness, dir string) []PastSession {
 	if len(files) > pastSessionLimit {
 		files = files[:pastSessionLimit]
 	}
-	out := []PastSession{}
-	for _, f := range files {
+	found := make([]PastSession, len(files))
+	var wg sync.WaitGroup
+	slots := make(chan bool, 8)
+	for i, f := range files {
 		pastCache.Lock()
-		ps, ok := pastCache.byPath[f.path]
+		e := pastCache.byPath[f.path]
+		if e == nil {
+			e = &pastEntry{tail: newTail(f.path)}
+			e.ps.ID, e.ps.path = strings.TrimSuffix(filepath.Base(f.path), ".jsonl"), f.path
+			pastCache.byPath[f.path] = e
+		}
 		pastCache.Unlock()
-		if !ok || !ps.Modified.Equal(f.mod) {
-			from, t := readHead(f.path, parserFor(harness))
-			ps = PastSession{ID: id(f.path), Title: t.Title, Dir: from, Modified: f.mod, path: f.path}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- true
+			defer func() { <-slots }()
+			ps := e.scan(parserFor(harness))
+			ps.Modified = f.mod
 			if harness == "cursor" {
 				ps.Dir = dir
 			}
@@ -107,15 +137,12 @@ func pastSessions(harness, dir string) []PastSession {
 					ps.Title = name
 				}
 			}
-			for _, e := range t.Events {
-				if ps.Title == "" && e.Kind == kindUser {
-					ps.Title = firstLine(e.Text, 80)
-				}
-			}
-			pastCache.Lock()
-			pastCache.byPath[f.path] = ps
-			pastCache.Unlock()
-		}
+			found[i] = ps
+		}()
+	}
+	wg.Wait()
+	out := []PastSession{}
+	for _, ps := range found {
 		if ps.Title != "" && ps.Dir != "" {
 			out = append(out, ps)
 		}

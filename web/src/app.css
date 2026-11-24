@@ -221,13 +221,13 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .new-session h1 { font-size: 16px; color: var(--text-strong); }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); }
 .field textarea { min-height: 160px; resize: vertical; color: var(--text); }
-.past { max-height: 190px; overflow-y: auto; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line-strong); background: var(--bg); }
-.past li { display: flex; align-items: baseline; gap: 12px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
-.past li:hover { background: var(--surface); }
-.past li.on { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--text-strong); }
-.past .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--text); }
-.past li.on .title { color: var(--text-strong); }
-.past .mono { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; font-size: 12px; }
+.new-session > h1:not(:first-child) { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.past { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.past .tile { gap: 6px; padding: 10px 12px; min-width: 0; }
+.past .tile .title { font-size: 15px; }
+.past .tile .meta { font-size: 12px; }
+.past .tile .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; font-size: 12px; }
+.past .tile button { align-self: flex-start; margin-top: 4px; }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .new-session .row { display: flex; justify-content: flex-end; gap: 8px; }
 

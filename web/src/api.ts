@@ -27,7 +27,7 @@ export type Conversation = {
   events: Event[];
 };
 
-export type PastSession = { id: string; title: string; dir: string; modified: string };
+export type PastSession = { id: string; title: string; dir: string; modified: string; messages: number; started: string; ended: string };
 
 export type Skill = { name: string; description: string; insert: string; scope: string };
 

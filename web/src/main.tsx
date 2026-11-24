@@ -602,6 +602,16 @@ function CoordinatorPanel({ c, reload }: { c?: Conversation; reload: () => void 
   );
 }
 
+// span is how long a session ran, from its first message to its last.
+function span(from: string, to: string): string {
+  const minutes = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60000);
+  if (!(minutes >= 1)) return "under 1 min";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ${minutes % 60} min`;
+  return `${Math.floor(hours / 24)} d ${hours % 24} h`;
+}
+
 function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [dirs, setDirs] = useState<string[]>([]);
@@ -698,33 +708,6 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
               ))}
             </datalist>
           </Field>
-          <div class="field">
-            Continue from
-            <input placeholder={`Filter ${past.length} earlier ${h?.label ?? harness} sessions`} value={filter} onInput={(e) => setFilter(e.currentTarget.value)} />
-            <ul class="past">
-              <li class={resume ? "" : "on"} onClick={() => setResume(undefined)}>
-                <span class="title">A new session</span>
-              </li>
-              {past
-                .filter((p) => `${p.title} ${p.dir}`.toLowerCase().includes(filter.toLowerCase()))
-                .map((p) => (
-                  <li
-                    key={p.id}
-                    class={resume?.id === p.id ? "on" : ""}
-                    onClick={() => {
-                      setResume(p);
-                      setDir(p.dir);
-                    }}
-                  >
-                    <span class="title">{p.title}</span>
-                    <span class="mono" title={p.dir}>
-                      <bdi>{p.dir}</bdi>
-                    </span>
-                    <span>{when(p.modified)}</span>
-                  </li>
-                ))}
-            </ul>
-          </div>
           <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput
               inputRef={promptRef}
@@ -746,6 +729,36 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
             <Button label="Cancel" onClick={onClose} />
             <Button label={resume ? "Resume" : "Start"} icon="play" class="primary" type="submit" disabled={busy || (!resume && !prompt.trim())} />
           </div>
+          <h1>Earlier sessions</h1>
+          <input placeholder={`Filter ${past.length} earlier ${h?.label ?? harness} sessions`} value={filter} onInput={(e) => setFilter(e.currentTarget.value)} />
+          <ul class="past">
+            {past
+              .filter((p) => `${p.title} ${p.dir}`.toLowerCase().includes(filter.toLowerCase()))
+              .map((p) => (
+                <li
+                  key={p.id}
+                  class={resume?.id === p.id ? "tile on" : "tile"}
+                  onClick={() => {
+                    setResume(resume?.id === p.id ? undefined : p);
+                    setDir(p.dir);
+                  }}
+                >
+                  <div class="title">{p.title}</div>
+                  <div class="meta">
+                    <span class="mono" title={p.dir}>
+                      <bdi>{p.dir}</bdi>
+                    </span>
+                  </div>
+                  <div class="meta">
+                    <span>
+                      {p.messages} {p.messages === 1 ? "message" : "messages"} · {span(p.started, p.ended)}
+                    </span>
+                    <span>Last {when(p.ended)}</span>
+                  </div>
+                  {resume?.id === p.id && <Button label="Resume this session" icon="play" class="small primary" type="submit" disabled={busy} />}
+                </li>
+              ))}
+          </ul>
         </form>
       </Scope>
     </main>

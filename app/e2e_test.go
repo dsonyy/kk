@@ -452,7 +452,9 @@ func TestResumeSessionFromHistory(t *testing.T) {
 	session := "11111111-2222-4333-8444-555555555555"
 	project := filepath.Join(filepath.Dir(e.home), ".claude", "projects", "-work")
 	os.MkdirAll(project, 0o755)
-	lines := `{"type":"user","cwd":"` + e.work + `","message":{"content":"earlier question"}}` + "\n" + `{"type":"ai-title","aiTitle":"Earlier work"}` + "\n"
+	lines := `{"type":"user","timestamp":"2026-11-20T10:00:00Z","cwd":"` + e.work + `","message":{"content":"earlier question"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-11-20T10:30:00Z","message":{"content":[{"type":"text","text":"earlier answer"}]}}` + "\n" +
+		`{"type":"ai-title","aiTitle":"Earlier work"}` + "\n"
 	os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(lines), 0o644)
 	out, err := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/sessions?harness=claude").Output()
 	if err != nil {
@@ -460,7 +462,7 @@ func TestResumeSessionFromHistory(t *testing.T) {
 	}
 	var past []PastSession
 	json.Unmarshal(out, &past)
-	if len(past) != 1 || past[0].ID != session || past[0].Title != "Earlier work" || past[0].Dir != e.work {
+	if len(past) != 1 || past[0].ID != session || past[0].Title != "Earlier work" || past[0].Dir != e.work || past[0].Messages != 2 || past[0].Ended.Sub(past[0].Started) != 30*time.Minute {
 		t.Fatalf("past sessions: %s", out)
 	}
 	code, body := e.post("/api/conversations", map[string]string{"harness": "claude", "session": session, "prompt": "continue"})
