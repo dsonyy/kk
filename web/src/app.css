@@ -201,6 +201,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .panel-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 1; }
 .panel-resize:hover, .panel-resize.dragging { background: var(--line-strong); }
 .side-panel .conv-head h1 { font-size: 14px; }
+.side-panel > .conversation { min-height: 0; }
 
 /* Markdown is set for reading: a short measure, open leading, and space that groups a heading with the text under it. */
 .md { font-size: 15px; line-height: 1.65; color: var(--read-text); overflow-wrap: anywhere; text-wrap: pretty; }
