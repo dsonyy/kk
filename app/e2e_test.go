@@ -1229,6 +1229,8 @@ func TestWhoseTurn(t *testing.T) {
 	if c.WaitingFor != waitingConductor || c.Escalation != "" {
 		t.Fatalf("after exit: %q %q", c.WaitingFor, c.Escalation)
 	}
+	e.mustKK("resume", codex)
+	e.waitFor("a resume by the user that waits for the user", codex, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 }
 
 func TestNoConductorTurn(t *testing.T) {

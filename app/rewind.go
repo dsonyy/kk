@@ -82,6 +82,7 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, fail(400, "text is empty")
 	}
+	s.driven(c.ID, r)
 	if _, busy := rewinding.LoadOrStore(c.ID, true); busy {
 		return nil, fail(409, "the agent is already going back to an earlier message")
 	}

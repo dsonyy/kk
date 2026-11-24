@@ -269,7 +269,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			if p.ID != in.Session {
 				continue
 			}
-			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, UserDriven: byUser(r)}
+			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: !byUser(r)}
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
@@ -280,7 +280,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, fail(400, "prompt is empty")
 	}
-	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, UserDriven: byUser(r)}
+	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: !byUser(r)}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -430,14 +430,14 @@ func byUser(r *http.Request) bool {
 	return r.Header.Get(agentHeader) == ""
 }
 
-// driven records who gave the conversation its last input, so its next stop waits for them.
+// driven records who acted on the conversation last, so its next stop waits for them.
 func (s *Server) driven(id string, r *http.Request) {
-	user := byUser(r)
+	agent := !byUser(r)
 	if _, changed := s.store.update(id, func(c *Conversation) bool {
-		if c.UserDriven == user {
+		if c.ByAgent == agent {
 			return false
 		}
-		c.UserDriven = user
+		c.ByAgent = agent
 		return true
 	}); changed {
 		s.publish(id)
@@ -491,6 +491,8 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	s.driven(c.ID, r)
+	c, _ = s.store.get(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
 		return nil, err
 	}
@@ -536,6 +538,7 @@ func (s *Server) control(r *http.Request, action string) (Conversation, error) {
 	if !slices.Contains(actions(c), action) {
 		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
 	}
+	s.driven(c.ID, r)
 	return c, midRewind(c.ID)
 }
 

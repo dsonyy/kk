@@ -40,8 +40,9 @@ type Conversation struct {
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
-	// UserDriven is set when the user, not an agent, started the conversation or gave it the last input.
-	UserDriven bool `yaml:"user_driven,omitempty" json:"-"`
+	// ByAgent is set when an agent through the kk CLI, not the user, started the conversation or acted on it last.
+	// Conversations from before it existed count as the user's.
+	ByAgent bool `yaml:"by_agent,omitempty" json:"-"`
 	// Escalation is why the conductor handed a waiting conversation to the user. It lasts while the agent waits.
 	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
 }
@@ -64,12 +65,12 @@ func (c *Conversation) Waiting() bool {
 }
 
 // WaitingFor says who has to act on a waiting agent. Every agent that stops waits for the conductor, unless the conductor
-// escalated it, the user drives it, or no conductor runs. The conductor itself always waits for the user.
+// escalated it, the user acted on it last, or no conductor runs. The conductor itself always waits for the user.
 func (c *Conversation) WaitingFor(conductor bool) string {
 	switch {
 	case !c.Waiting():
 		return ""
-	case c.Role != "" || c.Escalation != "" || c.UserDriven || !conductor:
+	case c.Role != "" || c.Escalation != "" || !c.ByAgent || !conductor:
 		return waitingUser
 	}
 	return waitingConductor
