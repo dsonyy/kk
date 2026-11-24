@@ -12,15 +12,17 @@ import (
 
 type Event struct {
 	// ID is the message's id in the agent's own transcript, when the harness records one.
-	ID     string    `json:"id,omitempty"`
-	Kind   string    `json:"kind"`
-	Text   string    `json:"text,omitempty"`
-	Tool   string    `json:"tool,omitempty"`
-	Input  string    `json:"input,omitempty"`
-	Detail string    `json:"detail,omitempty"`
-	Output string    `json:"output,omitempty"`
-	Failed bool      `json:"failed,omitempty"`
-	Time   time.Time `json:"time"`
+	ID     string `json:"id,omitempty"`
+	Kind   string `json:"kind"`
+	Text   string `json:"text,omitempty"`
+	Tool   string `json:"tool,omitempty"`
+	Input  string `json:"input,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Output string `json:"output,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+	// Attachments are the files of a user message, filled in when the conversation is served.
+	Attachments []Attachment `json:"attachments,omitempty"`
+	Time        time.Time    `json:"time"`
 }
 
 const (

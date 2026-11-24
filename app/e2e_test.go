@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -612,4 +613,98 @@ func TestTerminal(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func (e *env) request(method, path string, body io.Reader) (*http.Response, []byte) {
+	e.t.Helper()
+	req, _ := http.NewRequest(method, "http://kk"+path, body)
+	t := &http.Transport{Dial: func(_, _ string) (net.Conn, error) { return net.Dial("unix", filepath.Join(e.home, "kk.sock")) }}
+	resp, err := (&http.Client{Transport: t}).Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp, out
+}
+
+func (e *env) upload(name string, data []byte) Attachment {
+	e.t.Helper()
+	resp, out := e.request("POST", "/api/attachments?name="+url.QueryEscape(name), bytes.NewReader(data))
+	var a Attachment
+	if json.Unmarshal(out, &a); resp.StatusCode != 200 || a.Path == "" {
+		e.t.Fatalf("upload %s: %d %s", name, resp.StatusCode, out)
+	}
+	return a
+}
+
+func TestAttachments(t *testing.T) {
+	e := newEnv(t)
+	png := []byte("\x89PNG\r\n\x1a\nnot really a picture")
+	shot := e.upload("../my shot (1).png", png)
+	if shot.Name != "my-shot-1-.png" || filepath.Dir(filepath.Dir(shot.Path)) != filepath.Join(e.home, "attachments") {
+		t.Fatalf("attachment: %+v", shot)
+	}
+	if saved, _ := os.ReadFile(shot.Path); !bytes.Equal(saved, png) {
+		t.Fatalf("saved file: %q", saved)
+	}
+	resp, body := e.request("GET", shot.URL, nil)
+	if !bytes.Equal(body, png) || resp.Header.Get("Content-Type") != "image/png" || resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Disposition") != "" {
+		t.Fatalf("image: %v %q", resp.Header, body)
+	}
+
+	page := e.upload("page.html", []byte("<script>alert(1)</script>"))
+	if resp, _ := e.request("GET", page.URL, nil); !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") {
+		t.Fatalf("an uploaded page is served as %q", resp.Header.Get("Content-Type"))
+	}
+	svg := e.upload("drawing.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`))
+	if resp, _ := e.request("GET", svg.URL, nil); resp.Header.Get("Content-Type") != "image/svg+xml" || resp.Header.Get("Content-Security-Policy") != "sandbox" {
+		t.Fatalf("svg: %v", resp.Header)
+	}
+	archive := e.upload("data.bin", []byte{0, 1, 2, 3})
+	if resp, _ := e.request("GET", archive.URL, nil); !strings.HasPrefix(resp.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("binary: %v", resp.Header)
+	}
+
+	os.WriteFile(filepath.Join(e.home, "attachments", "secret"), []byte("secret"), 0o600)
+	for _, path := range []string{"/api/attachments/%2e%2e/token", strings.TrimSuffix(shot.URL, shot.Name) + "%2e%2e%2fsecret", "/api/attachments/nope/" + shot.Name} {
+		if resp, body := e.request("GET", path, nil); resp.StatusCode != 404 {
+			t.Fatalf("GET %s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	if resp, _ := e.request("POST", "/api/attachments?name=empty.txt", nil); resp.StatusCode != 400 {
+		t.Fatalf("empty upload: %d", resp.StatusCode)
+	}
+	if resp, _ := e.request("POST", "/api/attachments?name=huge.bin", io.LimitReader(zeros{}, maxAttachment+1)); resp.StatusCode != 413 {
+		t.Fatalf("oversized upload: %d", resp.StatusCode)
+	}
+	if left, _ := os.ReadDir(filepath.Join(e.home, "attachments")); len(left) != 5 {
+		t.Fatalf("rejected uploads left files behind: %v", left)
+	}
+
+	for _, harness := range []string{"claude", "codex", "cursor"} {
+		id := e.mustKK("new", harness, "-C", e.work, "look\n\n"+shot.Path)
+		c := e.waitFor(harness+" first answer", id, func(c convView) bool { return c.Status == statusIdle && len(c.Events) > 1 })
+		e.mustKK("send", id, "and these\n\n"+shot.Path+"\n"+page.Path)
+		c = e.waitFor(harness+" reply", id, func(c convView) bool { return hasEvent(c, kindUser, "and these") })
+		var got []string
+		for _, ev := range c.Events {
+			if ev.Kind == kindUser {
+				for _, a := range ev.Attachments {
+					got = append(got, ev.Text+":"+a.Name+":"+a.URL)
+				}
+			}
+		}
+		want := []string{"look:" + shot.Name + ":" + shot.URL, "and these:" + shot.Name + ":" + shot.URL, "and these:" + page.Name + ":" + page.URL}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%s attachments: %v\nevents: %+v", harness, got, c.Events)
+		}
+	}
+}
+
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }

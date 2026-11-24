@@ -7,8 +7,11 @@ export type Event = {
   detail?: string;
   output?: string;
   failed?: boolean;
+  attachments?: Attachment[];
   time: string;
 };
+
+export type Attachment = { name: string; url: string; path?: string };
 
 export type Conversation = {
   id: string;
@@ -54,6 +57,13 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data as T;
+}
+
+export async function upload(file: File): Promise<Attachment> {
+  const res = await fetch(`/api/attachments?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data as Attachment;
 }
 
 let flashTimer = 0;
