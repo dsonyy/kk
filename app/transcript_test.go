@@ -77,3 +77,11 @@ func TestParseRealCursorTranscript(t *testing.T) {
 		t.Fatalf("ended %v, waiting %v", tail.Ended, tail.Waiting)
 	}
 }
+
+func TestClaudePastedMessageShowsWithoutItsWrapper(t *testing.T) {
+	tail := newTail("")
+	parseClaude(tail, []byte(`{"type":"user","message":{"content":"\n\n<pasted_content id=\"757e\">\n> quoted\n\nReply\n</pasted_content id=\"757e\">\n"}}`))
+	if len(tail.Events) != 1 || tail.Events[0].Text != "> quoted\n\nReply" {
+		t.Fatalf("events: %+v", tail.Events)
+	}
+}

@@ -331,6 +331,12 @@ function Keys({ id }: { id: string }) {
   );
 }
 
+const QUICK_REPLIES: [string, string][] = [
+  ["Ack", "Acknowledged, I agree with this. Go ahead."],
+  ["Explain", "Explain this part: what it means, why it is so, and what follows from it."],
+  ["Out-of-scope", "This is out of scope. Drop it and do not work on it."],
+];
+
 type Pending = { text: string; expect: number };
 
 function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void }) {
@@ -358,7 +364,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
       if (rect.bottom < box.top || rect.top > box.bottom) return setQuote(undefined);
       const lines = text.split("\n").map((l) => `> ${l}`).join("\n");
       const source = `(quoted from your message of ${when(e.time)}${e.id ? `, transcript id ${e.id}` : ""})`;
-      setQuote({ text: `${lines}\n${source}\n\n`, x: Math.min(rect.right, window.innerWidth - 90), y: Math.max(rect.top - 30, box.top) });
+      setQuote({ text: `${lines}\n${source}\n\n`, x: Math.max(4, Math.min(rect.right, window.innerWidth) - 290), y: Math.max(rect.top - 30, box.top) });
     };
     const el = feed.current;
     document.addEventListener("selectionchange", onSelect);
@@ -481,17 +487,30 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
           </div>
         </div>
         {quote && !showTerminal && !exited && (
-          <Button
-            label="Quote"
-            icon="quote"
-            class="small quote"
-            style={{ left: `${quote.x}px`, top: `${quote.y}px` }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              composer.current?.(quote.text);
-              getSelection()?.removeAllRanges();
-            }}
-          />
+          <div class="quote-bar" style={{ left: `${quote.x}px`, top: `${quote.y}px` }} onMouseDown={(e) => e.preventDefault()}>
+            <Button
+              label="Quote"
+              icon="quote"
+              class="small"
+              title="Put the quote in the reply box"
+              onClick={() => {
+                composer.current?.(quote.text);
+                getSelection()?.removeAllRanges();
+              }}
+            />
+            {QUICK_REPLIES.map(([label, reply]) => (
+              <Button
+                key={label}
+                label={label}
+                class="small"
+                title={`Send now: ${reply}`}
+                onClick={() => {
+                  send(quote.text + reply);
+                  getSelection()?.removeAllRanges();
+                }}
+              />
+            ))}
+          </div>
         )}
         {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} />}
       </Scope>

@@ -214,7 +214,11 @@ func parseClaude(t *Tail, raw []byte) {
 	}
 }
 
+// Claude Code wraps a pasted multi-line message in these tags.
+var pastedContent = regexp.MustCompile(`</?pasted_content[^>]*>`)
+
 func addClaudeUserText(t *Tail, text string, at time.Time) {
+	text = strings.TrimSpace(pastedContent.ReplaceAllString(text, ""))
 	if m := commandName.FindStringSubmatch(text); m != nil {
 		t.add(Event{Kind: kindUser, Text: m[1], Time: at})
 		return
