@@ -21,6 +21,7 @@
   --gpu: #ff9a40;
   --user-bg: #1d1206;
   --user-line: #8a4a0c;
+  --backdrop: rgb(0 0 0 / .7);
   --gap: 12px;
   --font-ui: system-ui, "Noto Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", Hack, "DejaVu Sans Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -231,8 +232,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .md a:hover { text-decoration-color: var(--read-strong); }
 .msg.user .md { font-size: 14px; line-height: 1.5; }
 
-#panel-new { overflow-y: auto; }
-.new-session { flex: none; width: min(720px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+.overlay { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: var(--gap); background: var(--backdrop); }
+.new-session { width: min(720px, 100%); max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); background: var(--surface); }
 .new-session h1 { font-size: 16px; color: var(--text-strong); }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); }
 .field textarea { min-height: 160px; resize: vertical; color: var(--text); }

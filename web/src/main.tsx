@@ -27,13 +27,12 @@ function openIds(): string[] {
   return [...new Set(decodeURIComponent(location.hash.slice(1)).split(",").filter(Boolean))];
 }
 
-const NEW = "new";
-
 function App() {
   const [list, setList] = useState<Conversation[]>([]);
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
   const [tab, setTab] = useState<"Agents" | "Settings">("Agents");
+  const [creating, setCreating] = useState(false);
   const openRef = useRef(open);
   openRef.current = open;
 
@@ -75,7 +74,7 @@ function App() {
     source.onopen = () => {
       loadList();
       loadDetail(COORDINATOR);
-      for (const id of openRef.current) if (id !== NEW) loadDetail(id);
+      for (const id of openRef.current) loadDetail(id);
     };
     const onHash = () => setOpenState(openIds());
     window.addEventListener("hashchange", onHash);
@@ -86,7 +85,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    for (const id of open) if (id !== NEW) loadDetail(id);
+    for (const id of open) loadDetail(id);
   }, [open.join(",")]);
 
   const show = (id: string) => {
@@ -108,7 +107,7 @@ function App() {
         <aside class="sidebar" data-scope="sidebar">
           <Scope>
             <div class="sidebar-head">
-              <Button label="New session" icon="plus" class="primary" onClick={() => show(NEW)} />
+              <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
             </div>
           </Scope>
           <ul class="tiles">
@@ -122,16 +121,7 @@ function App() {
         <div class="panels">
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
           {open.map((id) =>
-            id === NEW ? (
-              <NewSession
-                key={NEW}
-                onClose={() => hide(NEW)}
-                onCreated={(created) => {
-                  loadList();
-                  setOpen(open.map((x) => (x === NEW ? created : x)));
-                }}
-              />
-            ) : details[id] ? (
+            details[id] ? (
               <ConversationView key={id} c={details[id]} reload={() => loadDetail(id)} onHide={() => hide(id)} />
             ) : (
               <main key={id} class="conversation placeholder">Loading…</main>
@@ -140,6 +130,15 @@ function App() {
         </div>
         <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} />
       </div>
+      {creating && (
+        <NewSession
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            loadList();
+            setCreating(false);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -614,7 +613,7 @@ function span(from: string, to: string): string {
   return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
-function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [dirs, setDirs] = useState<string[]>([]);
   const [prompt, setPrompt] = useState("");
@@ -665,11 +664,11 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
     setBusy(true);
     act(async () => {
       try {
-        const c = await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt, session: resume?.id });
+        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt, session: resume?.id });
         localStorage.setItem("kk.harness", harness);
         localStorage.setItem("kk.models", JSON.stringify({ ...models, [harness]: model }));
         localStorage.setItem("kk.dir", dir);
-        onCreated(c.id);
+        onCreated();
       } finally {
         setBusy(false);
       }
@@ -677,7 +676,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
   };
 
   return (
-    <main class="conversation" id="panel-new" data-scope="new">
+    <div class="overlay" data-scope="new" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <Scope>
         <form class="new-session" onSubmit={submit as any} onKeyDown={(e) => e.key === "Escape" && onClose()}>
           <h1>New session</h1>
@@ -763,7 +762,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
           </ul>
         </form>
       </Scope>
-    </main>
+    </div>
   );
 }
 
