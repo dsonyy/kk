@@ -1,6 +1,6 @@
 # kk
 
-Web conductor for coding agents on tmux: Claude Code, Codex and Cursor CLI side by side, with a coordinator agent that knows all of them.
+Web conductor for coding agents on tmux: Claude Code, Codex and Cursor CLI side by side, with a main agent, the conductor, that knows all of them.
 
 ## Install
 
@@ -17,8 +17,9 @@ Without the service: `just build && ./kk`.
 ## Use
 
 - New session: prompt, program, model and directory. Each session gets its own window in the tmux session `kk`.
-- A blinking tile needs you: a permission prompt, a trust dialog or a question. Answer in the reply box or with the screen keys.
+- Every session that stops waits either for the conductor or for you. It waits for you when you started it or acted on it last, or when the conductor escalated it with a reason. Otherwise the conductor handles it. "Your turn" has a filled square, "Conductor's turn" a hollow one.
+- A blinking tile needs you: a permission prompt, a trust dialog or a question. Answer in the reply box or with the screen keys. The same prompt on a session the conductor handles has an orange border and does not blink.
 - Each session has controls in its header: Interrupt stops the current turn, Kill ends the agent process and keeps the session for Resume, Reset starts the conversation over with a clean context. A control shows only when the session's program and state allow it.
-- The coordinator on the right is a Claude Code session that can list, start and steer the other agents through the `kk` CLI (`kk help`).
-- kk tells the coordinator when an agent needs action (a permission or trust dialog, an API error), exits without being stopped, works for 10 minutes with no visible progress, or, if the coordinator started it, finishes its turn. The coordinator handles routine cases and asks you about the rest.
+- The conductor on the right is a Claude Code session that can list, start and steer the other agents through the `kk` CLI (`kk help`), and hand one to you with `kk escalate`.
+- kk tells the conductor when an agent whose turn goes to it needs action (a permission or trust dialog, an API error), exits without being stopped, works for 10 minutes with no visible progress, or finishes its turn. The conductor handles routine cases and escalates the rest to you.
 - State lives in `~/.kk`.

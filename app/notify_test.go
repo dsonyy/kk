@@ -2,21 +2,23 @@ package main
 
 import (
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
-// newAs starts an agent the way an agent running kk new does.
-func (e *env) newAs(by string, args ...string) string {
+// killAgent ends the agent's process the way a crash does.
+func (e *env) killAgent(id string) {
 	e.t.Helper()
-	cmd := exec.Command(kkBin, append([]string{"new"}, args...)...)
-	cmd.Env = append(e.environ(), "KK_CONVERSATION="+by)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		e.t.Fatalf("kk new %v: %v\n%s", args, err, out)
+	sock := strings.TrimPrefix(e.vars[2], "KK_TMUX=")
+	out, err := exec.Command("tmux", "-L", sock, "display-message", "-p", "-t", e.conv(id).Window, "#{pane_pid}").Output()
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid == 0 {
+		e.t.Fatalf("pane pid of %s: %v %q", id, err, out)
 	}
-	return strings.TrimSpace(string(out))
+	syscall.Kill(pid, syscall.SIGTERM)
 }
 
 // notifications returns the kk notifications the coordinator received, and those it holds in its queue.
@@ -62,22 +64,30 @@ func newCoordinatorEnv(t *testing.T, extra ...string) *env {
 
 func TestNotifyCoordinator(t *testing.T) {
 	e := newCoordinatorEnv(t)
-	started := e.newAs(coordinatorID, "claude", "-C", e.work, "hello")
-	byUser := e.mustKK("new", "claude", "-C", e.work, "first")
-	permission := e.mustKK("new", "claude", "-C", e.work, "ask for permission")
-	trust := e.mustKK("new", "claude", "-C", e.work, "TRUST me")
-	apiError := e.newAs(coordinatorID, "claude", "-C", e.work, "apierror now")
-	stopped := e.mustKK("new", "claude", "-C", e.work, "stop me")
+	started := e.asConductor("new", "claude", "-C", e.work, "hello")
+	exits1 := e.asConductor("new", "claude", "-C", e.work, "first")
+	permission := e.asConductor("new", "claude", "-C", e.work, "ask for permission")
+	trust := e.asConductor("new", "claude", "-C", e.work, "TRUST me")
+	apiError := e.asConductor("new", "claude", "-C", e.work, "apierror now")
+	stopped := e.asConductor("new", "claude", "-C", e.work, "stop me")
+	mine := e.mustKK("new", "claude", "-C", e.work, "ask my permission")
+	escalated := e.asConductor("new", "claude", "-C", e.work, "escalate me")
 
 	e.waitNotified(started, "(idle): finished its turn. Look: kk screen "+started)
 	e.waitNotified(permission, "needs action: Claude needs your permission to use Bash. Look: kk screen "+permission)
 	e.waitNotified(trust, "needs action: The agent has not started its session")
 	e.waitNotified(apiError, "needs action: The turn ended on an API error")
-	e.waitFor("user's agent idle", byUser, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("user's agent idle", exits1, func(c convView) bool { return c.Status == statusIdle })
 	e.waitFor("stopped agent idle", stopped, func(c convView) bool { return c.Status == statusIdle })
-	e.mustKK("stop", stopped)
-	e.mustKK("send", byUser, "exit")
-	e.waitNotified(byUser, "(exited): exited without being stopped. Look: kk screen "+byUser)
+	e.asConductor("stop", stopped)
+	e.waitFor("user's own dialog", mine, func(c convView) bool { return c.Attention != "" && c.WaitingFor == waitingUser })
+	e.waitNotified(escalated, "finished its turn")
+	e.asConductor("escalate", escalated, "needs a product decision")
+	e.waitFor("escalation", escalated, func(c convView) bool { return c.WaitingFor == waitingUser })
+	e.killAgent(escalated)
+	e.waitFor("escalated agent exit", escalated, func(c convView) bool { return c.Status == statusExited })
+	e.asConductor("send", exits1, "exit")
+	e.waitNotified(exits1, "(exited): exited without being stopped. Look: kk screen "+exits1)
 
 	// Nothing more comes while the states stay, and a restart is no news either.
 	time.Sleep(4 * time.Second)
@@ -86,15 +96,17 @@ func TestNotifyCoordinator(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	got := e.notifications()
 	for _, tc := range []struct{ id, want string }{
-		{started, "finished its turn"}, {permission, "needs action"}, {trust, "needs action"}, {apiError, "needs action"}, {byUser, "exited"},
+		{started, "finished its turn"}, {permission, "needs action"}, {trust, "needs action"}, {apiError, "needs action"},
+		{exits1, "finished its turn"}, {exits1, "exited"}, {stopped, "finished its turn"}, {escalated, "finished its turn"},
 	} {
-		if n := countLines(got, tc.id, ""); n != 1 {
-			t.Errorf("%s: %d lines, want one %q", tc.id, n, tc.want)
+		if n := countLines(got, tc.id, tc.want); n != 1 {
+			t.Errorf("%s: %d lines %q, want one", tc.id, n, tc.want)
 		}
 	}
-	for _, id := range []string{stopped} {
-		if n := countLines(got, id, ""); n != 0 {
-			t.Errorf("%s: %d lines, want none", id, n)
+	// No exit for an agent stopped on purpose or escalated to the user, nothing for the user's own agent.
+	for _, tc := range []struct{ id, want string }{{stopped, "exited"}, {escalated, "exited"}, {mine, ""}} {
+		if n := countLines(got, tc.id, tc.want); n != 0 {
+			t.Errorf("%s: %d lines %q, want none", tc.id, n, tc.want)
 		}
 	}
 	if t.Failed() {
@@ -110,8 +122,8 @@ func TestNotifyGathers(t *testing.T) {
 	// The coordinator's own dialog must not be answered by a notification's Enter.
 	e.mustKK("send", coordinatorID, "ask for permission")
 	e.waitFor("coordinator dialog", coordinatorID, func(c convView) bool { return c.Attention != "" })
-	a := e.mustKK("new", "claude", "-C", e.work, "permission one")
-	b := e.mustKK("new", "claude", "-C", e.work, "permission two")
+	a := e.asConductor("new", "claude", "-C", e.work, "permission one")
+	b := e.asConductor("new", "claude", "-C", e.work, "permission two")
 	e.waitFor("attention", b, func(c convView) bool { return c.Attention != "" })
 	time.Sleep(4 * time.Second)
 	if got := e.notifications(); len(got) != 0 {
@@ -130,9 +142,9 @@ func TestNotifyGathers(t *testing.T) {
 	// Mid-turn the notification waits in the coordinator's queue, and the turn goes on.
 	e.mustKK("send", coordinatorID, "slow work")
 	e.waitFor("coordinator working", coordinatorID, func(c convView) bool { return c.Status == statusWorking })
-	exits := e.mustKK("new", "claude", "-C", e.work, "first")
+	exits := e.asConductor("new", "claude", "-C", e.work, "first")
 	e.waitFor("answer", exits, func(c convView) bool { return c.Status == statusIdle })
-	e.mustKK("send", exits, "exit")
+	e.asConductor("send", exits, "exit")
 	e.waitNotified(exits, "exited")
 	if c := e.conv(coordinatorID); c.Status != statusWorking || len(c.Queued) != 1 {
 		t.Fatalf("coordinator turn: %+v queued %+v", c.Conversation, c.Queued)
@@ -141,7 +153,7 @@ func TestNotifyGathers(t *testing.T) {
 
 func TestNotifyStall(t *testing.T) {
 	e := newCoordinatorEnv(t, "KK_STALL_AFTER=3s")
-	id := e.mustKK("new", "claude", "-C", e.work, "slow work")
+	id := e.asConductor("new", "claude", "-C", e.work, "slow work")
 	e.waitFor("working", id, func(c convView) bool { return c.Status == statusWorking })
 	e.waitNotified(id, "(working): working with no hook, transcript or screen change for 3s")
 	time.Sleep(6 * time.Second)
@@ -152,9 +164,9 @@ func TestNotifyStall(t *testing.T) {
 
 func TestNotifyEveryRaise(t *testing.T) {
 	e := newCoordinatorEnv(t)
-	twice := e.mustKK("new", "claude", "-C", e.work, "permission twice")
+	twice := e.asConductor("new", "claude", "-C", e.work, "permission twice")
 	e.waitNotified(twice, "needs action")
-	e.mustKK("keys", twice, "1", "Enter")
+	e.asConductor("keys", twice, "1", "Enter")
 	e.waitFor("second dialog", twice, func(c convView) bool {
 		return c.Attention != "" && strings.Count(e.mustKK("screen", twice), "Allow Bash?") == 2
 	})
@@ -165,13 +177,13 @@ func TestNotifyEveryRaise(t *testing.T) {
 	}
 
 	// An agent that dies again right after a resume is news.
-	id := e.mustKK("new", "claude", "-C", e.work, "first")
+	id := e.asConductor("new", "claude", "-C", e.work, "first")
 	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
-	e.mustKK("send", id, "exit")
+	e.asConductor("send", id, "exit")
 	e.waitNotified(id, "exited")
-	e.mustKK("resume", id)
+	e.asConductor("resume", id)
 	e.waitFor("resumed", id, func(c convView) bool { return c.Status == statusIdle })
-	e.mustKK("send", id, "exit")
+	e.asConductor("send", id, "exit")
 	for deadline := time.Now().Add(10 * time.Second); countLines(e.notifications(), id, "exited") < 2; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("second exit not reported: %q", e.notifications())

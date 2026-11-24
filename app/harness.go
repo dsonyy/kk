@@ -172,7 +172,7 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 			argv = append(argv, "--model", c.Model)
 		}
 		if c.Role == coordinatorID {
-			argv = append(argv, "--append-system-prompt-file", filepath.Join(s.store.dir, "coordinator.md"), "--name", "kk coordinator")
+			argv = append(argv, "--append-system-prompt-file", filepath.Join(s.store.dir, "coordinator.md"), "--name", "kk conductor")
 		}
 		if resume {
 			return append(argv, "--resume", c.Session), nil

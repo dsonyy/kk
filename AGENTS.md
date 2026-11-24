@@ -1,6 +1,6 @@
 # AGENTS.md
 
-kk is a web conductor for coding agents. The server starts Claude Code, Codex and Cursor CLI in windows of the tmux session `kk`, reads their hooks and transcripts, and shows the conversations in a single-page app. A long-running Claude Code coordinator runs in the window `coordinator`.
+kk is a web conductor for coding agents. The server starts Claude Code, Codex and Cursor CLI in windows of the tmux session `kk`, reads their hooks and transcripts, and shows the conversations in a single-page app. The conductor, a long-running Claude Code agent, runs in the window `coordinator`. Internal names keep the word coordinator so a running conductor and `~/.kk` carry over.
 
 Design and plan: `~/brain/projects/kk/`.
 

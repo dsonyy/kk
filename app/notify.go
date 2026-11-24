@@ -43,9 +43,13 @@ func (s *Server) controlled(id string) {
 	s.mu.Unlock()
 }
 
+// conductorsTurn tells whether the conductor, not the user, has to act when c stops: an agent started or last
+// driven through the kk CLI and not escalated. The user sees their own agents in the web app.
+func conductorsTurn(c Conversation) bool { return c.ByAgent && c.Escalation == "" }
+
 var nonLetters = regexp.MustCompile(`[^\pL]+`)
 
-// observe compares c with what the notifier last knew and queues the events the coordinator should hear about.
+// observe compares c with what the notifier last knew and queues the events the conductor should hear about.
 // The first tick only takes note: a restart is no news.
 func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	if c.Role == coordinatorID {
@@ -83,12 +87,12 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	}
 	var reason string
 	switch {
-	case c.Closed:
+	case c.Closed || !conductorsTurn(c):
 	case attention && (!w.attention || raises > w.raises):
 		reason = "needs action"
 	case c.Status == statusExited && prev.Status != statusExited && prev.Status != "":
 		reason = "exited without being stopped"
-	case c.TurnEnded.After(prev.TurnEnded) && c.Status == statusIdle && !attention && c.StartedBy == coordinatorID:
+	case c.TurnEnded.After(prev.TurnEnded) && c.Status == statusIdle && !attention:
 		reason = "finished its turn"
 	case c.Status == statusWorking && !attention && !w.stalled && now.Sub(w.stirred) >= stall:
 		w.stalled = true
@@ -100,8 +104,8 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	}
 }
 
-// flushNotices types the gathered events into the coordinator as one message, like kk send does. Claude Code
-// queues a message that arrives mid-turn. Nothing is typed while the coordinator is not ready for a message,
+// flushNotices types the gathered events into the conductor as one message, like kk send does. Claude Code
+// queues a message that arrives mid-turn. Nothing is typed while the conductor is not ready for a message,
 // because the Enter would answer its own dialog.
 func (s *Server) flushNotices(now time.Time) {
 	if len(s.notices) == 0 {
@@ -129,13 +133,13 @@ func (s *Server) flushNotices(now time.Time) {
 	for _, id := range ids {
 		c, ok := s.store.get(id)
 		n := s.notices[id]
-		// An attention that someone has dealt with meanwhile is no longer news.
-		if !ok || c.Closed || n.reason == "needs action" && c.Attention == "" {
+		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer news.
+		if !ok || c.Closed || !conductorsTurn(c) || n.reason == "needs action" && c.Attention == "" {
 			continue
 		}
 		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, n.reason)
 		if c.Attention != "" {
-			line += ": " + firstLine(c.Attention, 300)
+			line += ": " + strings.TrimSuffix(firstLine(c.Attention, 300), ".")
 		}
 		lines = append(lines, line+". Look: kk screen "+id)
 	}
@@ -146,7 +150,7 @@ func (s *Server) flushNotices(now time.Time) {
 	text := strings.Join(lines, "\n")
 	go func() {
 		if err := pasteText(co.Window, text); err != nil {
-			log.Printf("notify the coordinator: %v", err)
+			log.Printf("notify the conductor: %v", err)
 		}
 	}()
 }

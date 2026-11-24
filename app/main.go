@@ -27,8 +27,11 @@ const usage = `kk - web conductor for coding agents in tmux
   kk url                      print the web address
   kk ls                       list conversations
   kk show <id> [-n N]         show the last N events of a conversation
-  kk new <harness> [-m model] [-C dir] [-w] <prompt>
-                              start an agent; -w gives it its own git worktree and branch
+  kk new <harness> [-m model] [-C dir] [-w] [-g group] <prompt>
+                              start an agent; -w gives it its own git worktree and branch,
+                              -g puts it in a feature group instead of letting kk decide
+  kk group                    list the feature groups of every project
+  kk group <id> <name>        move a conversation to a feature group
   kk send <id> <text|->       type a message into the agent
   kk screen <id>              print the agent's tmux screen
   kk keys <id> <key>...       press keys in the agent's window
@@ -36,7 +39,8 @@ const usage = `kk - web conductor for coding agents in tmux
   kk stop <id>                end the agent process, resume restarts it
   kk reset <id>               start the conversation over with a clean context
   kk resume <id>              restart an exited agent
-  kk close <id>               stop the agent and hide the conversation
+  kk close <id>               stop the agent and close the conversation, resume reopens it
+  kk escalate <id> <reason>   hand a waiting agent from the conductor to the user, with a one-line reason
   kk hook <event>             hook endpoint for agents (payload on stdin)
 `
 
@@ -95,7 +99,7 @@ func serve() error {
 	}
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
-		tails: map[string]*Tail{}, subs: map[chan string]bool{},
+		tails: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
 		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{},
 	}
 	os.Remove(sockPath())
@@ -110,12 +114,14 @@ func serve() error {
 	}
 	mux := s.routes()
 	go watchStats()
+	go s.groupLoop()
+	s.backfillGroups()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()
 	if s.cfg().coordinator() {
 		if err := s.ensureCoordinator(); err != nil {
-			log.Printf("coordinator: %v", err)
+			log.Printf("conductor: %v", err)
 		}
 	}
 	fmt.Printf("kk is running: http://%s/?token=%s\n", addr(), token)
@@ -144,8 +150,9 @@ func call(method, path string, body any, out any) error {
 		rd = bytes.NewReader(data)
 	}
 	req, _ := http.NewRequest(method, "http://kk"+path, rd)
-	// An agent that runs kk is named, so the server knows which agents it started.
-	req.Header.Set("X-KK-Conversation", os.Getenv("KK_CONVERSATION"))
+	if id := os.Getenv("KK_CONVERSATION"); id != "" {
+		req.Header.Set(agentHeader, id)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return errors.New("kk server is not running, start it with `kk`")
@@ -162,6 +169,9 @@ func call(method, path string, body any, out any) error {
 	}
 	return nil
 }
+
+// agentHeader carries the conversation of the agent that runs the kk CLI, so the server tells agents from the user.
+const agentHeader = "X-KK-Agent"
 
 func runCLI(cmd string, args []string) error {
 	need := func(n int) error {
@@ -187,11 +197,15 @@ func runCLI(cmd string, args []string) error {
 			if c.Attention != "" {
 				state = "ACTION REQUIRED"
 			}
+			waiting := c.WaitingFor
+			if waiting == "" {
+				waiting = "-"
+			}
 			model := c.Model
 			if model == "" {
 				model = "default"
 			}
-			fmt.Printf("%s  %-15s  %-6s  %-14s  %s  %s\n", c.ID, state, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title)
+			fmt.Printf("%s  %-15s  %-9s  %-6s  %-14s  %s  %s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title)
 		}
 	case "show":
 		if err := need(1); err != nil {
@@ -207,6 +221,12 @@ func runCLI(cmd string, args []string) error {
 		fmt.Printf("%s · %s · %s · %s\n", c.Title, c.Harness, c.Dir, c.Status)
 		if c.Attention != "" {
 			fmt.Printf("ACTION REQUIRED: %s\n", c.Attention)
+		}
+		if c.WaitingFor != "" {
+			fmt.Printf("Waiting for the %s\n", c.WaitingFor)
+		}
+		if c.Escalation != "" {
+			fmt.Printf("Escalated to the user: %s\n", c.Escalation)
 		}
 		events := c.Events
 		if len(events) > *n {
@@ -232,6 +252,7 @@ func runCLI(cmd string, args []string) error {
 		model := fs.String("m", "", "model")
 		dir := fs.String("C", ".", "directory")
 		worktree := fs.Bool("w", false, "start in a new git worktree on its own branch")
+		group := fs.String("g", "", "feature group")
 		if err := need(1); err != nil {
 			return err
 		}
@@ -240,10 +261,28 @@ func runCLI(cmd string, args []string) error {
 		}
 		d, _ := filepath.Abs(*dir)
 		var c convView
-		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree}, &c); err != nil {
+		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree, "group": *group}, &c); err != nil {
 			return err
 		}
 		fmt.Println(c.ID)
+	case "group":
+		if len(args) == 0 {
+			var groups []groupView
+			if err := call("GET", "/api/groups", nil, &groups); err != nil {
+				return err
+			}
+			for _, g := range groups {
+				if g.Group == "" {
+					g.Group = ungrouped
+				}
+				fmt.Printf("%s  %-*s  %d\n", g.Project, groupMaxLen, g.Group, g.Sessions)
+			}
+			return nil
+		}
+		if err := need(2); err != nil {
+			return err
+		}
+		return call("POST", "/api/conversations/"+args[0]+"/group", map[string]string{"group": strings.Join(args[1:], " ")}, nil)
 	case "send":
 		if err := need(2); err != nil {
 			return err
@@ -273,6 +312,11 @@ func runCLI(cmd string, args []string) error {
 			return err
 		}
 		return call("POST", "/api/conversations/"+args[0]+"/"+cmd, struct{}{}, nil)
+	case "escalate":
+		if err := need(2); err != nil {
+			return err
+		}
+		return call("POST", "/api/conversations/"+args[0]+"/escalate", map[string]string{"reason": strings.Join(args[1:], " ")}, nil)
 	case "hook":
 		return hook(args)
 	case "help", "-h", "--help":

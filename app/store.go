@@ -13,6 +13,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// coordinatorID names the conductor's conversation and tmux window. It keeps its old value so a running conductor and its state carry over.
 const coordinatorID = "coordinator"
 
 type Conversation struct {
@@ -39,8 +40,13 @@ type Conversation struct {
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
-	// StartedBy is the conversation whose agent started this one with kk new.
-	StartedBy string `yaml:"started_by,omitempty" json:"started_by,omitempty"`
+	// ByAgent is set when an agent through the kk CLI, not the user, started the conversation or acted on it last.
+	// Conversations from before it existed count as the user's.
+	ByAgent bool `yaml:"by_agent,omitempty" json:"-"`
+	// Escalation is why the conductor handed a waiting conversation to the user. It lasts while the agent waits.
+	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
+	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
+	Group string `yaml:"group,omitempty" json:"group,omitempty"`
 }
 
 const (
@@ -50,8 +56,30 @@ const (
 	statusExited   = "exited"
 )
 
+const (
+	waitingUser      = "user"
+	waitingConductor = "conductor"
+)
+
+// Waiting reports whether the agent has stopped and someone has to act: its turn ended, it needs input, or it exited.
+func (c *Conversation) Waiting() bool {
+	return !c.Closed && (c.Attention != "" || c.Status == statusIdle || c.Status == statusExited)
+}
+
+// WaitingFor says who has to act on a waiting agent. Every agent that stops waits for the conductor, unless the conductor
+// escalated it, the user acted on it last, or no conductor runs. The conductor itself always waits for the user.
+func (c *Conversation) WaitingFor(conductor bool) string {
+	switch {
+	case !c.Waiting():
+		return ""
+	case c.Role != "" || c.Escalation != "" || !c.ByAgent || !conductor:
+		return waitingUser
+	}
+	return waitingConductor
+}
+
 func (c *Conversation) Unread() bool {
-	return !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
 }
 
 // Project is the directory the conversation belongs to: the one the user chose, also when the agent works in a worktree of it.
@@ -160,6 +188,9 @@ func (s *Store) update(id string, fn func(c *Conversation) bool) (Conversation, 
 }
 
 func (s *Store) save(c *Conversation) error {
+	if !c.Waiting() {
+		c.Escalation = ""
+	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err

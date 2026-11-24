@@ -21,12 +21,19 @@ export type Conversation = {
   dir: string;
   // The directory the list groups the conversation under; for a worktree session the directory it was made from.
   project: string;
+  // The feature the agent works on. Empty until kk or the coordinator has decided.
+  group?: string;
   title: string;
   created: string;
   last_message: string;
   activity: string;
   status: "starting" | "working" | "idle" | "exited";
   attention?: string;
+  // Who has to act on an agent that stopped; empty while it works.
+  waiting_for: "" | "user" | "conductor";
+  // Why the conductor handed the agent to the user.
+  escalation?: string;
+  closed?: boolean;
   context_tokens: number;
   unread: boolean;
   actions: string[];
