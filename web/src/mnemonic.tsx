@@ -60,6 +60,7 @@ export function Field(props: { label: string; children: ComponentChildren }) {
 document.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.key.length !== 1 || !/[a-z]/i.test(e.key)) return;
   const target = e.target as HTMLElement;
+  if (target.closest?.(".xterm")) return;
   const typing = target.closest?.("input, textarea, select, [contenteditable]");
   if (typing && !e.altKey) return;
   const key = e.key.toLowerCase();

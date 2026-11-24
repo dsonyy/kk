@@ -10,11 +10,15 @@ import (
 
 const tmuxSession = "kk"
 
-func tmux(stdin string, args ...string) (string, error) {
+func tmuxCmd(args ...string) *exec.Cmd {
 	if sock := os.Getenv("KK_TMUX"); sock != "" {
 		args = append([]string{"-L", sock}, args...)
 	}
-	cmd := exec.Command("tmux", args...)
+	return exec.Command("tmux", args...)
+}
+
+func tmux(stdin string, args ...string) (string, error) {
+	cmd := tmuxCmd(args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}

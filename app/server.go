@@ -83,6 +83,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/dirs", func(*http.Request) (any, error) { return s.store.recentDirs(), nil })
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
 	dist, _ := fs.Sub(web.Dist, "dist")
 	mux.Handle("GET /", http.FileServerFS(dist))
 	return mux

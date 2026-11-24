@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 var kkBin, fakeBin string
@@ -446,5 +449,51 @@ func TestWebAuth(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 403 {
 		t.Fatalf("cross-origin write: %d", resp.StatusCode)
+	}
+}
+
+func TestTerminal(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle })
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	resp, err := client.Get(e.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	wsURL := "ws://" + e.addr + "/api/conversations/" + id + "/terminal"
+	if _, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Origin": {"http://evil.example"}}}); err == nil {
+		t.Fatal("cross-origin terminal accepted")
+	}
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws.Write(ctx, websocket.MessageText, []byte(`{"cols":100,"rows":30}`))
+	var seen strings.Builder
+	for !strings.Contains(seen.String(), "echo: hello") {
+		_, data, err := ws.Read(ctx)
+		if err != nil {
+			t.Fatalf("terminal output: %v\n%q", err, seen.String())
+		}
+		seen.Write(data)
+	}
+	ws.Write(ctx, websocket.MessageBinary, []byte("typed in browser\r"))
+	e.waitFor("typed reply", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: typed in browser") })
+	ws.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out, _ := exec.Command("tmux", "-L", strings.TrimPrefix(e.vars[2], "KK_TMUX="), "list-sessions", "-F", "#{session_name}").Output()
+		if strings.TrimSpace(string(out)) == "kk" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("viewer session left behind: %s", out)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }

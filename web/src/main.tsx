@@ -5,6 +5,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, harnessLabel, when, type Conversation, type Event, type Harness } from "./api";
 import { Button, Field, Scope } from "./mnemonic";
+import { Terminal } from "./terminal";
 import "./app.css";
 
 const COORDINATOR = "coordinator";
@@ -251,6 +252,7 @@ function Keys({ id }: { id: string }) {
 
 function ConversationView({ c, reload, side }: { c: Conversation; reload: () => void; side?: boolean }) {
   const [showScreen, setShowScreen] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const screen = useScreen(c.id, showScreen || !!c.attention);
   const feed = useRef<HTMLDivElement>(null);
@@ -290,12 +292,15 @@ function ConversationView({ c, reload, side }: { c: Conversation; reload: () => 
             </div>
           </div>
           <div class="actions">
-            <Button label={showScreen ? "Hide screen" : "Screen"} class="small" onClick={() => setShowScreen(!showScreen)} />
+            <Button label={showTerminal ? "Hide terminal" : "Terminal"} class="small" onClick={() => setShowTerminal(!showTerminal)} />
+            {!showTerminal && <Button label={showScreen ? "Hide screen" : "Screen"} class="small" onClick={() => setShowScreen(!showScreen)} />}
             {exited && <Button label="Resume" class="small primary" onClick={resume} />}
             {!side && <Button label={confirmClose ? "Confirm close" : "Close"} class="small" onClick={close} />}
           </div>
         </header>
+        {showTerminal && <Terminal id={c.id} />}
         <div
+          hidden={showTerminal}
           class="feed"
           ref={feed}
           onScroll={(e) => {
@@ -313,13 +318,13 @@ function ConversationView({ c, reload, side }: { c: Conversation; reload: () => 
             </div>
           )}
         </div>
-        {showScreen && !c.attention && (
+        {showScreen && !showTerminal && !c.attention && (
           <div class="screen">
             <pre>{screen || "No screen."}</pre>
             <Keys id={c.id} />
           </div>
         )}
-        <Composer c={c} exited={exited} onResume={resume} />
+        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} />}
       </Scope>
     </Tag>
   );
