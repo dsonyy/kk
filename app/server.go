@@ -34,6 +34,8 @@ type Server struct {
 
 type convView struct {
 	Conversation
+	// Project is the directory the list groups the conversation under.
+	Project string   `json:"project"`
 	Unread  bool     `json:"unread"`
 	Actions []string `json:"actions"`
 	Events  []Event  `json:"events"`
@@ -158,7 +160,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {

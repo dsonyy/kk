@@ -864,6 +864,17 @@ func TestWorktreeSession(t *testing.T) {
 	if cwd, _ := os.ReadFile(filepath.Join(e.fake, "cwd.log")); strings.TrimSpace(string(cwd)) != filepath.Join(git(c.Dir, "rev-parse", "--show-toplevel"), "sub") {
 		t.Fatalf("agent cwd: %s", cwd)
 	}
+	if c.Project != filepath.Join(e.work, "sub") {
+		t.Fatalf("project of a worktree session: %s", c.Project)
+	}
+	plain := e.mustKK("new", "claude", "-C", e.work, "hello")
+	if p := e.conv(plain).Project; p != e.work {
+		t.Fatalf("project of a session in the chosen directory: %s", p)
+	}
+	// A session resumed from history runs in the worktree and carries no repo. Git names the worktree by its real path.
+	if p := (&Conversation{Dir: c.Dir}).Project(); p != filepath.Join(git(e.work, "rev-parse", "--show-toplevel"), "sub") {
+		t.Fatalf("project of a session resumed in a worktree: %s", p)
+	}
 	out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/dirs").Output()
 	if strings.Contains(string(out), "worktrees") || !strings.Contains(string(out), filepath.Join(e.work, "sub")) {
 		t.Fatalf("recent dirs: %s", out)
