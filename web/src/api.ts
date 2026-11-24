@@ -25,6 +25,7 @@ export type Conversation = {
   activity: string;
   status: "starting" | "working" | "idle" | "exited";
   attention?: string;
+  closed?: boolean;
   context_tokens: number;
   unread: boolean;
   actions: string[];

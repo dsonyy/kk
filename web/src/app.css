@@ -93,6 +93,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 
 .sidebar { flex: none; width: 300px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface); }
 .sidebar-head { flex: none; padding: var(--gap); }
+.sidebar-head .filter { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; font-size: 12px; }
 .sidebar-head button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .tiles { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 var(--gap) var(--gap); display: flex; flex-direction: column; gap: 8px; }
 .tiles .empty { padding: 8px 2px; color: var(--text-dim); }
@@ -116,6 +117,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile.unread { box-shadow: inset 3px 0 0 var(--text-strong); }
 .tile.unread .title::before { content: "● "; font-size: 10px; vertical-align: 1px; }
 .tile.exited { opacity: .6; }
+.tile.closed .title { color: var(--text-dim); }
+.tile.closed:not(.on, :hover) { opacity: .65; background: none; }
 .tile.working {
   border-color: transparent;
   background:

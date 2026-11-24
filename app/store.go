@@ -49,7 +49,7 @@ const (
 )
 
 func (c *Conversation) Unread() bool {
-	return !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
 }
 
 type Store struct {

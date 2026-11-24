@@ -392,6 +392,39 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestClosedStaysReadable(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "first")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: first") })
+	e.mustKK("close", id)
+	e.stop()
+	e.start()
+	listed := func() (found convView) {
+		var list []convView
+		_, body := e.request("GET", "/api/conversations?all=1", nil)
+		json.Unmarshal(body, &list)
+		for _, c := range list {
+			if c.ID == id {
+				found = c
+			}
+		}
+		return found
+	}
+	if c := listed(); !c.Closed || c.Unread {
+		t.Fatalf("closed conversation in the full list: %+v", c)
+	}
+	if c := e.conv(id); !hasEvent(c, kindAssistant, "echo: first") {
+		t.Fatalf("messages of a closed conversation: %+v", c.Events)
+	}
+	e.mustKK("resume", id)
+	e.waitFor("reopened", id, func(c convView) bool { return c.Status == statusIdle && !c.Closed })
+	if ls := e.mustKK("ls"); !strings.Contains(ls, id) || listed().Closed {
+		t.Fatalf("reopened conversation not listed: %s", ls)
+	}
+	e.mustKK("send", id, "second")
+	e.waitFor("answer after reopening", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: first") && hasEvent(c, kindAssistant, "echo: second") })
+}
+
 func TestCreateValidation(t *testing.T) {
 	e := newEnv(t)
 	for _, args := range [][]string{{"new", "gemini", "x"}, {"new", "claude", "-C", "/nonexistent", "x"}, {"new", "claude"}} {
