@@ -91,6 +91,8 @@ func (s *Server) routes() *http.ServeMux {
 		}
 		return dirs, nil
 	})
+	api("POST /api/attachments", s.handleUpload)
+	mux.HandleFunc("GET /api/attachments/{id}/{name}", s.handleAttachment)
 	api("GET /api/settings", s.handleSettings)
 	api("PUT /api/settings", s.handleSaveSettings)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
@@ -153,7 +155,9 @@ func (s *Server) view(c Conversation, events bool) convView {
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil {
-			v.Events = append(v.Events, t.Events...)
+			for _, e := range t.Events {
+				v.Events = append(v.Events, s.withAttachments(e))
+			}
 		}
 		s.mu.Unlock()
 	}

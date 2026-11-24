@@ -64,7 +64,7 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	var in struct {
 		// Event is the index of the user's message in the conversation's events.
 		Event int `json:"event"`
-		// Was is the message as the user saw it when they started editing.
+		// Was is the message as the user saw it when they started editing, without its attachment paths.
 		Was   string `json:"was"`
 		Text  string `json:"text"`
 		Files bool   `json:"files"`
@@ -101,7 +101,7 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	if in.Event < 0 || in.Event >= len(events) || events[in.Event].Kind != kindUser || (c.Harness == "claude" && events[in.Event].ID == "") {
 		return nil, fail(400, "event %d is not a message of yours that can be edited", in.Event)
 	}
-	if events[in.Event].Text != in.Was {
+	if s.withAttachments(events[in.Event]).Text != in.Was {
 		return nil, fail(409, "the conversation changed since you started editing, open the message again")
 	}
 	back := 0

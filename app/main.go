@@ -216,6 +216,9 @@ func runCLI(cmd string, args []string) error {
 				}
 			default:
 				fmt.Printf("[%s] %s\n", e.Kind, clip(e.Text, 4000))
+				for _, a := range e.Attachments {
+					fmt.Printf("[attachment] %s\n", a.Path)
+				}
 			}
 		}
 	case "new":

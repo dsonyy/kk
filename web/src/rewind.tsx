@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { api, flash, when, type Conversation, type Event, type Harness, type Rewind } from "./api";
 import { Button } from "./mnemonic";
+import { Attachments, withPaths } from "./prompt";
 
 let harnesses: Promise<Harness[]> | undefined;
 
@@ -36,7 +37,9 @@ export function UserMessage({ id, index, event, rewind, children }: Props) {
 
 function EditMessage({ id, index, event, rewind, onClose }: Omit<Props, "children" | "rewind"> & { rewind: Rewind; onClose: () => void }) {
   const [text, setText] = useState(event.text ?? "");
+  const [files, setFiles] = useState(event.attachments ?? []);
   const [busy, setBusy] = useState(false);
+  const empty = !text.trim() && !files.length;
   const area = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = area.current!;
@@ -44,10 +47,10 @@ function EditMessage({ id, index, event, rewind, onClose }: Omit<Props, "childre
     el.style.height = `${el.scrollHeight + 2}px`;
   }, [text]);
   useEffect(() => area.current!.focus(), []);
-  const send = async (files: boolean) => {
+  const send = async (restore: boolean) => {
     setBusy(true);
     try {
-      await api("POST", `/api/conversations/${id}/rewind`, { event: index, was: event.text, text, files });
+      await api("POST", `/api/conversations/${id}/rewind`, { event: index, was: event.text ?? "", text: withPaths(text, files), files: restore });
       onClose();
     } catch (e) {
       flash((e as Error).message);
@@ -64,6 +67,7 @@ function EditMessage({ id, index, event, rewind, onClose }: Omit<Props, "childre
         onInput={(e) => setText(e.currentTarget.value)}
         onKeyDown={(e) => e.key === "Escape" && onClose()}
       />
+      <Attachments items={files} onRemove={busy ? undefined : (i) => setFiles(files.filter((_, at) => at !== i))} />
       <p>
         <i class="icon icon-alert" />
         <b>Send from here.</b> {rewind.conversation}
@@ -76,8 +80,8 @@ function EditMessage({ id, index, event, rewind, onClose }: Omit<Props, "childre
       <div class="row">
         {busy && <span class="muted">Going back in the agent's terminal</span>}
         <Button label="Cancel" class="small" disabled={busy} onClick={onClose} />
-        {rewind.files && <Button label="Restore files and send" class="small" disabled={busy || !text.trim()} onClick={() => send(true)} />}
-        <Button label="Send from here" icon="send" class="small primary" disabled={busy || !text.trim()} onClick={() => send(false)} />
+        {rewind.files && <Button label="Restore files and send" class="small" disabled={busy || empty} onClick={() => send(true)} />}
+        <Button label="Send from here" icon="send" class="small primary" disabled={busy || empty} onClick={() => send(false)} />
       </div>
     </div>
   );

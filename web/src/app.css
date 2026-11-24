@@ -257,6 +257,21 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .quote-bar button + button { margin-left: -1px; }
 .quote-bar button:hover { position: relative; }
 .prompt { position: relative; flex: 1; min-width: 0; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.prompt .attachments { margin-bottom: 6px; }
+.msg .md + .attachments { margin-top: 6px; }
+.msg .attachments { align-items: flex-end; }
+.attachments li { display: flex; max-width: 100%; border: 1px solid var(--line-strong); background: var(--bg); }
+.attachments .file { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px; font-family: var(--font-mono); font-size: 12px; }
+.attachments .file .icon, .attachments .spinner { flex: none; }
+.attachments .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachments .uploading { color: var(--text-dim); }
+.attachments a:hover { color: var(--text-strong); }
+.attachments img { display: block; height: 56px; max-width: 160px; object-fit: cover; }
+.msg .attachments img { height: auto; max-height: 160px; max-width: 100%; }
+.prompt .attachments button, .rewind .attachments button { display: flex; align-items: center; min-height: 0; padding: 0 6px; border: 0; border-left: 1px solid var(--line-strong); }
+.attachments button .icon { width: 9px; height: 9px; }
+.conversation.dropping, .new-session.dropping { outline: 1px dashed var(--text-strong); outline-offset: -4px; }
 .suggest { position: absolute; left: 0; right: 0; top: 100%; z-index: 3; max-height: 260px; overflow: hidden auto; margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line-strong); }
 .suggest.up { top: auto; bottom: 100%; }
 .suggest li { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; cursor: pointer; color: var(--text-dim); }
