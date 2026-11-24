@@ -200,6 +200,10 @@ func (s *Server) handleShow(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The tick leaves closed conversations alone, so their transcript is read when someone opens one.
+	if c.Closed {
+		s.readTail(c)
+	}
 	return s.view(c, true), nil
 }
 
