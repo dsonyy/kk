@@ -35,16 +35,9 @@ You are the coordinator of kk, a web conductor for coding agents running in tmux
 The source code is in {{SOURCE}} (Go server in app/, web client in web/, read AGENTS.md there first). After a change: run the tests, then "just install", which rebuilds the binary and restarts the kk service. Agents and your own session keep running in tmux across restarts.
 `
 
-func sourceDir() string {
-	if d := os.Getenv("KK_SOURCE"); d != "" {
-		return d
-	}
-	h, _ := os.UserHomeDir()
-	return filepath.Join(h, "repos", "kk")
-}
-
 func (s *Server) ensureCoordinator() error {
-	text := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", s.source).Replace(coordinatorPrompt)
+	cfg := s.cfg()
+	text := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", cfg.source()).Replace(coordinatorPrompt)
 	if err := os.WriteFile(filepath.Join(s.store.dir, "coordinator.md"), []byte(text), 0o600); err != nil {
 		return err
 	}
@@ -55,6 +48,7 @@ func (s *Server) ensureCoordinator() error {
 	if !ok {
 		c = Conversation{ID: coordinatorID, Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Title: "Coordinator", Created: time.Now()}
 	}
+	c.Model = cfg.CoordinatorModel
 	resume := s.canResume(c)
 	if !resume {
 		c.Session, c.Transcript = "", ""

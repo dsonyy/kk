@@ -194,7 +194,9 @@ func hasEvent(c convView, kind, text string) bool {
 func TestClaudeConversation(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "hello", "world", "again", "today")
-	c := e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: hello world again today") })
+	c := e.waitFor("first answer", id, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: hello world again today")
+	})
 	if !hasEvent(c, kindUser, "hello world again today") || !hasEvent(c, kindTool, "ls") || !hasEvent(c, kindThinking, "Listing files") {
 		t.Fatalf("events: %+v", c.Events)
 	}
@@ -251,7 +253,9 @@ func TestPermissionNeedsAttention(t *testing.T) {
 		t.Fatalf("arbitrary keys accepted: %s", out)
 	}
 	e.mustKK("keys", id, "1", "Enter")
-	c = e.waitFor("answer after permission", id, func(c convView) bool { return c.Attention == "" && c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: ask for permission") })
+	c = e.waitFor("answer after permission", id, func(c convView) bool {
+		return c.Attention == "" && c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: ask for permission")
+	})
 }
 
 func TestAgentStuckBeforeStart(t *testing.T) {
@@ -323,7 +327,9 @@ func TestCursorConversation(t *testing.T) {
 		t.Fatalf("conversation: %+v", c)
 	}
 	e.mustKK("send", id, "line one\nline two")
-	e.waitFor("reply", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: line one\nline two") })
+	e.waitFor("reply", id, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: line one\nline two")
+	})
 	e.mustKK("send", id, "exit")
 	e.waitFor("exit", id, func(c convView) bool { return c.Status == statusExited })
 	e.mustKK("resume", id)
@@ -374,6 +380,70 @@ func TestCreateValidation(t *testing.T) {
 		if out, err := e.kk(args...); err == nil {
 			t.Fatalf("kk %v succeeded: %s", args, out)
 		}
+	}
+}
+
+func TestSkillsPerHarness(t *testing.T) {
+	e := newEnv(t)
+	write := func(root, dir, name, description string) {
+		path := filepath.Join(root, dir, name)
+		os.MkdirAll(path, 0o755)
+		os.WriteFile(filepath.Join(path, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+description+"\n---\nbody\n"), 0o644)
+	}
+	write(filepath.Dir(e.home), ".claude/skills", "alpha", "User skill for Claude")
+	write(e.work, ".agents/skills", "beta", "Project skill for Codex")
+	skills := func(harness string) []Skill {
+		out, err := exec.Command("curl", "-s", "-G", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/skills",
+			"--data-urlencode", "harness="+harness, "--data-urlencode", "dir="+e.work).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var list []Skill
+		json.Unmarshal(out, &list)
+		return list
+	}
+	if got := skills("claude"); len(got) != 1 || got[0] != (Skill{Name: "alpha", Description: "User skill for Claude", Insert: "/alpha", Scope: "user"}) {
+		t.Fatalf("claude skills: %+v", got)
+	}
+	if got := skills("codex"); len(got) != 1 || got[0] != (Skill{Name: "beta", Description: "Project skill for Codex", Insert: "$beta", Scope: "project"}) {
+		t.Fatalf("codex skills: %+v", got)
+	}
+}
+
+func TestSettings(t *testing.T) {
+	e := newEnv(t)
+	extra := filepath.Join(e.work, "shared-skills")
+	os.MkdirAll(filepath.Join(extra, "gamma"), 0o755)
+	os.WriteFile(filepath.Join(extra, "gamma", "SKILL.md"), []byte("---\nname: gamma\ndescription: Shared\n---\n"), 0o644)
+	curl := func(args ...string) string {
+		out, err := exec.Command("curl", append([]string{"-s", "--unix-socket", filepath.Join(e.home, "kk.sock")}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	put := func(body string) string {
+		return curl("-X", "PUT", "-d", body, "http://kk/api/settings")
+	}
+	if out := put(`{"coordinator_model":"gpt"}`); !strings.Contains(out, "unknown coordinator model") {
+		t.Fatalf("bad model accepted: %s", out)
+	}
+	body, _ := json.Marshal(map[string]any{"default_dir": e.work, "skill_dirs": []string{extra}, "start_timeout_seconds": 7})
+	var saved settingsView
+	json.Unmarshal([]byte(put(string(body))), &saved)
+	if saved.Settings.DefaultDir != e.work || saved.Settings.StartTimeoutSeconds != 7 || saved.Env["start_timeout_seconds"] != "KK_START_TIMEOUT" {
+		t.Fatalf("saved settings: %+v", saved)
+	}
+	if out := curl("http://kk/api/dirs"); !strings.HasPrefix(out, `["`+e.work+`"`) {
+		t.Fatalf("default directory is not first: %s", out)
+	}
+	if out := curl("http://kk/api/skills?harness=cursor"); !strings.Contains(out, `"insert":"/gamma","scope":"extra"`) {
+		t.Fatalf("extra skill directory not read: %s", out)
+	}
+	e.stop()
+	e.start()
+	if out := curl("http://kk/api/settings"); !strings.Contains(out, `"start_timeout_seconds":7`) {
+		t.Fatalf("settings not kept across a restart: %s", out)
 	}
 }
 

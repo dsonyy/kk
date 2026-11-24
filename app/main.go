@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,12 +52,7 @@ func main() {
 
 func sockPath() string { return filepath.Join(home(), "kk.sock") }
 
-func addr() string {
-	if a := os.Getenv("KK_ADDR"); a != "" {
-		return a
-	}
-	return "127.0.0.1:7420"
-}
+func addr() string { return loadSettings(home()).addr() }
 
 func readToken(dir string) (string, error) {
 	path := filepath.Join(dir, "token")
@@ -95,16 +89,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	compactAt, _ := strconv.Atoi(os.Getenv("KK_COMPACT_TOKENS"))
-	if compactAt == 0 {
-		compactAt = 50_000
-	}
 	s := &Server{
-		store: store, bin: bin, token: token, source: sourceDir(),
-		startTimeout: envDuration("KK_START_TIMEOUT", 20*time.Second),
-		compactAfter: envDuration("KK_COMPACT_AFTER", 55*time.Minute),
-		compactAt:    compactAt,
-		tails:        map[string]*Tail{}, subs: map[chan string]bool{},
+		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
+		tails: map[string]*Tail{}, subs: map[chan string]bool{},
 	}
 	os.Remove(sockPath())
 	unixLn, err := net.Listen("unix", sockPath())
@@ -120,7 +107,7 @@ func serve() error {
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()
-	if os.Getenv("KK_NO_COORDINATOR") == "" {
+	if s.cfg().coordinator() {
 		if err := s.ensureCoordinator(); err != nil {
 			log.Printf("coordinator: %v", err)
 		}

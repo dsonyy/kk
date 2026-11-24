@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,18 +21,15 @@ import (
 )
 
 type Server struct {
-	store        *Store
-	bin          string
-	token        string
-	source       string
-	startTimeout time.Duration
-	compactAfter time.Duration
-	compactAt    int
+	store *Store
+	bin   string
+	token string
 
-	mu    sync.Mutex
-	tails map[string]*Tail
-	subs  map[chan string]bool
-	ticks int
+	mu       sync.Mutex
+	settings Settings
+	tails    map[string]*Tail
+	subs     map[chan string]bool
+	ticks    int
 }
 
 type convView struct {
@@ -81,7 +79,16 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/close", s.handleClose)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
-	api("GET /api/dirs", func(*http.Request) (any, error) { return s.store.recentDirs(), nil })
+	api("GET /api/skills", s.handleSkills)
+	api("GET /api/dirs", func(*http.Request) (any, error) {
+		dirs := s.store.recentDirs()
+		if d := s.cfg().DefaultDir; d != "" {
+			dirs = append([]string{d}, slices.DeleteFunc(dirs, func(x string) bool { return x == d })...)
+		}
+		return dirs, nil
+	})
+	api("GET /api/settings", s.handleSettings)
+	api("PUT /api/settings", s.handleSaveSettings)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
 	dist, _ := fs.Sub(web.Dist, "dist")
@@ -492,6 +499,7 @@ func (s *Server) tick() {
 	}
 	s.ticks++
 	now := time.Now()
+	startTimeout := s.cfg().startTimeout()
 	for _, c := range s.store.list() {
 		if c.Closed {
 			continue
@@ -502,8 +510,8 @@ func (s *Server) tick() {
 			if c.Status != statusExited && c.Window != "" && !alive[c.Window] {
 				c.Status, c.Attention, changed = statusExited, "", true
 			}
-			if c.Status == statusStarting && c.Attention == "" && now.Sub(c.Launched) > s.startTimeout {
-				c.Attention, changed = fmt.Sprintf("The agent has not started its session after %s and may be waiting for input", s.startTimeout), true
+			if c.Status == statusStarting && c.Attention == "" && now.Sub(c.Launched) > startTimeout {
+				c.Attention, changed = fmt.Sprintf("The agent has not started its session after %s and may be waiting for input", startTimeout), true
 			}
 			if t := events; t != nil {
 				if t.Title != "" && t.Title != c.Title {
@@ -564,7 +572,8 @@ func (s *Server) readTail(c Conversation) *Tail {
 }
 
 func (s *Server) maybeCompact(c Conversation, now time.Time) {
-	if c.Status != statusIdle || c.Compacted || c.Context < s.compactAt || now.Sub(lastActive(c)) < s.compactAfter {
+	cfg := s.cfg()
+	if c.Status != statusIdle || c.Compacted || c.Context < cfg.compactTokens() || now.Sub(lastActive(c)) < cfg.compactAfter() {
 		return
 	}
 	if err := pasteText(c.Window, "/compact"); err != nil {
