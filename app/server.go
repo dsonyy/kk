@@ -82,6 +82,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/stats", s.handleStats)
+	api("GET /api/repo", handleRepo)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
@@ -202,6 +203,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Prompt  string `json:"prompt"`
 		// Session resumes a session from the harness's own history instead of starting a new one.
 		Session string `json:"session"`
+		// Worktree starts the agent in a new git worktree of dir, on its own branch.
+		Worktree bool `json:"worktree"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -219,6 +222,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	}
 	now := time.Now()
 	if in.Session != "" {
+		if in.Worktree {
+			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
+		}
 		for _, c := range s.store.list() {
 			if c.Harness == in.Harness && c.Session == in.Session && !c.Closed {
 				return s.view(c, false), nil
@@ -240,6 +246,12 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "prompt is empty")
 	}
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now}
+	if in.Worktree {
+		c.Repo = dir
+		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}

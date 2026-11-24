@@ -267,7 +267,11 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .settings h1:first-child { margin-top: 0; }
 .settings input[type="number"] { width: 140px; }
 .settings .field textarea { min-height: 0; }
-.settings .check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.check input { appearance: none; flex: none; width: 14px; height: 14px; margin: 0; padding: 0; }
+.check input:checked { background: var(--text); box-shadow: inset 0 0 0 3px var(--bg); }
+.check:has(:disabled) { color: var(--text-dim); }
+.check input:disabled { border-color: var(--line); }
 .settings .row { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 12px 0; background: var(--bg); }
 .settings table { border-collapse: collapse; font-size: 13px; }
 .settings td { padding: 3px 16px 3px 0; }

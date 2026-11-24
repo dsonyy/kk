@@ -613,3 +613,59 @@ func TestTerminal(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+func TestWorktreeSession(t *testing.T) {
+	e := newEnv(t)
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=kk", "-c", "user.email=kk@example.com"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	repoInfo := func(dir string) string {
+		out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/repo?dir="+dir).Output()
+		return strings.TrimSpace(string(out))
+	}
+	if got := repoInfo(e.work); got != `{"git":false,"branch":""}` {
+		t.Fatalf("repo info outside git: %s", got)
+	}
+	if out, err := e.kk("new", "claude", "-w", "-C", e.work, "no repo"); err == nil || !strings.Contains(out, "not a git repository") {
+		t.Fatalf("worktree outside git: %v %s", err, out)
+	}
+	git(e.work, "init", "-q", "-b", "trunk")
+	os.MkdirAll(filepath.Join(e.work, "sub"), 0o755)
+	os.WriteFile(filepath.Join(e.work, "sub", "file"), []byte("x"), 0o644)
+	git(e.work, "add", ".")
+	git(e.work, "commit", "-q", "-m", "first")
+	if got := repoInfo(e.work); got != `{"git":true,"branch":"trunk"}` {
+		t.Fatalf("repo info: %s", got)
+	}
+
+	id := e.mustKK("new", "claude", "-w", "-C", filepath.Join(e.work, "sub"), "Fix the login page")
+	c := e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: Fix the login page") })
+	branch := "fix-the-login-page-" + id
+	if got := git(c.Dir, "branch", "--show-current"); got != branch {
+		t.Fatalf("branch in %s: %s", c.Dir, got)
+	}
+	if filepath.Base(c.Dir) != "sub" || git(c.Dir, "rev-parse", "HEAD") != git(e.work, "rev-parse", "HEAD") {
+		t.Fatalf("worktree dir %s is not the chosen subdirectory at the repository's commit", c.Dir)
+	}
+	if git(c.Dir, "rev-parse", "--git-dir") == git(e.work, "rev-parse", "--git-dir") || git(e.work, "branch", "--show-current") != "trunk" {
+		t.Fatalf("the agent runs in the chosen checkout, not in a worktree: %s", c.Dir)
+	}
+	if git(e.work, "status", "--porcelain") != "" {
+		t.Fatalf("worktree shows in the repository's status: %s", git(e.work, "status", "--porcelain"))
+	}
+	if cwd, _ := os.ReadFile(filepath.Join(e.fake, "cwd.log")); strings.TrimSpace(string(cwd)) != filepath.Join(git(c.Dir, "rev-parse", "--show-toplevel"), "sub") {
+		t.Fatalf("agent cwd: %s", cwd)
+	}
+	out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/dirs").Output()
+	if strings.Contains(string(out), "worktrees") || !strings.Contains(string(out), filepath.Join(e.work, "sub")) {
+		t.Fatalf("recent dirs: %s", out)
+	}
+	if code, body := e.post("/api/conversations", map[string]any{"harness": "claude", "session": "x", "worktree": true, "dir": e.work}); code != 400 {
+		t.Fatalf("worktree with an earlier session: %d %s", code, body)
+	}
+}
