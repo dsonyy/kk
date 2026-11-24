@@ -130,7 +130,7 @@ export function PromptInput({ value, onValue, skills, attachments, up, onEnter, 
   const add = useRef(attachments.add);
   add.current = attachments.add;
   useEffect(() => {
-    const panel = area.current?.closest<HTMLElement>(".conversation");
+    const panel = area.current?.closest<HTMLElement>(".conversation, .new-session");
     if (!panel) return;
     const files = (e: DragEvent) => e.dataTransfer?.types.includes("Files");
     const over = (e: DragEvent) => {

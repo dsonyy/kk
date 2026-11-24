@@ -21,6 +21,7 @@
   --gpu: #ff9a40;
   --user-bg: #1d1206;
   --user-line: #8a4a0c;
+  --backdrop: rgb(0 0 0 / .7);
   --gap: 12px;
   --font-ui: system-ui, "Noto Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", Hack, "DejaVu Sans Mono", "SF Mono", Menlo, Consolas, monospace;
@@ -200,6 +201,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .panel-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 1; }
 .panel-resize:hover, .panel-resize.dragging { background: var(--line-strong); }
 .side-panel .conv-head h1 { font-size: 14px; }
+.side-panel > .conversation { min-height: 0; }
 
 /* Markdown is set for reading: a short measure, open leading, and space that groups a heading with the text under it. */
 .md { font-size: 15px; line-height: 1.65; color: var(--read-text); overflow-wrap: anywhere; text-wrap: pretty; }
@@ -231,8 +233,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .md a:hover { text-decoration-color: var(--read-strong); }
 .msg.user .md { font-size: 14px; line-height: 1.5; }
 
-#panel-new { overflow-y: auto; }
-.new-session { flex: none; width: min(720px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+.overlay { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: var(--gap); background: var(--backdrop); }
+.new-session { width: min(720px, 100%); max-height: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); background: var(--surface); }
 .new-session h1 { font-size: 16px; color: var(--text-strong); }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); }
 .field textarea { min-height: 160px; resize: vertical; color: var(--text); }
@@ -265,7 +267,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .msg .attachments img { height: auto; max-height: 160px; max-width: 100%; }
 .prompt .attachments button { display: flex; align-items: center; min-height: 0; padding: 0 6px; border: 0; border-left: 1px solid var(--line-strong); }
 .attachments button .icon { width: 9px; height: 9px; }
-.conversation.dropping { outline: 1px dashed var(--text-strong); outline-offset: -4px; }
+.conversation.dropping, .new-session.dropping { outline: 1px dashed var(--text-strong); outline-offset: -4px; }
 .suggest { position: absolute; left: 0; right: 0; top: 100%; z-index: 3; max-height: 260px; overflow: hidden auto; margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line-strong); }
 .suggest.up { top: auto; bottom: 100%; }
 .suggest li { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; cursor: pointer; color: var(--text-dim); }
@@ -280,7 +282,11 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .settings h1:first-child { margin-top: 0; }
 .settings input[type="number"] { width: 140px; }
 .settings .field textarea { min-height: 0; }
-.settings .check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.check input { appearance: none; flex: none; width: 14px; height: 14px; margin: 0; padding: 0; }
+.check input:checked { background: var(--text); box-shadow: inset 0 0 0 3px var(--bg); }
+.check:has(:disabled) { color: var(--text-dim); }
+.check input:disabled { border-color: var(--line); }
 .settings .row { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 12px 0; background: var(--bg); }
 .settings table { border-collapse: collapse; font-size: 13px; }
 .settings td { padding: 3px 16px 3px 0; }
