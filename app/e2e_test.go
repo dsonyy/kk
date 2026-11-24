@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -615,110 +616,77 @@ func TestTerminal(t *testing.T) {
 	}
 }
 
-var allHarnesses = []string{"claude", "codex", "cursor"}
-
-func TestInterrupt(t *testing.T) {
-	e := newEnv(t)
-	for _, h := range allHarnesses {
-		id := e.mustKK("new", h, "-C", e.work, "slow task")
-		c := e.waitFor(h+" working", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow task") })
-		if strings.Join(c.Actions, ",") != "interrupt,stop" {
-			t.Fatalf("%s actions while working: %v", h, c.Actions)
-		}
-		e.mustKK("interrupt", id)
-		c = e.waitFor(h+" interrupted", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindNote, "Interrupted") })
-		// kk cannot tell an idle Cursor from one that works without tools, so its interrupt stays available.
-		if want := map[bool]string{false: "reset,stop", true: "interrupt,reset,stop"}[h == "cursor"]; strings.Join(c.Actions, ",") != want {
-			t.Fatalf("%s actions while idle: %v", h, c.Actions)
-		}
-		if h != "cursor" {
-			if out, err := e.kk("interrupt", id); err == nil {
-				t.Fatalf("%s: interrupt of an idle agent accepted: %s", h, out)
+func TestRewind(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, target string
+		files                 bool
+		log                   string
+	}{
+		{"claude", "claude", "edit two\nsecond line", false, "claude: Restore conversation: edit two\n"},
+		{"claude files", "claude", "edit two\nsecond line", true, "claude: Restore code and conversation: edit two\n"},
+		{"claude none", "claude", "three", true, "claude: Restore conversation: three\n"},
+		{"cursor", "cursor", "edit two\nsecond line", false, "cursor-agent: Restore conversation: edit two\n"},
+		{"cursor files", "cursor", "edit two\nsecond line", true, "cursor-agent: Restore files and conversation: edit two\n"},
+		{"codex", "codex", "edit two\nsecond line", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			id := e.mustKK("new", tc.harness, "-C", e.work, "one")
+			answered := func(text string) convView {
+				return e.waitFor("answer to "+text, id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: "+text) })
 			}
-		}
-		e.mustKK("send", id, "after")
-		e.waitFor(h+" answer after the interrupt", id, func(c convView) bool {
-			return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: after")
+			answered("one")
+			for _, text := range []string{"edit two\nsecond line", "three"} {
+				e.mustKK("send", id, text)
+				answered(text)
+			}
+			c := e.conv(id)
+			target := slices.IndexFunc(c.Events, func(ev Event) bool { return ev.Kind == kindUser && ev.Text == tc.target })
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target + 1, "text": "x"}); code != 400 {
+				t.Fatalf("rewind to an event that is not a message: %d %s", code, body)
+			}
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "was": "stale", "text": "x"}); code != 409 {
+				t.Fatalf("rewind from a stale view: %d %s", code, body)
+			}
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "was": tc.target, "text": "changed\nmessage", "files": tc.files}); code != 200 {
+				screen, _ := e.kk("screen", id)
+				t.Fatalf("rewind: %d %s\n%s", code, body, screen)
+			}
+			c = answered("changed\nmessage")
+			want := []string{"one", "edit two\nsecond line", "changed\nmessage"}
+			if tc.target != "three" {
+				want = []string{"one", "changed\nmessage"}
+			}
+			var users []string
+			for _, ev := range c.Events {
+				if ev.Kind == kindUser {
+					users = append(users, ev.Text)
+				}
+			}
+			if !slices.Equal(users, want) || hasEvent(c, kindAssistant, "echo: "+tc.target) || !hasEvent(c, kindAssistant, "echo: one") {
+				t.Fatalf("events after the rewind: %+v", c.Events)
+			}
+			if log, _ := os.ReadFile(filepath.Join(e.fake, "rewind.log")); string(log) != tc.log {
+				t.Fatalf("rewind.log: %q", log)
+			}
 		})
 	}
 }
 
-func TestStop(t *testing.T) {
+func TestRewindSaysWhatIsRestored(t *testing.T) {
 	e := newEnv(t)
-	for _, h := range allHarnesses {
-		id := e.mustKK("new", h, "-C", e.work, "slow task")
-		c := e.waitFor(h+" working", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow task") })
-		session := c.Session
-		e.mustKK("stop", id)
-		c = e.waitFor(h+" stopped", id, func(c convView) bool { return c.Status == statusExited })
-		if len(c.Actions) != 0 || !hasEvent(c, kindUser, "slow task") {
-			t.Fatalf("%s after stop: %v %+v", h, c.Actions, c.Events)
-		}
-		if ls := e.mustKK("ls"); !strings.Contains(ls, id) {
-			t.Fatalf("%s: stopped conversation not listed: %s", h, ls)
-		}
-		if screen := e.mustKK("screen", id); !strings.Contains(screen, "slow task") {
-			t.Fatalf("%s: the window with the last screen is gone: %s", h, screen)
-		}
-		if out, err := e.kk("stop", id); err == nil {
-			t.Fatalf("%s: stop of an exited agent accepted: %s", h, out)
-		}
-		e.mustKK("resume", id)
-		e.waitFor(h+" resumed", id, func(c convView) bool { return c.Status == statusIdle })
-		e.mustKK("send", id, "second")
-		c = e.waitFor(h+" answer after resume", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: second") })
-		if !hasEvent(c, kindUser, "slow task") || c.Session != session {
-			t.Fatalf("%s: history lost after stop and resume: %+v", h, c)
+	var hs []Harness
+	out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/harnesses").Output()
+	json.Unmarshal(out, &hs)
+	for _, h := range hs {
+		if h.Rewind == nil || h.Rewind.Conversation == "" || (h.Rewind.Files == "") != (h.Name == "codex") {
+			t.Fatalf("%s: %+v", h.Name, h.Rewind)
 		}
 	}
-}
-
-func TestReset(t *testing.T) {
-	e := newEnv(t)
-	lastArgv := func() string {
-		argv, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
-		lines := strings.Split(strings.TrimSpace(string(argv)), "\n")
-		return lines[len(lines)-1]
-	}
-	for _, h := range allHarnesses {
-		id := e.mustKK("new", h, "-C", e.work, "first")
-		c := e.waitFor(h+" first answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: first") })
-		old := c.Session
-		e.mustKK("reset", id)
-		if c = e.conv(id); c.Session == old || len(c.Events) != 0 || c.Context != 0 {
-			t.Fatalf("%s after reset: %+v", h, c)
-		}
-		e.waitFor(h+" ready after reset", id, func(c convView) bool { return c.Status == statusIdle })
-		e.mustKK("send", id, "second")
-		c = e.waitFor(h+" answer after reset", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: second") })
-		fresh := c.Session
-		if hasEvent(c, kindAssistant, "echo: first") || fresh == "" || fresh == old {
-			t.Fatalf("%s: old conversation still shown after reset: %+v", h, c)
-		}
-		e.mustKK("stop", id)
-		e.waitFor(h+" stopped", id, func(c convView) bool { return c.Status == statusExited })
-		e.mustKK("resume", id)
-		// A resumed Cursor counts as started at once, so the agent's start is awaited by its arguments.
-		e.waitFor(h+" resumed in the new session", id, func(c convView) bool {
-			return c.Status == statusIdle && strings.Contains(lastArgv(), `esume","`+fresh+`"`)
-		})
-	}
-
-	id := e.mustKK("new", "claude", "-C", e.work, "slow task")
-	e.waitFor("working", id, func(c convView) bool { return c.Status == statusWorking })
-	if out, err := e.kk("reset", id); err == nil {
-		t.Fatalf("reset of a working agent accepted: %s", out)
-	}
-	e.mustKK("interrupt", id)
-	old := e.waitFor("interrupted", id, func(c convView) bool { return c.Status == statusIdle }).Session
-	e.mustKK("reset", id)
-	e.waitFor("new session", id, func(c convView) bool { return c.Session != old })
-	e.mustKK("stop", id)
-	e.waitFor("stopped", id, func(c convView) bool { return c.Status == statusExited })
-	e.mustKK("resume", id)
-	e.waitFor("restarted", id, func(c convView) bool { return c.Status == statusIdle })
-	if argv := lastArgv(); strings.Contains(argv, "slow task") {
-		t.Fatalf("the first prompt was sent again after a reset: %s", argv)
+	id := e.mustKK("new", "codex", "-C", e.work, "one")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: one") })
+	if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": 0, "was": "one", "text": "x", "files": true}); code != 400 || !strings.Contains(body, "cannot restore files") {
+		t.Fatalf("restoring files with codex: %d %s", code, body)
 	}
 }
 
@@ -872,5 +840,129 @@ func TestWorktreeSession(t *testing.T) {
 	}
 	if code, body := e.post("/api/conversations", map[string]any{"harness": "claude", "session": "x", "worktree": true, "dir": e.work}); code != 400 {
 		t.Fatalf("worktree with an earlier session: %d %s", code, body)
+	}
+}
+
+func TestRewindKeepsAttachments(t *testing.T) {
+	e := newEnv(t)
+	file := e.upload("notes.txt", []byte("notes"))
+	id := e.mustKK("new", "claude", "-C", e.work, "one")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: one") })
+	e.mustKK("send", id, "look\n\n"+file.Path)
+	c := e.waitFor("answer with a file", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindUser, "look") })
+	target := slices.IndexFunc(c.Events, func(ev Event) bool { return ev.Kind == kindUser && ev.Text == "look" })
+	if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "was": "look", "text": "look again\n\n" + file.Path}); code != 200 {
+		t.Fatalf("rewind: %d %s", code, body)
+	}
+	c = e.waitFor("answer to the edited message", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindUser, "look again") })
+	if ev := c.Events[target]; len(ev.Attachments) != 1 || ev.Attachments[0].Path != file.Path || hasEvent(c, kindUser, "look") {
+		t.Fatalf("events after the rewind: %+v", c.Events)
+	}
+}
+
+var allHarnesses = []string{"claude", "codex", "cursor"}
+
+func TestInterrupt(t *testing.T) {
+	e := newEnv(t)
+	for _, h := range allHarnesses {
+		id := e.mustKK("new", h, "-C", e.work, "slow task")
+		c := e.waitFor(h+" working", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow task") })
+		if strings.Join(c.Actions, ",") != "interrupt,stop" {
+			t.Fatalf("%s actions while working: %v", h, c.Actions)
+		}
+		e.mustKK("interrupt", id)
+		c = e.waitFor(h+" interrupted", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindNote, "Interrupted") })
+		// kk cannot tell an idle Cursor from one that works without tools, so its interrupt stays available.
+		if want := map[bool]string{false: "reset,stop", true: "interrupt,reset,stop"}[h == "cursor"]; strings.Join(c.Actions, ",") != want {
+			t.Fatalf("%s actions while idle: %v", h, c.Actions)
+		}
+		if h != "cursor" {
+			if out, err := e.kk("interrupt", id); err == nil {
+				t.Fatalf("%s: interrupt of an idle agent accepted: %s", h, out)
+			}
+		}
+		e.mustKK("send", id, "after")
+		e.waitFor(h+" answer after the interrupt", id, func(c convView) bool {
+			return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: after")
+		})
+	}
+}
+
+func TestStop(t *testing.T) {
+	e := newEnv(t)
+	for _, h := range allHarnesses {
+		id := e.mustKK("new", h, "-C", e.work, "slow task")
+		c := e.waitFor(h+" working", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow task") })
+		session := c.Session
+		e.mustKK("stop", id)
+		c = e.waitFor(h+" stopped", id, func(c convView) bool { return c.Status == statusExited })
+		if len(c.Actions) != 0 || !hasEvent(c, kindUser, "slow task") {
+			t.Fatalf("%s after stop: %v %+v", h, c.Actions, c.Events)
+		}
+		if ls := e.mustKK("ls"); !strings.Contains(ls, id) {
+			t.Fatalf("%s: stopped conversation not listed: %s", h, ls)
+		}
+		if screen := e.mustKK("screen", id); !strings.Contains(screen, "slow task") {
+			t.Fatalf("%s: the window with the last screen is gone: %s", h, screen)
+		}
+		if out, err := e.kk("stop", id); err == nil {
+			t.Fatalf("%s: stop of an exited agent accepted: %s", h, out)
+		}
+		e.mustKK("resume", id)
+		e.waitFor(h+" resumed", id, func(c convView) bool { return c.Status == statusIdle })
+		e.mustKK("send", id, "second")
+		c = e.waitFor(h+" answer after resume", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: second") })
+		if !hasEvent(c, kindUser, "slow task") || c.Session != session {
+			t.Fatalf("%s: history lost after stop and resume: %+v", h, c)
+		}
+	}
+}
+
+func TestReset(t *testing.T) {
+	e := newEnv(t)
+	lastArgv := func() string {
+		argv, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
+		lines := strings.Split(strings.TrimSpace(string(argv)), "\n")
+		return lines[len(lines)-1]
+	}
+	for _, h := range allHarnesses {
+		id := e.mustKK("new", h, "-C", e.work, "first")
+		c := e.waitFor(h+" first answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: first") })
+		old := c.Session
+		e.mustKK("reset", id)
+		if c = e.conv(id); c.Session == old || len(c.Events) != 0 || c.Context != 0 {
+			t.Fatalf("%s after reset: %+v", h, c)
+		}
+		e.waitFor(h+" ready after reset", id, func(c convView) bool { return c.Status == statusIdle })
+		e.mustKK("send", id, "second")
+		c = e.waitFor(h+" answer after reset", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: second") })
+		fresh := c.Session
+		if hasEvent(c, kindAssistant, "echo: first") || fresh == "" || fresh == old {
+			t.Fatalf("%s: old conversation still shown after reset: %+v", h, c)
+		}
+		e.mustKK("stop", id)
+		e.waitFor(h+" stopped", id, func(c convView) bool { return c.Status == statusExited })
+		e.mustKK("resume", id)
+		// A resumed Cursor counts as started at once, so the agent's start is awaited by its arguments.
+		e.waitFor(h+" resumed in the new session", id, func(c convView) bool {
+			return c.Status == statusIdle && strings.Contains(lastArgv(), `esume","`+fresh+`"`)
+		})
+	}
+
+	id := e.mustKK("new", "claude", "-C", e.work, "slow task")
+	e.waitFor("working", id, func(c convView) bool { return c.Status == statusWorking })
+	if out, err := e.kk("reset", id); err == nil {
+		t.Fatalf("reset of a working agent accepted: %s", out)
+	}
+	e.mustKK("interrupt", id)
+	old := e.waitFor("interrupted", id, func(c convView) bool { return c.Status == statusIdle }).Session
+	e.mustKK("reset", id)
+	e.waitFor("new session", id, func(c convView) bool { return c.Session != old })
+	e.mustKK("stop", id)
+	e.waitFor("stopped", id, func(c convView) bool { return c.Status == statusExited })
+	e.mustKK("resume", id)
+	e.waitFor("restarted", id, func(c convView) bool { return c.Status == statusIdle })
+	if argv := lastArgv(); strings.Contains(argv, "slow task") {
+		t.Fatalf("the first prompt was sent again after a reset: %s", argv)
 	}
 }

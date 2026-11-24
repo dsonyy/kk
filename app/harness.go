@@ -20,15 +20,17 @@ type Harness struct {
 	Models []string `json:"models"`
 	// Hooks tells whether the harness reports its state through kk hooks.
 	Hooks bool `json:"hooks"`
+	// Rewind is nil when the harness cannot go back to an earlier message.
+	Rewind *Rewind `json:"rewind,omitempty"`
 }
 
 var hookEvents = []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification", "PermissionRequest"}
 
 func harnesses() []Harness {
 	return []Harness{
-		{Name: "claude", Label: "Claude Code", Models: []string{"", "opus", "sonnet", "haiku", "fable"}, Hooks: true},
-		{Name: "codex", Label: "Codex", Models: codexModels(), Hooks: true},
-		{Name: "cursor", Label: "Cursor", Models: cursorModels(), Hooks: true},
+		{Name: "claude", Label: "Claude Code", Models: []string{"", "opus", "sonnet", "haiku", "fable"}, Hooks: true, Rewind: rewinds["claude"]},
+		{Name: "codex", Label: "Codex", Models: codexModels(), Hooks: true, Rewind: rewinds["codex"]},
+		{Name: "cursor", Label: "Cursor", Models: cursorModels(), Hooks: true, Rewind: rewinds["cursor"]},
 	}
 }
 

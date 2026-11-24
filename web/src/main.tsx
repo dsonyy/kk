@@ -3,10 +3,11 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo } from "./api";
+import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { Load } from "./load";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
+import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
@@ -207,7 +208,9 @@ function Reveal({ text }: { text: string }) {
   return shown >= text.length ? <Markdown text={text} /> : <Markdown text={text.slice(0, shown)} partial />;
 }
 
-function Feed({ events, live, running }: { events: Event[]; live: number; running: boolean }) {
+function Feed({ c, live, rewind }: { c: Conversation; live: number; rewind?: Rewind }) {
+  const events = c.events;
+  const running = c.status === "working";
   const out: preact.JSX.Element[] = [];
   let steps: [Event, number][] = [];
   const flush = (key: number) => {
@@ -242,6 +245,14 @@ function Feed({ events, live, running }: { events: Event[]; live: number; runnin
         </div>,
       );
     else if (e.kind === "note") out.push(<div class="note" key={i}>{e.text}</div>);
+    else if (e.kind === "user")
+      out.push(
+        // Claude Code lists only real prompts in its rewind menu; those carry their transcript id.
+        <UserMessage key={i} id={c.id} index={i} event={e} rewind={c.harness !== "claude" || e.id ? rewind : undefined}>
+          {e.text && <Markdown text={e.text} />}
+          <Attachments items={e.attachments ?? []} />
+        </UserMessage>,
+      );
     else
       out.push(
         <div class={`msg ${e.kind}`} key={i} title={when(e.time)} data-event={i}>
@@ -351,6 +362,8 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
   const inner = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const live = useRef(c.events.length);
+  live.current = Math.min(live.current, c.events.length);
+  const rewind = useRewind(c);
   const composer = useRef<((text: string) => void) | undefined>(undefined);
   const [quote, setQuote] = useState<{ text: string; x: number; y: number }>();
 
@@ -395,6 +408,8 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
   const exited = c.status === "exited";
   const users = c.events.filter((e) => e.kind === "user").length;
   const sending = pending.filter((p) => users < p.expect);
+  // A rewind lowers the count again, which must not bring back messages that already arrived.
+  if (sending.length < pending.length) setPending(sending);
   const busy = !exited && !c.attention && (c.status !== "idle" || sending.length > 0);
   const last = c.events[c.events.length - 1];
 
@@ -466,7 +481,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
         >
           <div class="feed-inner" ref={inner}>
             {c.events.length === 0 && !c.attention && !busy && <div class="empty">No messages yet.</div>}
-            <Feed events={c.events} live={live.current} running={c.status === "working"} />
+            <Feed c={c} live={live.current} rewind={rewind} />
             {sending.map((p, i) => (
               <div class="msg user sending" key={`p${i}`}>
                 {p.text.trim() && <Markdown text={p.text} />}

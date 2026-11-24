@@ -73,6 +73,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations", s.handleCreate)
 	api("GET /api/conversations/{id}", s.handleShow)
 	api("POST /api/conversations/{id}/send", s.handleSend)
+	api("POST /api/conversations/{id}/rewind", s.handleRewind)
 	api("POST /api/conversations/{id}/keys", s.handleKeys)
 	api("GET /api/conversations/{id}/screen", s.handleScreen)
 	api("POST /api/conversations/{id}/seen", s.handleSeen)
@@ -335,6 +336,9 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running, resume it first")
 	}
+	if err := midRewind(c.ID); err != nil {
+		return nil, err
+	}
 	if err := pasteText(c.Window, in.Text); err != nil {
 		return nil, err
 	}
@@ -355,6 +359,9 @@ func (s *Server) handleKeys(r *http.Request) (any, error) {
 	}
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running")
+	}
+	if err := midRewind(c.ID); err != nil {
+		return nil, err
 	}
 	if err := sendKeys(c.Window, in.Keys); err != nil {
 		return nil, fail(400, "%v", err)
@@ -452,7 +459,7 @@ func (s *Server) control(r *http.Request, action string) (Conversation, error) {
 	if !slices.Contains(actions(c), action) {
 		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
 	}
-	return c, nil
+	return c, midRewind(c.ID)
 }
 
 func (s *Server) handleInterrupt(r *http.Request) (any, error) {
@@ -494,6 +501,11 @@ func (s *Server) handleReset(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Reset drives the terminal like a rewind does, so it takes the same turn at it.
+	if _, busy := rewinding.LoadOrStore(c.ID, true); busy {
+		return nil, midRewind(c.ID)
+	}
+	defer rewinding.Delete(c.ID)
 	// The old session is let go before the command is typed: Codex reports the new one only with its first turn.
 	c, _ = s.store.update(c.ID, func(c *Conversation) bool {
 		c.Session, c.Transcript, c.Prompt, c.Context = "", "", "", 0
@@ -701,7 +713,7 @@ func (s *Server) readTail(c Conversation) *Tail {
 
 func (s *Server) maybeCompact(c Conversation, now time.Time) {
 	cfg := s.cfg()
-	if c.Status != statusIdle || c.Compacted || c.Context < cfg.compactTokens() || now.Sub(lastActive(c)) < cfg.compactAfter() {
+	if midRewind(c.ID) != nil || c.Status != statusIdle || c.Compacted || c.Context < cfg.compactTokens() || now.Sub(lastActive(c)) < cfg.compactAfter() {
 		return
 	}
 	if err := pasteText(c.Window, "/compact"); err != nil {

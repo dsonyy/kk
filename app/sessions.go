@@ -72,7 +72,7 @@ func (e *pastEntry) scan(parse func(*Tail, []byte)) PastSession {
 		}
 	}
 	// The events are counted and dropped; a whole history of transcripts does not fit in memory.
-	e.tail.Events, e.tail.tools = nil, map[string]int{}
+	e.tail.Events, e.tail.tools, e.tail.forks = nil, map[string]int{}, map[string]int{}
 	ps := e.ps
 	if ps.Title = e.tail.Title; ps.Title == "" {
 		ps.Title = e.first
@@ -129,8 +129,11 @@ func pastSessions(harness, dir string) []PastSession {
 				ps.Dir = dir
 			}
 			if harness == "codex" {
-				// The file name ends with the session id after a timestamp.
-				if n := len(ps.ID); n > 36 {
+				// The file name ends with the session id after a timestamp. A thread that was reverted
+				// continues in a file named <session id>_<rollout id>.
+				if n := len(ps.ID); n > 73 && ps.ID[n-37] == '_' {
+					ps.ID = ps.ID[n-73 : n-37]
+				} else if n > 36 {
 					ps.ID = ps.ID[n-36:]
 				}
 				if name := codexThreadName(ps.ID); name != "" {
@@ -142,8 +145,10 @@ func pastSessions(harness, dir string) []PastSession {
 	}
 	wg.Wait()
 	out := []PastSession{}
+	seen := map[string]bool{}
 	for _, ps := range found {
-		if ps.Title != "" && ps.Dir != "" {
+		if ps.Title != "" && ps.Dir != "" && !seen[ps.ID] {
+			seen[ps.ID] = true
 			out = append(out, ps)
 		}
 	}
