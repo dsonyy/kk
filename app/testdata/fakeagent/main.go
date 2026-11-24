@@ -253,7 +253,7 @@ func rewind() {
 	defer fmt.Print("\x1b[2J\x1b[H")
 	mark, title, foot := "❯", []string{"  Rewind", "  Restore the code and/or conversation to the point before…"}, "  Enter to continue · Esc to cancel"
 	if mode == "cursor-agent" {
-		mark, title, foot = "→", []string{" Rewind", " Pick a past turn to rewind to. Your files and conversation revert to the state right before that turn — the selected turn and everything after are permanently", " discarded."}, " ↑/↓ to navigate • Enter for details • Shift+Enter to restore • Esc to close"
+		mark, title, foot = "→", []string{" Rewind", " Pick a past turn to rewind to. Your files and conversation revert to the state right before that turn - the selected turn and everything after are permanently", " discarded."}, " ↑/↓ to navigate • Enter for details • Shift+Enter to restore • Esc to close"
 	}
 	var items []string
 	for _, t := range turns {

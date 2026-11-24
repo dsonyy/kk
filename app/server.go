@@ -313,6 +313,9 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running, resume it first")
 	}
+	if err := midRewind(c.ID); err != nil {
+		return nil, err
+	}
 	if err := pasteText(c.Window, in.Text); err != nil {
 		return nil, err
 	}
@@ -333,6 +336,9 @@ func (s *Server) handleKeys(r *http.Request) (any, error) {
 	}
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running")
+	}
+	if err := midRewind(c.ID); err != nil {
+		return nil, err
 	}
 	if err := sendKeys(c.Window, in.Keys); err != nil {
 		return nil, fail(400, "%v", err)
@@ -600,7 +606,7 @@ func (s *Server) readTail(c Conversation) *Tail {
 
 func (s *Server) maybeCompact(c Conversation, now time.Time) {
 	cfg := s.cfg()
-	if c.Status != statusIdle || c.Compacted || c.Context < cfg.compactTokens() || now.Sub(lastActive(c)) < cfg.compactAfter() {
+	if midRewind(c.ID) != nil || c.Status != statusIdle || c.Compacted || c.Context < cfg.compactTokens() || now.Sub(lastActive(c)) < cfg.compactAfter() {
 		return
 	}
 	if err := pasteText(c.Window, "/compact"); err != nil {

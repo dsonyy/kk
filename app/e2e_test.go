@@ -644,7 +644,10 @@ func TestRewind(t *testing.T) {
 			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target + 1, "text": "x"}); code != 400 {
 				t.Fatalf("rewind to an event that is not a message: %d %s", code, body)
 			}
-			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "text": "changed\nmessage", "files": tc.files}); code != 200 {
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "was": "stale", "text": "x"}); code != 409 {
+				t.Fatalf("rewind from a stale view: %d %s", code, body)
+			}
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "was": tc.target, "text": "changed\nmessage", "files": tc.files}); code != 200 {
 				screen, _ := e.kk("screen", id)
 				t.Fatalf("rewind: %d %s\n%s", code, body, screen)
 			}
@@ -681,7 +684,7 @@ func TestRewindSaysWhatIsRestored(t *testing.T) {
 	}
 	id := e.mustKK("new", "codex", "-C", e.work, "one")
 	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: one") })
-	if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": 0, "text": "x", "files": true}); code != 400 || !strings.Contains(body, "cannot restore files") {
+	if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": 0, "was": "one", "text": "x", "files": true}); code != 400 || !strings.Contains(body, "cannot restore files") {
 		t.Fatalf("restoring files with codex: %d %s", code, body)
 	}
 }

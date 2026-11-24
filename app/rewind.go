@@ -24,7 +24,7 @@ var rewinds = map[string]*Rewind{
 		Files:        "Claude Code puts the files it edited since this message back to how they were before it. Restored files go back whole, losing later changes by anyone, including you and other agents. Changes made by shell commands are not undone.",
 	},
 	"codex": {
-		Conversation: "Codex reverts the conversation to the point before this message. File changes are unchanged.",
+		Conversation: "Codex reverts the conversation to the point before this message. File changes are unchanged. Codex does not show which message it picked until it has reverted: after a resume it loads only the last few turns, and a message sent while it was working cannot be picked. kk checks afterwards and sends nothing when Codex went back to a different message.",
 	},
 	"cursor": {
 		Conversation: "Cursor permanently discards this message and everything after it from the conversation. Files stay as they are now.",
@@ -45,7 +45,16 @@ var rewindMenus = map[string]rewindMenu{
 	"cursor": {"Enter to select", "Restore files and conversation", "Restore conversation"},
 }
 
-var rewinding sync.Mutex
+// rewinding holds the ids of the conversations whose terminal a rewind is driving. Anything else
+// typed there meanwhile would land in the rewind dialog.
+var rewinding sync.Map
+
+func midRewind(id string) error {
+	if _, busy := rewinding.Load(id); busy {
+		return fail(409, "the agent is going back to an earlier message, try again in a moment")
+	}
+	return nil
+}
 
 func (s *Server) handleRewind(r *http.Request) (any, error) {
 	c, err := s.conv(r)
@@ -54,7 +63,9 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	}
 	var in struct {
 		// Event is the index of the user's message in the conversation's events.
-		Event int    `json:"event"`
+		Event int `json:"event"`
+		// Was is the message as the user saw it when they started editing.
+		Was   string `json:"was"`
 		Text  string `json:"text"`
 		Files bool   `json:"files"`
 	}
@@ -71,10 +82,14 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, fail(400, "text is empty")
 	}
+	if _, busy := rewinding.LoadOrStore(c.ID, true); busy {
+		return nil, fail(409, "the agent is already going back to an earlier message")
+	}
+	defer rewinding.Delete(c.ID)
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running, resume it first")
 	}
-	if c.Status != statusIdle || c.Attention != "" {
+	if c, _ = s.store.get(c.ID); c.Status != statusIdle || c.Attention != "" {
 		return nil, fail(409, "the agent is busy, wait until it is idle")
 	}
 	s.mu.Lock()
@@ -86,14 +101,15 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	if in.Event < 0 || in.Event >= len(events) || events[in.Event].Kind != kindUser || (c.Harness == "claude" && events[in.Event].ID == "") {
 		return nil, fail(400, "event %d is not a message of yours that can be edited", in.Event)
 	}
+	if events[in.Event].Text != in.Was {
+		return nil, fail(409, "the conversation changed since you started editing, open the message again")
+	}
 	back := 0
 	for _, e := range events[in.Event:] {
 		if e.Kind == kindUser {
 			back++
 		}
 	}
-	rewinding.Lock()
-	defer rewinding.Unlock()
 	if err := clearPrompt(c.Window); err != nil {
 		return nil, fail(409, "%v", err)
 	}

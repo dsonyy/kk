@@ -47,7 +47,7 @@ function EditMessage({ id, index, event, rewind, onClose }: Omit<Props, "childre
   const send = async (files: boolean) => {
     setBusy(true);
     try {
-      await api("POST", `/api/conversations/${id}/rewind`, { event: index, text, files });
+      await api("POST", `/api/conversations/${id}/rewind`, { event: index, was: event.text, text, files });
       onClose();
     } catch (e) {
       flash((e as Error).message);
