@@ -28,6 +28,8 @@ export type Conversation = {
   context_tokens: number;
   unread: boolean;
   actions: string[];
+  // Messages the agent holds until it gets to them.
+  queued: Event[];
   events: Event[];
 };
 

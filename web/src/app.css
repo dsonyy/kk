@@ -157,6 +157,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .msg.user { align-self: flex-end; max-width: 88%; padding: 7px 11px; background: var(--user-bg); border: 1px solid var(--user-line); }
 .msg.user .md { color: var(--read-strong); }
 .msg.sending { opacity: .55; }
+.msg.queued { border-style: dashed; }
+.queued-note { display: block; margin-top: 4px; color: var(--text-dim); font-size: 11px; text-align: right; }
 .msg.user { position: relative; }
 .msg.user .edit { position: absolute; right: -1px; top: 100%; background: var(--surface-2); }
 .rewind textarea { max-height: 40vh; }

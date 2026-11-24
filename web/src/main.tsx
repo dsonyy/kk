@@ -411,7 +411,9 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
   }, [confirmClose]);
 
   const exited = c.status === "exited";
-  const users = c.events.filter((e) => e.kind === "user").length;
+  const users = c.events.filter((e) => e.kind === "user").length + c.queued.length;
+  const working = useRef(false);
+  working.current = c.status === "working";
   const sending = pending.filter((p) => users < p.expect);
   // A rewind lowers the count again, which must not bring back messages that already arrived.
   if (sending.length < pending.length) setPending(sending);
@@ -423,7 +425,9 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
     const drop = () => setPending((q) => q.filter((x) => x !== p));
     stick.current = true;
     setPending([...sending, p]);
-    setTimeout(drop, 30000);
+    // A harness that does not record its queue shows the message only when the agent takes it, after its turn at the latest.
+    const expire = () => (working.current ? setTimeout(expire, 30000) : drop());
+    setTimeout(expire, 30000);
     try {
       await api("POST", `/api/conversations/${c.id}/send`, { text: withPaths(text, files) });
       return true;
@@ -487,6 +491,13 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
           <div class="feed-inner" ref={inner}>
             {c.events.length === 0 && !c.attention && !busy && <div class="empty">No messages yet.</div>}
             <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length ? () => send(RETRY, []) : undefined} />
+            {c.queued.map((e, i) => (
+              <div class="msg user queued" key={`q${i}`} title="The agent reads this message at its next step">
+                {e.text && <Markdown text={e.text} />}
+                <Attachments items={e.attachments ?? []} />
+                <span class="queued-note">Queued</span>
+              </div>
+            ))}
             {sending.map((p, i) => (
               <div class="msg user sending" key={`p${i}`}>
                 {p.text.trim() && <Markdown text={p.text} />}

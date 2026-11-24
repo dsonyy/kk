@@ -996,3 +996,84 @@ func TestReset(t *testing.T) {
 		t.Fatalf("the first prompt was sent again after a reset: %s", argv)
 	}
 }
+
+func userMessages(events []Event) []string {
+	var out []string
+	for _, ev := range events {
+		if ev.Kind == kindUser {
+			line := ev.Text
+			for _, a := range ev.Attachments {
+				line += " [" + a.Name + "]"
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func TestMessagesStaySeparate(t *testing.T) {
+	e := newEnv(t)
+	shot := e.upload("shot.png", []byte("\x89PNG"))
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle && len(c.Events) > 1 })
+
+	e.mustKK("send", id, "first\n\n"+shot.Path)
+	e.mustKK("send", id, "second")
+	c := e.waitFor("the answer to the second message", id, func(c convView) bool {
+		return c.Status == statusIdle && slices.ContainsFunc(c.Events, func(ev Event) bool { return ev.Kind == kindAssistant && strings.Contains(ev.Text, "second") })
+	})
+	if got, want := userMessages(c.Events), []string{"hello", "first [shot.png]", "second"}; !slices.Equal(got, want) {
+		t.Fatalf("messages: %q, want %q", got, want)
+	}
+
+	sent := make(chan string)
+	for _, text := range []string{"alpha", "beta", "gamma"} {
+		go func() {
+			_, out := e.post("/api/conversations/"+id+"/send", map[string]string{"text": text})
+			sent <- out
+		}()
+	}
+	for range 3 {
+		<-sent
+	}
+	c = e.waitFor("the three messages sent at once", id, func(c convView) bool { return c.Status == statusIdle && len(userMessages(c.Events)) == 6 })
+	got := userMessages(c.Events)[3:]
+	slices.Sort(got)
+	if want := []string{"alpha", "beta", "gamma"}; !slices.Equal(got, want) {
+		t.Fatalf("messages sent at once: %q, want %q", got, want)
+	}
+}
+
+func TestQueuedMessages(t *testing.T) {
+	e := newEnv(t)
+	shot := e.upload("shot.png", []byte("\x89PNG"))
+	id := e.mustKK("new", "claude", "-C", e.work, "slow task")
+	e.waitFor("working", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow task") })
+
+	e.mustKK("send", id, "one\n\n"+shot.Path)
+	e.mustKK("send", id, "two")
+	c := e.waitFor("two queued messages", id, func(c convView) bool { return len(c.Queued) == 2 })
+	if got, want := userMessages(c.Queued), []string{"one [shot.png]", "two"}; !slices.Equal(got, want) {
+		t.Fatalf("queued: %q, want %q", got, want)
+	}
+	if got, want := userMessages(c.Events), []string{"slow task"}; !slices.Equal(got, want) {
+		t.Fatalf("messages while queued: %q, want %q", got, want)
+	}
+
+	e.mustKK("send", id, "boundary")
+	c = e.waitFor("the agent to take the queue", id, func(c convView) bool { return len(c.Queued) == 0 && hasEvent(c, kindUser, "boundary") })
+	if got, want := userMessages(c.Events), []string{"slow task", "one [shot.png]", "two", "boundary"}; !slices.Equal(got, want) {
+		t.Fatalf("messages: %q, want %q", got, want)
+	}
+
+	e.mustKK("send", id, "left behind")
+	e.waitFor("a queued message", id, func(c convView) bool { return len(c.Queued) == 1 })
+	e.mustKK("stop", id)
+	e.mustKK("resume", id)
+	e.waitFor("the resumed agent", id, func(c convView) bool { return c.Status == statusIdle })
+	e.mustKK("send", id, "slow again")
+	c = e.waitFor("working again", id, func(c convView) bool { return c.Status == statusWorking && hasEvent(c, kindUser, "slow again") })
+	if len(c.Queued) != 0 {
+		t.Fatalf("a queue lost with the agent is still shown: %q", userMessages(c.Queued))
+	}
+}

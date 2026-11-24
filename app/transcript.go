@@ -42,7 +42,9 @@ type Tail struct {
 	offset  int64
 	partial []byte
 	Events  []Event
-	tools   map[string]int
+	// Queue holds the messages Claude Code keeps until it gets to them.
+	Queue []Event
+	tools map[string]int
 	// forks maps the parent of a Claude Code prompt to the number of events before that prompt.
 	forks map[string]int
 	// check holds the bytes before offset; a harness that rewrites its transcript changes them.
@@ -141,6 +143,13 @@ func (t *Tail) add(e Event) {
 	}
 }
 
+// unqueue drops the queued message with this text, which the agent has taken.
+func (t *Tail) unqueue(text string) {
+	if i := slices.IndexFunc(t.Queue, func(e Event) bool { return strings.TrimSpace(e.Text) == strings.TrimSpace(text) }); i >= 0 {
+		t.Queue = append(t.Queue[:i:i], t.Queue[i+1:]...)
+	}
+}
+
 func (t *Tail) interrupted(at time.Time) {
 	t.Ended, t.Waiting = at, false
 	t.add(Event{Kind: kindNote, Text: "Interrupted", Time: at})
@@ -193,8 +202,18 @@ type claudeLine struct {
 	IsApiErrorMessage bool      `json:"isApiErrorMessage"`
 	AiTitle           string    `json:"aiTitle"`
 	Level             string    `json:"level"`
+	Subtype           string    `json:"subtype"`
+	Operation         string    `json:"operation"`
 	Content           string    `json:"content"`
-	Message           struct {
+	Attachment        struct {
+		Type        string          `json:"type"`
+		Prompt      json.RawMessage `json:"prompt"`
+		CommandMode string          `json:"commandMode"`
+		Origin      struct {
+			Kind string `json:"kind"`
+		} `json:"origin"`
+	} `json:"attachment"`
+	Message struct {
 		Content json.RawMessage `json:"content"`
 		Usage   *struct {
 			Input       int `json:"input_tokens"`
@@ -204,7 +223,11 @@ type claudeLine struct {
 	} `json:"message"`
 }
 
-var commandName = regexp.MustCompile(`<command-name>(.*?)</command-name>`)
+var (
+	commandName = regexp.MustCompile(`<command-name>(.*?)</command-name>`)
+	// Claude Code tells the model that a background command or agent ended in a prompt of its own.
+	taskSummary = regexp.MustCompile(`(?s)^<task-notification>.*?<summary>(.*?)</summary>`)
+)
 
 func parseClaude(t *Tail, raw []byte) {
 	var l claudeLine
@@ -220,6 +243,34 @@ func parseClaude(t *Tail, raw []byte) {
 		if l.Level == "error" && l.Content != "" {
 			t.add(Event{Kind: kindError, Text: l.Content, Time: l.Timestamp})
 		}
+		// Claude Code empties its queue when a turn ends. Which message a "dequeue" takes is not recorded,
+		// so the message leaves the queue here or when it shows up as a prompt.
+		if l.Subtype == "turn_duration" {
+			t.Queue = nil
+		}
+	case "queue-operation":
+		switch l.Operation {
+		case "enqueue":
+			t.Queue = append(t.Queue, Event{Kind: kindUser, Text: l.Content, Time: l.Timestamp})
+		case "remove":
+			t.unqueue(l.Content)
+		case "popAll":
+			t.Queue = nil
+		}
+	case "attachment":
+		// A message sent while Claude Code works reaches the model at the next tool call, as an attachment
+		// instead of a prompt. Task notifications arrive the same way.
+		if a := l.Attachment; a.Type == "queued_command" {
+			text := blockText(a.Prompt)
+			switch {
+			case a.CommandMode == "prompt" && a.Origin.Kind == "human":
+				addClaudeUserText(t, claudeLine{Timestamp: l.Timestamp}, text)
+			case a.CommandMode == "task-notification" && taskSummary.MatchString(text):
+				addClaudeUserText(t, claudeLine{Timestamp: l.Timestamp}, text)
+			case a.CommandMode == "task-notification":
+				t.add(Event{Kind: kindNote, Text: firstLine(text, 200), Time: l.Timestamp})
+			}
+		}
 	case "user":
 		if l.IsCompactSummary {
 			t.add(Event{Kind: kindNote, Text: "Conversation compacted", Time: l.Timestamp})
@@ -231,6 +282,7 @@ func parseClaude(t *Tail, raw []byte) {
 		t.carryOn()
 		var text string
 		if json.Unmarshal(l.Message.Content, &text) == nil {
+			t.unqueue(text)
 			t.fork(l)
 			addClaudeUserText(t, l, text)
 			return
@@ -285,6 +337,10 @@ func addClaudeUserText(t *Tail, l claudeLine, text string) {
 	text = strings.TrimSpace(pastedContent.ReplaceAllString(text, ""))
 	if m := commandName.FindStringSubmatch(text); m != nil {
 		t.add(Event{Kind: kindUser, Text: m[1], Time: l.Timestamp})
+		return
+	}
+	if m := taskSummary.FindStringSubmatch(text); m != nil {
+		t.add(Event{Kind: kindNote, Text: strings.TrimSpace(m[1]), Time: l.Timestamp})
 		return
 	}
 	if strings.HasPrefix(text, "[Request interrupted") {
