@@ -44,6 +44,10 @@ type turn struct {
 func main() {
 	mode = filepath.Base(os.Args[0])
 	args := os.Args[1:]
+	if mode == "claude" && len(args) > 0 && args[0] == "-p" {
+		printGroup(args[len(args)-1])
+		return
+	}
 	logArgs(args)
 	prompt, resume := parseArgs(args)
 	// Real agents read the terminal raw, so Escape and Ctrl-C arrive as bytes instead of being held or turned into a signal.
@@ -172,6 +176,30 @@ func pasted(text string) string {
 	}
 	fmt.Print(text)
 	return text
+}
+
+// printGroup answers kk's headless question about the feature group of a task, the way claude -p prints an answer:
+// an existing group that the task mentions, otherwise the first two words of its last line, and None for a prompt that only
+// tells the agent to wait.
+func printGroup(prompt string) {
+	head, task, _ := strings.Cut(prompt, "\n\nTask:\n")
+	if strings.Contains(task, "GROUPFAIL") {
+		fmt.Fprintln(os.Stderr, "API Error: 529 Overloaded")
+		os.Exit(1)
+	}
+	for _, line := range strings.Split(head, "\n") {
+		if name, ok := strings.CutPrefix(line, "- "); ok && strings.Contains(strings.ToLower(task), strings.ToLower(name)) {
+			fmt.Println(name)
+			return
+		}
+	}
+	if strings.HasSuffix(task, "wait for the task") {
+		fmt.Println("None")
+		return
+	}
+	lines := strings.Split(task, "\n")
+	words := strings.Fields(lines[len(lines)-1])
+	fmt.Println(strings.Join(words[:min(2, len(words))], " "))
 }
 
 func logArgs(args []string) {

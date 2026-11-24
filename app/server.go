@@ -28,8 +28,11 @@ type Server struct {
 	mu       sync.Mutex
 	settings Settings
 	tails    map[string]*Tail
+	grouping chan string
 	subs     map[chan string]bool
-	ticks    int
+	// asked counts, per conversation without a group, the user messages the last question about its group covered.
+	asked map[string]int
+	ticks int
 }
 
 type convView struct {
@@ -89,6 +92,8 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/stop", s.handleStop)
 	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
+	api("POST /api/conversations/{id}/group", s.handleSetGroup)
+	api("GET /api/groups", s.handleGroups)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
@@ -240,6 +245,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Session string `json:"session"`
 		// Worktree starts the agent in a new git worktree of dir, on its own branch.
 		Worktree bool `json:"worktree"`
+		// Group puts the conversation in a feature group. Without it kk decides from the prompt.
+		Group string `json:"group"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -254,6 +261,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	dir, err := expandDir(in.Dir)
 	if err != nil {
 		return nil, err
+	}
+	if in.Group != "" && cleanGroup(in.Group) == "" {
+		return nil, fail(400, "a group name is 1 to %d characters and not %q", groupMaxLen, ungrouped)
 	}
 	now := time.Now()
 	if in.Session != "" {
@@ -270,9 +280,11 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 				continue
 			}
 			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: !byUser(r)}
+			c.Group = s.groupName(c.Project(), in.Group)
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
+			s.queueGroup(c.ID)
 			return s.view(c, false), nil
 		}
 		return nil, fail(400, "no %s session %s", in.Harness, in.Session)
@@ -287,9 +299,11 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			return nil, err
 		}
 	}
+	c.Group = s.groupName(c.Project(), in.Group)
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}
+	s.queueGroup(c.ID)
 	return s.view(c, false), nil
 }
 
@@ -764,6 +778,13 @@ func (s *Server) tick() {
 		})
 		if changed || events != nil {
 			s.publish(c.ID)
+		}
+		// A group that could not be decided is asked for again when the user has said more.
+		if events != nil && c.Role == "" && c.Group == "" {
+			if n := len(userTexts(events.Events)); n > s.asked[c.ID] {
+				s.asked[c.ID] = n
+				s.queueGroup(c.ID)
+			}
 		}
 		if c.Role == coordinatorID {
 			s.maybeCompact(c, now)

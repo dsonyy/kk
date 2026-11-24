@@ -45,6 +45,8 @@ type Conversation struct {
 	ByAgent bool `yaml:"by_agent,omitempty" json:"-"`
 	// Escalation is why the conductor handed a waiting conversation to the user. It lasts while the agent waits.
 	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
+	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
+	Group string `yaml:"group,omitempty" json:"group,omitempty"`
 }
 
 const (

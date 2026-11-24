@@ -7,6 +7,7 @@ import { act, api, flash, harnessLabel, when, type Attachment, type Conversation
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
+import { Board } from "./board";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
@@ -38,7 +39,7 @@ function App() {
   const list = [...sessions.filter((c) => !c.closed), ...(showClosed ? closed : [])];
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
-  const [tab, setTab] = useState<"Agents" | "Settings">("Agents");
+  const [tab, setTab] = useState<"Agents" | "Sessions" | "Settings">("Agents");
   const [creating, setCreating] = useState(false);
   const openRef = useRef(open);
   openRef.current = open;
@@ -114,7 +115,7 @@ function App() {
   return (
     <>
       <nav class="tabs">
-        {(["Agents", "Settings"] as const).map((t) => (
+        {(["Agents", "Sessions", "Settings"] as const).map((t) => (
           <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
             {t}
           </a>
@@ -123,6 +124,15 @@ function App() {
       {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
+        {tab === "Sessions" && (
+          <Board
+            list={sessions}
+            onOpen={(id) => {
+              setTab("Agents");
+              show(id);
+            }}
+          />
+        )}
         <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">

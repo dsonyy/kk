@@ -21,6 +21,8 @@ export type Conversation = {
   dir: string;
   // The directory the list groups the conversation under; for a worktree session the directory it was made from.
   project: string;
+  // The feature the agent works on. Empty until kk or the coordinator has decided.
+  group?: string;
   title: string;
   created: string;
   last_message: string;
