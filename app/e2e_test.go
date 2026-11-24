@@ -592,6 +592,9 @@ func TestWebAuth(t *testing.T) {
 	if resp.StatusCode != 200 || !strings.Contains(string(page), "<script") {
 		t.Fatalf("page: %d %s", resp.StatusCode, page)
 	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("the page may be served from a cache after an upgrade: Cache-Control %q", cc)
+	}
 	resp, _ = client.Get(base + "/api/conversations")
 	resp.Body.Close()
 	if resp.StatusCode != 200 {

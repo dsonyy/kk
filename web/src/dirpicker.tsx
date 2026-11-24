@@ -1,14 +1,31 @@
-import { useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
+import { useId, useState } from "preact/hooks";
 import { act, api } from "./api";
 import { Button, Check, Field } from "./mnemonic";
 
 type Listing = { dir: string; parent: string; dirs: string[] };
 
-// DirField is a path typed by hand, picked from the recently used directories, or chosen in a browser of the server's folders.
-export function DirField({ value, onValue, recent }: { value: string; onValue: (dir: string) => void; recent: string[] }) {
+type Props = { label: string; hint: ComponentChildren; value: string; onValue: (dir: string) => void; recent?: string[] };
+
+// DirField is a path chosen in the folder dialog of the machine kk runs on, picked from the recently used directories, or typed by hand.
+// Where kk cannot show that dialog, a browser of the server's folders opens in the page instead.
+export function DirField({ label, hint, value, onValue, recent = [] }: Props) {
   const [at, setAt] = useState<Listing>();
+  const [choosing, setChoosing] = useState(false);
+  const list = useId();
   const [hidden, setHidden] = useState(false);
   const browse = (dir: string) => act(async () => setAt(await api<Listing>("GET", `/api/browse?dir=${encodeURIComponent(dir)}`)));
+  const choose = () =>
+    act(async () => {
+      setChoosing(true);
+      try {
+        const answer = await api<{ dir: string; native: boolean }>("POST", "/api/pick", { dir: value });
+        if (!answer.native) await browse(value);
+        else if (answer.dir) onValue(answer.dir);
+      } finally {
+        setChoosing(false);
+      }
+    });
   const pick = (dir: string) => {
     onValue(dir);
     setAt(undefined);
@@ -24,13 +41,13 @@ export function DirField({ value, onValue, recent }: { value: string; onValue: (
         setAt(undefined);
       }}
     >
-      <Field label="Directory">
-        <span class="hint">The folder the agent starts in and works on.</span>
+      <Field label={label}>
+        <span class="hint">{hint}</span>
         <span class="dir-input">
-          <input class="mono" list="kk-dirs" value={value} onInput={(e) => onValue(e.currentTarget.value)} />
-          <Button label="Browse" icon="folder" class={at ? "on" : ""} title="Choose a folder on the machine kk runs on" onClick={() => (at ? setAt(undefined) : browse(value))} />
+          <input class="mono" list={list} value={value} onInput={(e) => onValue(e.currentTarget.value)} />
+          <Button label="Browse" icon="folder" class={at ? "on" : ""} title="Choose a folder on the machine kk runs on" disabled={choosing} onClick={() => (at ? setAt(undefined) : choose())} />
         </span>
-        <datalist id="kk-dirs">
+        <datalist id={list}>
           {recent.map((d) => (
             <option value={d} key={d} />
           ))}

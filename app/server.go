@@ -93,6 +93,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/stats", s.handleStats)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
+	api("POST /api/pick", handlePick)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
@@ -107,7 +108,14 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
 	dist, _ := fs.Sub(web.Dist, "dist")
-	mux.Handle("GET /", http.FileServerFS(dist))
+	files := http.FileServerFS(dist)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// The page names its scripts by content hash, so a page that is always fetched again never runs an old build.
+		if r.URL.Path == "/" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	})
 	return mux
 }
 
