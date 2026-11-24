@@ -19,6 +19,8 @@ export type Conversation = {
   harness: string;
   model?: string;
   dir: string;
+  // The directory the list groups the conversation under; for a worktree session the directory it was made from.
+  project: string;
   title: string;
   created: string;
   last_message: string;

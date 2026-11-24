@@ -91,6 +91,17 @@ function App() {
     for (const id of open) loadDetail(id);
   }, [open.join(",")]);
 
+  const [collapsed, setCollapsed] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.collapsed") || "[]"));
+  const collapse = (project: string, on: boolean) => {
+    const next = on ? [...collapsed, project] : collapsed.filter((p) => p !== project);
+    localStorage.setItem("kk.collapsed", JSON.stringify(next));
+    setCollapsed(next);
+  };
+  // The list comes sorted by last activity, so groups and the sessions in them keep that order.
+  const groups = new Map<string, Conversation[]>();
+  for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
+  const projects = [...groups.keys()];
+
   const show = (id: string) => {
     if (open.includes(id)) document.getElementById(`panel-${id}`)?.scrollIntoView({ behavior: "smooth", inline: "nearest" });
     else setOpen([...open, id]);
@@ -113,12 +124,21 @@ function App() {
               <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
             </div>
           </Scope>
-          <ul class="tiles">
-            {list.length === 0 && <li class="empty">No sessions yet.</li>}
-            {list.map((c) => (
-              <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => show(c.id)} />
+          <div class="groups">
+            {list.length === 0 && <div class="empty">No sessions yet.</div>}
+            {projects.map((project) => (
+              <Group
+                key={project}
+                project={project}
+                name={shortName(project, projects)}
+                list={groups.get(project)!}
+                open={open}
+                collapsed={collapsed.includes(project)}
+                onCollapse={(on) => collapse(project, on)}
+                onOpen={show}
+              />
             ))}
-          </ul>
+          </div>
           <Load />
         </aside>
         <div class="panels">
@@ -153,6 +173,50 @@ function stateLabel(c: Conversation) {
 
 function Dot({ c }: { c: Conversation }) {
   return <i class={`dot ${c.attention ? "attention" : c.status}`} />;
+}
+
+// A directory goes by its last segment, and by its last two when another group ends the same way.
+function shortName(project: string, all: string[]) {
+  const parts = project.split("/").filter(Boolean);
+  const last = parts[parts.length - 1] ?? project;
+  return all.filter((p) => p.endsWith(`/${last}`)).length > 1 ? parts.slice(-2).join("/") : last;
+}
+
+type GroupProps = {
+  project: string;
+  name: string;
+  list: Conversation[];
+  open: string[];
+  collapsed: boolean;
+  onCollapse: (on: boolean) => void;
+  onOpen: (id: string) => void;
+};
+
+function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
+  // A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work.
+  const loud = list.find((c) => c.attention) ?? list.find((c) => c.status === "working" || c.status === "starting");
+  const unread = list.some((c) => c.unread && !open.includes(c.id));
+  const cls = ["group", collapsed && loud?.attention && "attention", collapsed && unread && "unread"];
+  return (
+    <details class={cls.filter(Boolean).join(" ")} open={!collapsed} onToggle={(e) => e.currentTarget.open === collapsed && onCollapse(!collapsed)}>
+      <summary title={project}>
+        <Icon name="chevron" />
+        <span class="name mono">{name}</span>
+        {collapsed && loud && (
+          <span class="state">
+            <Dot c={loud} />
+            {stateLabel(loud)}
+          </span>
+        )}
+        <span class="count">{list.length}</span>
+      </summary>
+      <ul class="tiles">
+        {list.map((c) => (
+          <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
