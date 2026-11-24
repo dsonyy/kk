@@ -11,6 +11,8 @@ import (
 )
 
 type Event struct {
+	// ID is the message's id in the agent's own transcript, when the harness records one.
+	ID     string    `json:"id,omitempty"`
 	Kind   string    `json:"kind"`
 	Text   string    `json:"text,omitempty"`
 	Tool   string    `json:"tool,omitempty"`
@@ -127,6 +129,7 @@ type claudeBlock struct {
 
 type claudeLine struct {
 	Type              string    `json:"type"`
+	UUID              string    `json:"uuid"`
 	Timestamp         time.Time `json:"timestamp"`
 	IsMeta            bool      `json:"isMeta"`
 	IsCompactSummary  bool      `json:"isCompactSummary"`
@@ -197,7 +200,7 @@ func parseClaude(t *Tail, raw []byte) {
 					kind = kindError
 				}
 				if strings.TrimSpace(b.Text) != "" {
-					t.add(Event{Kind: kind, Text: b.Text, Time: l.Timestamp})
+					t.add(Event{ID: l.UUID, Kind: kind, Text: b.Text, Time: l.Timestamp})
 				}
 			case "thinking":
 				if strings.TrimSpace(b.Thinking) != "" {

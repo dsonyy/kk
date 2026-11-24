@@ -1,4 +1,5 @@
 export type Event = {
+  id?: string;
   kind: "user" | "assistant" | "thinking" | "tool" | "error" | "note";
   text?: string;
   tool?: string;
@@ -24,6 +25,20 @@ export type Conversation = {
   context_tokens: number;
   unread: boolean;
   events: Event[];
+};
+
+export type Skill = { name: string; description: string; insert: string; scope: string };
+
+export type Settings = {
+  addr: string;
+  default_dir: string;
+  skill_dirs: string[];
+  coordinator: boolean;
+  coordinator_model: string;
+  source: string;
+  start_timeout_seconds: number;
+  compact_after_minutes: number;
+  compact_tokens: number;
 };
 
 export type Harness = { name: string; label: string; models: string[]; hooks: boolean };
