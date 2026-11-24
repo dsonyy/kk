@@ -5,6 +5,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
+import { DirField } from "./dirpicker";
 import { Load } from "./load";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
@@ -750,15 +751,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               </select>
             </Field>
           </div>
-          <Field label="Directory">
-            <span class="hint">The folder the agent starts in and works on.</span>
-            <input class="mono" list="kk-dirs" value={dir} onInput={(e) => setDir(e.currentTarget.value)} />
-            <datalist id="kk-dirs">
-              {dirs.map((d) => (
-                <option value={d} key={d} />
-              ))}
-            </datalist>
-          </Field>
+          <DirField value={dir} onValue={setDir} recent={dirs} />
           <div class="field">
             <Check label="Worktree" checked={inWorktree} disabled={!repo?.git || !!resume} onChange={(e) => setWorktree(e.currentTarget.checked)} />
             <span class="hint">
