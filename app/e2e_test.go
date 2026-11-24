@@ -447,6 +447,38 @@ func TestSettings(t *testing.T) {
 	}
 }
 
+func TestResumeSessionFromHistory(t *testing.T) {
+	e := newEnv(t)
+	session := "11111111-2222-4333-8444-555555555555"
+	project := filepath.Join(filepath.Dir(e.home), ".claude", "projects", "-work")
+	os.MkdirAll(project, 0o755)
+	lines := `{"type":"user","cwd":"` + e.work + `","message":{"content":"earlier question"}}` + "\n" + `{"type":"ai-title","aiTitle":"Earlier work"}` + "\n"
+	os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(lines), 0o644)
+	out, err := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/sessions?harness=claude").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var past []PastSession
+	json.Unmarshal(out, &past)
+	if len(past) != 1 || past[0].ID != session || past[0].Title != "Earlier work" || past[0].Dir != e.work {
+		t.Fatalf("past sessions: %s", out)
+	}
+	code, body := e.post("/api/conversations", map[string]string{"harness": "claude", "session": session, "prompt": "continue"})
+	var c convView
+	json.Unmarshal([]byte(body), &c)
+	if code != 200 || c.Session != session || c.Dir != e.work || c.Title != "Earlier work" {
+		t.Fatalf("resume: %d %s", code, body)
+	}
+	e.waitFor("answer in the resumed session", c.ID, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: continue") })
+	argv, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
+	if !strings.Contains(string(argv), `"--resume","`+session+`","--","continue"`) {
+		t.Fatalf("argv: %s", argv)
+	}
+	if code, again := e.post("/api/conversations", map[string]string{"harness": "claude", "session": session}); code != 200 || !strings.Contains(again, `"id":"`+c.ID+`"`) {
+		t.Fatalf("opening the same session twice: %d %s", code, again)
+	}
+}
+
 func TestCoordinatorCompacts(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1", "KK_COMPACT_AFTER=2s")
 	c := e.waitFor("coordinator start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })

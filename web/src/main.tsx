@@ -3,7 +3,7 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Conversation, type Event, type Harness } from "./api";
+import { act, api, flash, harnessLabel, when, type Conversation, type Event, type Harness, type PastSession } from "./api";
 import { PromptInput, useSkills } from "./prompt";
 import { SettingsView } from "./settings";
 import { Button, Field, Scope } from "./mnemonic";
@@ -610,7 +610,29 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
   const [models, setModels] = useState<Record<string, string>>(() => JSON.parse(localStorage.getItem("kk.models") || "{}"));
   const [dir, setDir] = useState(localStorage.getItem("kk.dir") || "");
   const [busy, setBusy] = useState(false);
+  const [past, setPast] = useState<PastSession[]>([]);
+  const [resume, setResume] = useState<PastSession>();
+  const [filter, setFilter] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  // Cursor keeps its history per directory; the others have one history for all directories.
+  const pastDir = harness === "cursor" ? dir : "";
+
+  useEffect(() => {
+    let stop = false;
+    setResume(undefined);
+    const timer = setTimeout(
+      () =>
+        act(async () => {
+          const list = await api<PastSession[]>("GET", `/api/sessions?harness=${harness}&dir=${encodeURIComponent(pastDir)}`);
+          if (!stop) setPast(list);
+        }),
+      200,
+    );
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [harness, pastDir]);
 
   useEffect(() => {
     promptRef.current?.focus();
@@ -627,11 +649,11 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
   const model = h && h.models.includes(models[harness] ?? "") ? models[harness] ?? "" : h?.models[0] ?? "";
   const submit = (e?: SubmitEvent) => {
     e?.preventDefault();
-    if (busy || !prompt.trim()) return;
+    if (busy || (!resume && !prompt.trim())) return;
     setBusy(true);
     act(async () => {
       try {
-        const c = await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt });
+        const c = await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt, session: resume?.id });
         localStorage.setItem("kk.harness", harness);
         localStorage.setItem("kk.models", JSON.stringify({ ...models, [harness]: model }));
         localStorage.setItem("kk.dir", dir);
@@ -676,7 +698,34 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
               ))}
             </datalist>
           </Field>
-          <Field label="Prompt">
+          <div class="field">
+            Continue from
+            <input placeholder={`Filter ${past.length} earlier ${h?.label ?? harness} sessions`} value={filter} onInput={(e) => setFilter(e.currentTarget.value)} />
+            <ul class="past">
+              <li class={resume ? "" : "on"} onClick={() => setResume(undefined)}>
+                <span class="title">A new session</span>
+              </li>
+              {past
+                .filter((p) => `${p.title} ${p.dir}`.toLowerCase().includes(filter.toLowerCase()))
+                .map((p) => (
+                  <li
+                    key={p.id}
+                    class={resume?.id === p.id ? "on" : ""}
+                    onClick={() => {
+                      setResume(p);
+                      setDir(p.dir);
+                    }}
+                  >
+                    <span class="title">{p.title}</span>
+                    <span class="mono" title={p.dir}>
+                      <bdi>{p.dir}</bdi>
+                    </span>
+                    <span>{when(p.modified)}</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+          <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput
               inputRef={promptRef}
               value={prompt}
@@ -695,7 +744,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: (i
           </Field>
           <div class="row">
             <Button label="Cancel" onClick={onClose} />
-            <Button label="Start" icon="play" class="primary" type="submit" disabled={busy || !prompt.trim()} />
+            <Button label={resume ? "Resume" : "Start"} icon="play" class="primary" type="submit" disabled={busy || (!resume && !prompt.trim())} />
           </div>
         </form>
       </Scope>

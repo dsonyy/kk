@@ -80,6 +80,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
+	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
@@ -198,6 +199,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Model   string `json:"model"`
 		Dir     string `json:"dir"`
 		Prompt  string `json:"prompt"`
+		// Session resumes a session from the harness's own history instead of starting a new one.
+		Session string `json:"session"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -209,23 +212,45 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if in.Model == "" {
 		in.Model = h.Models[0]
 	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		return nil, fail(400, "prompt is empty")
-	}
 	dir, err := expandDir(in.Dir)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
+	if in.Session != "" {
+		for _, c := range s.store.list() {
+			if c.Harness == in.Harness && c.Session == in.Session && !c.Closed {
+				return s.view(c, false), nil
+			}
+		}
+		for _, p := range pastSessions(in.Harness, dir) {
+			if p.ID != in.Session {
+				continue
+			}
+			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now}
+			if err := s.launch(&c, true, in.Prompt); err != nil {
+				return nil, err
+			}
+			return s.view(c, false), nil
+		}
+		return nil, fail(400, "no %s session %s", in.Harness, in.Session)
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		return nil, fail(400, "prompt is empty")
+	}
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now}
-	if err := s.launch(&c, false); err != nil {
+	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}
 	return s.view(c, false), nil
 }
 
-func (s *Server) launch(c *Conversation, resume bool) error {
+// launch starts the agent of c. A prompt given with a resume is the first message in the resumed session.
+func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	argv, err := s.command(c, resume)
+	if resume && prompt != "" {
+		argv = append(argv, "--", prompt)
+	}
 	if err != nil {
 		return err
 	}
@@ -358,7 +383,7 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
-	if err := s.launch(&c, s.canResume(c)); err != nil {
+	if err := s.launch(&c, s.canResume(c), ""); err != nil {
 		return nil, err
 	}
 	return s.view(c, false), nil

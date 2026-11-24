@@ -54,5 +54,5 @@ func (s *Server) ensureCoordinator() error {
 		c.Session, c.Transcript = "", ""
 	}
 	log.Printf("starting the coordinator (resume: %v)", resume)
-	return s.launch(&c, resume)
+	return s.launch(&c, resume, "")
 }
