@@ -55,7 +55,9 @@ type Tail struct {
 	Ended time.Time
 	// Waiting is true when the last message is the user's and no turn end follows.
 	Waiting bool
-	stamp   time.Time
+	// Failed is the API error the transcript ends on: Claude Code gave the turn up and waits at its prompt.
+	Failed string
+	stamp  time.Time
 }
 
 func newTail(path string) *Tail {
@@ -144,6 +146,13 @@ func (t *Tail) interrupted(at time.Time) {
 	t.add(Event{Kind: kindNote, Text: "Interrupted", Time: at})
 }
 
+// carryOn takes back a turn end on an API error when the transcript goes on after it.
+func (t *Tail) carryOn() {
+	if t.Failed != "" {
+		t.Failed, t.Ended = "", time.Time{}
+	}
+}
+
 func (t *Tail) addTool(ref string, e Event) {
 	e.Kind = kindTool
 	t.add(e)
@@ -219,6 +228,7 @@ func parseClaude(t *Tail, raw []byte) {
 		if l.IsMeta {
 			return
 		}
+		t.carryOn()
 		var text string
 		if json.Unmarshal(l.Message.Content, &text) == nil {
 			t.fork(l)
@@ -242,6 +252,7 @@ func parseClaude(t *Tail, raw []byte) {
 		if u := l.Message.Usage; u != nil {
 			t.Context = u.Input + u.CacheRead + u.CacheCreate
 		}
+		t.carryOn()
 		var blocks []claudeBlock
 		json.Unmarshal(l.Message.Content, &blocks)
 		for _, b := range blocks {
@@ -249,7 +260,8 @@ func parseClaude(t *Tail, raw []byte) {
 			case "text":
 				kind := kindAssistant
 				if l.IsApiErrorMessage {
-					kind = kindError
+					// No Stop hook follows this line. Whether the turn is over shows only in what comes next.
+					kind, t.Failed, t.Ended = kindError, b.Text, l.Timestamp
 				}
 				if strings.TrimSpace(b.Text) != "" {
 					t.add(Event{ID: l.UUID, Kind: kind, Text: b.Text, Time: l.Timestamp})

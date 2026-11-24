@@ -451,6 +451,12 @@ func handle(prompt string) {
 		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "task_started"}})
 	}
 	userLine(prompt)
+	if mode == "claude" && strings.Contains(prompt, "apierror") {
+		// Claude Code 2.1 ends a turn that died on an API error with this line, fires no Stop hook and waits at its prompt.
+		write(map[string]any{"type": "assistant", "isApiErrorMessage": true, "apiError": "stream_idle_timeout", "error": "server_error", "message": map[string]any{"role": "assistant", "model": "<synthetic>", "content": []any{map[string]any{"type": "text", "text": "API Error: The response stopped arriving. The response above may be incomplete."}}}})
+		fmt.Println("Resend your message to try again")
+		return
+	}
 	if strings.Contains(prompt, "slow") {
 		hook("PreToolUse", map[string]any{"tool_name": "Bash"})
 		slowTurn()
