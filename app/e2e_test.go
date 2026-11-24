@@ -260,6 +260,22 @@ func TestPermissionNeedsAttention(t *testing.T) {
 	})
 }
 
+func TestAPIErrorEndsTurn(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "apierror now")
+	c := e.waitFor("the failed turn to end", id, func(c convView) bool { return c.Status == statusIdle && c.Attention != "" })
+	if !hasEvent(c, kindError, "API Error: The response stopped arriving. The response above may be incomplete.") || !strings.Contains(c.Attention, "API error") {
+		t.Fatalf("conversation: %+v", c)
+	}
+	if ls := e.mustKK("ls"); !strings.Contains(ls, "ACTION REQUIRED") {
+		t.Fatalf("ls: %s", ls)
+	}
+	e.mustKK("send", id, "continue")
+	e.waitFor("the answer after the error", id, func(c convView) bool {
+		return c.Attention == "" && c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: continue")
+	})
+}
+
 func TestAgentStuckBeforeStart(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "TRUST me")

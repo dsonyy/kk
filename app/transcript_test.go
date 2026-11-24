@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,31 @@ func TestParseRealClaudeTranscript(t *testing.T) {
 	}
 	if tail.Title != "Read a.txt and ls" || tail.Context == 0 || tail.Last.IsZero() {
 		t.Fatalf("title %q, context %d, last %v", tail.Title, tail.Context, tail.Last)
+	}
+}
+
+func TestClaudeAPIErrorEndsTurn(t *testing.T) {
+	lines, _ := os.ReadFile("testdata/claude-api-error.jsonl")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	tail := newTail(path)
+	failed := map[int]string{
+		2: "API Error: The response stopped arriving. The response above may be incomplete.",
+		3: "API Error: The response stopped arriving. The response above may be incomplete.",
+		7: "API Error: Your computer went to sleep mid-response. The response above may be incomplete.",
+		8: "API Error: Your computer went to sleep mid-response. The response above may be incomplete.",
+	}
+	f, _ := os.Create(path)
+	defer f.Close()
+	n := 0
+	for line := range bytes.Lines(lines) {
+		f.Write(line)
+		tail.read(parseClaude)
+		if n++; tail.Failed != failed[n] || tail.Ended.IsZero() != (failed[n] == "") {
+			t.Fatalf("after line %d: failed %q, ended %v", n, tail.Failed, tail.Ended)
+		}
+	}
+	if last := tail.Events[len(tail.Events)-1]; last.Kind != kindError || last.Text != failed[8] {
+		t.Fatalf("last event: %+v", last)
 	}
 }
 

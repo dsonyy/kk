@@ -208,7 +208,7 @@ function Reveal({ text }: { text: string }) {
   return shown >= text.length ? <Markdown text={text} /> : <Markdown text={text.slice(0, shown)} partial />;
 }
 
-function Feed({ c, live, rewind }: { c: Conversation; live: number; rewind?: Rewind }) {
+function Feed({ c, live, rewind, retry }: { c: Conversation; live: number; rewind?: Rewind; retry?: () => void }) {
   const events = c.events;
   const running = c.status === "working";
   const out: preact.JSX.Element[] = [];
@@ -240,6 +240,7 @@ function Feed({ c, live, rewind }: { c: Conversation; live: number; rewind?: Rew
     if (e.kind === "error")
       out.push(
         <div class="error" key={i}>
+          {retry && i === events.length - 1 && <Button label="Retry" icon="reset" class="small primary" title={`Send to the agent: ${RETRY}`} onClick={retry} />}
           <Icon name="alert" />
           {e.text}
         </div>,
@@ -350,6 +351,9 @@ const QUICK_REPLIES: [string, string][] = [
   ["Explain", "Explain this part: what it means, why it is so, and what follows from it."],
   ["Out-of-scope", "This is out of scope. Drop it and do not work on it."],
 ];
+
+// Resending the prompt would start a turn over that was cut after many steps, so a retry asks the agent to go on.
+const RETRY = "The last turn was cut off by an API error. Continue from where you stopped.";
 
 type Pending = { text: string; files: Attachment[]; expect: number };
 
@@ -481,7 +485,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
         >
           <div class="feed-inner" ref={inner}>
             {c.events.length === 0 && !c.attention && !busy && <div class="empty">No messages yet.</div>}
-            <Feed c={c} live={live.current} rewind={rewind} />
+            <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length ? () => send(RETRY, []) : undefined} />
             {sending.map((p, i) => (
               <div class="msg user sending" key={`p${i}`}>
                 {p.text.trim() && <Markdown text={p.text} />}

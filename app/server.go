@@ -666,6 +666,9 @@ func (s *Server) tick() {
 				// A turn end from before this launch is history, read again after a resume.
 				if t.Ended.After(c.TurnEnded) && t.Ended.After(c.Launched) && c.Status != statusExited {
 					c.Status, c.TurnEnded, changed = statusIdle, t.Ended, true
+					if t.Failed != "" {
+						c.Attention = "The turn ended on an API error. Retry it or send a message to continue."
+					}
 				}
 				if t.Waiting && c.Status == statusIdle {
 					c.Status, changed = statusWorking, true
