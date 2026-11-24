@@ -16,7 +16,14 @@ export function DirField({ value, onValue, recent }: { value: string; onValue: (
   const shown = at?.dirs.filter((name) => hidden || !name.startsWith(".")) ?? [];
 
   return (
-    <div class="field">
+    <div
+      class="field"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !at) return;
+        e.stopPropagation();
+        setAt(undefined);
+      }}
+    >
       <Field label="Directory">
         <span class="hint">The folder the agent starts in and works on.</span>
         <span class="dir-input">
@@ -29,38 +36,30 @@ export function DirField({ value, onValue, recent }: { value: string; onValue: (
           ))}
         </datalist>
       </Field>
-      {at && (
-        <div
-          class="browser"
-          onKeyDown={(e) => {
-            if (e.key !== "Escape") return;
-            e.stopPropagation();
-            setAt(undefined);
-          }}
-        >
-          <div class="browser-head">
-            <Button label="Up" class="small" disabled={!at.parent} onClick={() => browse(at.parent)} />
-            <span class="mono path" title={at.dir}>
-              <bdi>{at.dir}</bdi>
-            </span>
-          </div>
-          <ul>
-            {shown.map((name) => (
-              <li key={name}>
-                <button type="button" onClick={() => browse(`${at.dir === "/" ? "" : at.dir}/${name}`)}>
-                  <i class="icon icon-folder" />
-                  <span class="mono">{name}</span>
-                </button>
-              </li>
-            ))}
-            {!shown.length && <li class="empty">No folders here.</li>}
-          </ul>
-          <div class="browser-foot">
-            <Check label="Hidden folders" checked={hidden} onChange={(e) => setHidden(e.currentTarget.checked)} />
-            <Button label="Use this folder" class="primary" onClick={() => pick(at.dir)} />
-          </div>
+      {/* Hidden instead of unmounted, so its buttons keep their mnemonics when it opens again. */}
+      <div class="browser" hidden={!at}>
+        <div class="browser-head">
+          <Button label="Up" class="small" disabled={!at?.parent} onClick={() => browse(at!.parent)} />
+          <span class="mono path" title={at?.dir}>
+            <bdi>{at?.dir}</bdi>
+          </span>
         </div>
-      )}
+        <ul>
+          {shown.map((name) => (
+            <li key={name}>
+              <button type="button" onClick={() => browse(`${at!.dir === "/" ? "" : at!.dir}/${name}`)}>
+                <i class="icon icon-folder" />
+                <span class="mono">{name}</span>
+              </button>
+            </li>
+          ))}
+          {!shown.length && <li class="empty">No folders here.</li>}
+        </ul>
+        <div class="browser-foot">
+          <Check label="Hidden folders" checked={hidden} onChange={(e) => setHidden(e.currentTarget.checked)} />
+          <Button label="Use this folder" class="primary" onClick={() => pick(at!.dir)} />
+        </div>
+      </div>
       {recent.length > 0 && (
         <div class="badges" aria-label="Recently used directories">
           {recent.slice(0, 5).map((d) => (
