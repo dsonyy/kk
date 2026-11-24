@@ -120,9 +120,10 @@ function App() {
           </a>
         ))}
       </nav>
-      {tab === "Settings" && <SettingsView />}
-      <div class="workspace" hidden={tab !== "Agents"}>
-        <aside class="sidebar" data-scope="sidebar">
+      {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
+      <div class="workspace">
+        {tab === "Settings" && <SettingsView />}
+        <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">
               <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
@@ -158,7 +159,7 @@ function App() {
           </div>
           <Load />
         </aside>
-        <div class="panels">
+        <div class="panels" hidden={tab !== "Agents"}>
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
           {open.map((id) =>
             details[id] ? (
