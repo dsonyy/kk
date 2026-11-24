@@ -19,6 +19,11 @@ export type Conversation = {
   harness: string;
   model?: string;
   dir: string;
+  // The directory the conversation belongs to, the checkout for an agent in a worktree.
+  project: string;
+  // The feature the agent works on. Empty until kk or the coordinator has decided.
+  group?: string;
+  closed?: boolean;
   title: string;
   created: string;
   last_message: string;

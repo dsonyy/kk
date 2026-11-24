@@ -133,6 +133,19 @@ button .icon { flex: none; width: 12px; height: 12px; }
 @keyframes attention { from { background-color: var(--bg); } to { background-color: var(--warn-bg); } }
 @media (prefers-reduced-motion: reduce) { .tile.working, .tile.attention { animation: none; } .tile.attention { background-color: var(--warn-bg); } }
 
+/* The board: one column per project and feature group, scrolled sideways when the columns do not fit. */
+.board { flex: 1; min-height: 0; display: flex; align-items: flex-start; gap: var(--gap); padding: var(--gap); overflow-x: auto; scroll-snap-type: x proximity; scroll-padding: var(--gap); }
+.board.empty { color: var(--text-dim); }
+.column { flex: 0 0 280px; max-width: calc(100vw - 2 * var(--gap)); max-height: 100%; display: flex; flex-direction: column; border: 1px solid var(--line); background: var(--surface); scroll-snap-align: start; }
+.column header { flex: none; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.column .project { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column h1 { font-size: 15px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column h1.muted { color: var(--text-dim); }
+.column .tiles { padding: var(--gap); }
+.column .tile { flex: none; }
+.column .tile.closed { opacity: .4; }
+.column .attention-text { font-size: 12px; color: var(--warn-text); overflow-wrap: anywhere; }
+
 .panels { flex: 1; min-width: 0; display: flex; overflow-x: auto; }
 .panels > .conversation { flex: 1 0 420px; border-right: 1px solid var(--line); }
 .panels > .conversation:last-child { border-right: 0; }
