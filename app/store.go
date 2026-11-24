@@ -51,7 +51,20 @@ const (
 )
 
 func (c *Conversation) Unread() bool {
-	return !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+}
+
+// Project is the directory the conversation belongs to: the one the user chose, also when the agent works in a worktree of it.
+// A session resumed from history has no Repo, so a worktree made by kk is recognised by its path.
+func (c *Conversation) Project() string {
+	if c.Repo != "" {
+		return c.Repo
+	}
+	if checkout, rest, ok := strings.Cut(c.Dir, "/"+worktreesDir+"/"); ok {
+		_, sub, _ := strings.Cut(rest, "/")
+		return filepath.Join(checkout, sub)
+	}
+	return c.Dir
 }
 
 type Store struct {
@@ -167,10 +180,7 @@ func (s *Store) recentDirs() []string {
 	seen := map[string]bool{}
 	var dirs []string
 	for _, c := range s.list() {
-		dir := c.Dir
-		if c.Repo != "" {
-			dir = c.Repo
-		}
+		dir := c.Project()
 		if c.Role == "" && !seen[dir] {
 			seen[dir] = true
 			dirs = append(dirs, dir)

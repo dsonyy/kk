@@ -379,6 +379,26 @@ func TestServerRestartKeepsAgents(t *testing.T) {
 	}
 }
 
+func TestWindowNamedLikeSession(t *testing.T) {
+	sock := fmt.Sprintf("kk-test-host-%d", time.Now().UnixNano())
+	out, err := exec.Command("tmux", "-L", sock, "-f", "/dev/null", "new-session", "-d", "-s", "host", "-n", tmuxSession, "-P", "-F", "#{socket_path},#{pid},0 #{pane_id}", "sleep 600").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	client, pane, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	e := newEnv(t, "KK_TMUX="+sock, "TMUX="+client, "TMUX_PANE="+pane)
+	// The agents inherit the environment of the tmux server, which this test started instead of kk.
+	exec.Command("tmux", "-L", sock, "set-environment", "-g", "FAKE_HOME", e.fake).Run()
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hello") })
+	// The server gives a launch one second before it believes that the window is gone.
+	time.Sleep(2 * time.Second)
+	if c := e.conv(id); c.Status != statusIdle {
+		t.Fatalf("status of a running agent: %s", c.Status)
+	}
+}
+
 func TestClose(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "to close")
@@ -390,6 +410,39 @@ func TestClose(t *testing.T) {
 	if out, _ := e.kk("screen", id); strings.TrimSpace(out) != "" {
 		t.Fatalf("window still open: %s", out)
 	}
+}
+
+func TestClosedStaysReadable(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "first")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: first") })
+	e.mustKK("close", id)
+	e.stop()
+	e.start()
+	listed := func() (found convView) {
+		var list []convView
+		_, body := e.request("GET", "/api/conversations?all=1", nil)
+		json.Unmarshal(body, &list)
+		for _, c := range list {
+			if c.ID == id {
+				found = c
+			}
+		}
+		return found
+	}
+	if c := listed(); !c.Closed || c.Unread {
+		t.Fatalf("closed conversation in the full list: %+v", c)
+	}
+	if c := e.conv(id); !hasEvent(c, kindAssistant, "echo: first") {
+		t.Fatalf("messages of a closed conversation: %+v", c.Events)
+	}
+	e.mustKK("resume", id)
+	e.waitFor("reopened", id, func(c convView) bool { return c.Status == statusIdle && !c.Closed })
+	if ls := e.mustKK("ls"); !strings.Contains(ls, id) || listed().Closed {
+		t.Fatalf("reopened conversation not listed: %s", ls)
+	}
+	e.mustKK("send", id, "second")
+	e.waitFor("answer after reopening", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: first") && hasEvent(c, kindAssistant, "echo: second") })
 }
 
 func TestCreateValidation(t *testing.T) {
@@ -571,6 +624,9 @@ func TestWebAuth(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || !strings.Contains(string(page), "<script") {
 		t.Fatalf("page: %d %s", resp.StatusCode, page)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("the page may be served from a cache after an upgrade: Cache-Control %q", cc)
 	}
 	resp, _ = client.Get(base + "/api/conversations")
 	resp.Body.Close()
@@ -863,6 +919,17 @@ func TestWorktreeSession(t *testing.T) {
 	}
 	if cwd, _ := os.ReadFile(filepath.Join(e.fake, "cwd.log")); strings.TrimSpace(string(cwd)) != filepath.Join(git(c.Dir, "rev-parse", "--show-toplevel"), "sub") {
 		t.Fatalf("agent cwd: %s", cwd)
+	}
+	if c.Project != filepath.Join(e.work, "sub") {
+		t.Fatalf("project of a worktree session: %s", c.Project)
+	}
+	plain := e.mustKK("new", "claude", "-C", e.work, "hello")
+	if p := e.conv(plain).Project; p != e.work {
+		t.Fatalf("project of a session in the chosen directory: %s", p)
+	}
+	// A session resumed from history runs in the worktree and carries no repo. Git names the worktree by its real path.
+	if p := (&Conversation{Dir: c.Dir}).Project(); p != filepath.Join(git(e.work, "rev-parse", "--show-toplevel"), "sub") {
+		t.Fatalf("project of a session resumed in a worktree: %s", p)
 	}
 	out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/dirs").Output()
 	if strings.Contains(string(out), "worktrees") || !strings.Contains(string(out), filepath.Join(e.work, "sub")) {

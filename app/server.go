@@ -37,7 +37,7 @@ type Server struct {
 
 type convView struct {
 	Conversation
-	// Project is the directory the conversation belongs to, the checkout for an agent in a worktree.
+	// Project is the directory the list groups the conversation under.
 	Project string   `json:"project"`
 	Unread  bool     `json:"unread"`
 	Actions []string `json:"actions"`
@@ -98,6 +98,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/stats", s.handleStats)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
+	api("POST /api/pick", handlePick)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
@@ -112,7 +113,14 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
 	dist, _ := fs.Sub(web.Dist, "dist")
-	mux.Handle("GET /", http.FileServerFS(dist))
+	files := http.FileServerFS(dist)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// The page names its scripts by content hash, so a page that is always fetched again never runs an old build.
+		if r.URL.Path == "/" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	})
 	return mux
 }
 
@@ -165,7 +173,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: project(c), Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -200,8 +208,8 @@ func (s *Server) handleShow(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The tick leaves closed conversations alone, so their transcript is read when someone opens one.
 	if c.Closed {
+		// The tick leaves closed conversations alone, so their transcript is read when someone opens them.
 		s.readTail(c)
 	}
 	return s.view(c, true), nil
@@ -269,7 +277,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 				continue
 			}
 			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now}
-			c.Group = s.groupName(project(c), in.Group)
+			c.Group = s.groupName(c.Project(), in.Group)
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
@@ -288,7 +296,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			return nil, err
 		}
 	}
-	c.Group = s.groupName(project(c), in.Group)
+	c.Group = s.groupName(c.Project(), in.Group)
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}

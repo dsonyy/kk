@@ -32,7 +32,11 @@ function openIds(): string[] {
 }
 
 function App() {
-  const [list, setList] = useState<Conversation[]>([]);
+  const [sessions, setList] = useState<Conversation[]>([]);
+  const [showClosed, setShowClosed] = useState(localStorage.getItem("kk.closed") !== "hide");
+  // Closed sessions come after the open ones; both keep the server's order by last activity.
+  const closed = sessions.filter((c) => c.closed);
+  const list = [...sessions.filter((c) => !c.closed), ...(showClosed ? closed : [])];
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
   const [tab, setTab] = useState<"Agents" | "Sessions" | "Settings">("Agents");
@@ -45,7 +49,7 @@ function App() {
   };
   const hide = (id: string) => setOpen(openRef.current.filter((x) => x !== id));
 
-  const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations"))), []);
+  const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1"))), []);
   const loadDetail = useCallback(async (id: string) => {
     try {
       const c = await api<Conversation>("GET", `/api/conversations/${id}`);
@@ -92,6 +96,17 @@ function App() {
     for (const id of open) loadDetail(id);
   }, [open.join(",")]);
 
+  const [collapsed, setCollapsed] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.collapsed") || "[]"));
+  const collapse = (project: string, on: boolean) => {
+    const next = on ? [...collapsed, project] : collapsed.filter((p) => p !== project);
+    localStorage.setItem("kk.collapsed", JSON.stringify(next));
+    setCollapsed(next);
+  };
+  // The list comes sorted by last activity, so groups and the sessions in them keep that order.
+  const groups = new Map<string, Conversation[]>();
+  for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
+  const projects = [...groups.keys()];
+
   const show = (id: string) => {
     if (open.includes(id)) document.getElementById(`panel-${id}`)?.scrollIntoView({ behavior: "smooth", inline: "nearest" });
     else setOpen([...open, id]);
@@ -106,32 +121,55 @@ function App() {
           </a>
         ))}
       </nav>
-      {tab === "Settings" && <SettingsView />}
-      {tab === "Sessions" && (
-        <Board
-          stamp={list}
-          onOpen={(id) => {
-            setTab("Agents");
-            show(id);
-          }}
-        />
-      )}
-      <div class="workspace" hidden={tab !== "Agents"}>
-        <aside class="sidebar" data-scope="sidebar">
+      {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
+      <div class="workspace">
+        {tab === "Settings" && <SettingsView />}
+        {tab === "Sessions" && (
+          <Board
+            list={sessions}
+            onOpen={(id) => {
+              setTab("Agents");
+              show(id);
+            }}
+          />
+        )}
+        <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">
               <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
+              {closed.length > 0 && (
+                <div class="filter">
+                  <Check
+                    label="Show closed"
+                    checked={showClosed}
+                    onChange={(e) => {
+                      localStorage.setItem("kk.closed", e.currentTarget.checked ? "show" : "hide");
+                      setShowClosed(e.currentTarget.checked);
+                    }}
+                  />
+                  <span class="muted">{closed.length}</span>
+                </div>
+              )}
             </div>
           </Scope>
-          <ul class="tiles">
-            {list.length === 0 && <li class="empty">No sessions yet.</li>}
-            {list.map((c) => (
-              <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => show(c.id)} />
+          <div class="groups">
+            {list.length === 0 && <div class="empty">No sessions yet.</div>}
+            {projects.map((project) => (
+              <Group
+                key={project}
+                project={project}
+                name={shortName(project, projects)}
+                list={groups.get(project)!}
+                open={open}
+                collapsed={collapsed.includes(project)}
+                onCollapse={(on) => collapse(project, on)}
+                onOpen={show}
+              />
             ))}
-          </ul>
+          </div>
           <Load />
         </aside>
-        <div class="panels">
+        <div class="panels" hidden={tab !== "Agents"}>
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
           {open.map((id) =>
             details[id] ? (
@@ -157,6 +195,7 @@ function App() {
 }
 
 function stateLabel(c: Conversation) {
+  if (c.closed) return "Closed";
   if (c.attention) return "Action required";
   return { starting: "Starting", working: "Working", idle: "Your turn", exited: "Exited" }[c.status];
 }
@@ -165,8 +204,52 @@ function Dot({ c }: { c: Conversation }) {
   return <i class={`dot ${c.attention ? "attention" : c.status}`} />;
 }
 
+// A directory goes by its last segment, and by its last two when another group ends the same way.
+function shortName(project: string, all: string[]) {
+  const parts = project.split("/").filter(Boolean);
+  const last = parts[parts.length - 1] ?? project;
+  return all.filter((p) => p.endsWith(`/${last}`)).length > 1 ? parts.slice(-2).join("/") : last;
+}
+
+type GroupProps = {
+  project: string;
+  name: string;
+  list: Conversation[];
+  open: string[];
+  collapsed: boolean;
+  onCollapse: (on: boolean) => void;
+  onOpen: (id: string) => void;
+};
+
+function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
+  // A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work.
+  const loud = list.find((c) => c.attention) ?? list.find((c) => c.status === "working" || c.status === "starting");
+  const unread = list.some((c) => c.unread && !open.includes(c.id));
+  const cls = ["group", collapsed && loud?.attention && "attention", collapsed && unread && "unread"];
+  return (
+    <details class={cls.filter(Boolean).join(" ")} open={!collapsed} onToggle={(e) => e.currentTarget.open === collapsed && onCollapse(!collapsed)}>
+      <summary title={project}>
+        <Icon name="chevron" />
+        <span class="name mono">{name}</span>
+        {collapsed && loud && (
+          <span class="state">
+            <Dot c={loud} />
+            {stateLabel(loud)}
+          </span>
+        )}
+        <span class="count">{list.length}</span>
+      </summary>
+      <ul class="tiles">
+        {list.map((c) => (
+          <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", c.attention ? "attention" : c.status === "working" && "working", c.unread && !on && "unread", c.status === "exited" && "exited"];
+  const cls = ["tile", on && "on", c.attention ? "attention" : c.status === "working" && "working", c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || undefined}>
       <div class="title">{c.title || "Untitled"}</div>
@@ -369,7 +452,9 @@ const RETRY = "The last turn was cut off by an API error. Continue from where yo
 type Pending = { text: string; files: Attachment[]; expect: number };
 
 function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void }) {
-  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminal, setShowTerminal] = useState(false);
+  // Closing kills the window, so a closed session has no terminal to show.
+  const showTerminal = terminal && !c.closed;
   const [confirmClose, setConfirmClose] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const screen = useScreen(c.id, !!c.attention);
@@ -462,13 +547,15 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
         <header class="conv-head">
           <h1>{side ? "Coordinator" : c.title || "Untitled"}</h1>
           <div class="actions">
-            <div class="modes">
-              <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
-              <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
-            </div>
-            {exited && <Button label="Resume" icon="play" class="small primary" onClick={resume} />}
+            {!c.closed && (
+              <div class="modes">
+                <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
+                <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
+              </div>
+            )}
+            {exited && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
             <Controls c={c} reload={reload} />
-            {!side && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and remove the session" onClick={close} />}
+            {!side && !c.closed && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and move the session to the closed ones" onClick={close} />}
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>
           <div class="meta">
@@ -604,8 +691,8 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   if (exited) {
     return (
       <div class="composer">
-        <span class="muted" style="flex:1;align-self:center">The agent has exited.</span>
-        <Button label="Resume session" icon="play" class="primary" onClick={onResume} />
+        <span class="muted" style="flex:1;align-self:center">{c.closed ? "The session is closed." : "The agent has exited."}</span>
+        <Button label={c.closed ? "Reopen session" : "Resume session"} icon="play" class="primary" onClick={onResume} />
       </div>
     );
   }
@@ -776,7 +863,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               </select>
             </Field>
           </div>
-          <DirField value={dir} onValue={setDir} recent={dirs} />
+          <DirField label="Directory" hint="The folder the agent starts in and works on." value={dir} onValue={setDir} recent={dirs} />
           <div class="field">
             <Check label="Worktree" checked={inWorktree} disabled={!repo?.git || !!resume} onChange={(e) => setWorktree(e.currentTarget.checked)} />
             <span class="hint">

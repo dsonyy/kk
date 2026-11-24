@@ -135,27 +135,3 @@ func (e *env) transcriptOf(path string) string {
 	e.t.Fatalf("no transcript in %s", path)
 	return ""
 }
-
-func TestWorktreeSessionProject(t *testing.T) {
-	c := Conversation{Dir: "/r/app/.claude/worktrees/fix-1/sub", Repo: "/r/app/sub"}
-	if got := project(c); got != "/r/app/sub" {
-		t.Fatalf("project of a kk worktree: %s", got)
-	}
-	if got := project(Conversation{Dir: "/r/app/.claude/worktrees/fix-1"}); got != "/r/app" {
-		t.Fatalf("project of a session started inside a worktree: %s", got)
-	}
-}
-
-func TestClosedShow(t *testing.T) {
-	e := newEnv(t)
-	id := e.mustKK("new", "claude", "-C", e.work, "closed but readable")
-	e.waitFor("answer", id, func(c convView) bool {
-		return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: closed but readable")
-	})
-	e.mustKK("close", id)
-	e.stop()
-	e.start()
-	if c := e.conv(id); !c.Closed || !hasEvent(c, kindAssistant, "echo: closed but readable") {
-		t.Fatalf("closed conversation after a restart: closed %v, events %+v", c.Closed, c.Events)
-	}
-}

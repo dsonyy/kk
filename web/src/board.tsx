@@ -1,5 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
-import { act, api, harnessLabel, type Conversation } from "./api";
+import { harnessLabel, type Conversation } from "./api";
 
 type Column = { project: string; group: string; sessions: Conversation[] };
 
@@ -25,13 +24,7 @@ function columns(list: Conversation[]): Column[] {
   return cols;
 }
 
-// The board shows every session, closed ones too, which the list of the Agents tab leaves out.
-export function Board({ stamp, onOpen }: { stamp: unknown; onOpen: (id: string) => void }) {
-  const [list, setList] = useState<Conversation[] | null>(null);
-  useEffect(() => {
-    act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1")));
-  }, [stamp]);
-  if (!list) return <div class="board" />;
+export function Board({ list, onOpen }: { list: Conversation[]; onOpen: (id: string) => void }) {
   if (list.length === 0) return <div class="board empty">No sessions yet.</div>;
   return (
     <div class="board">
