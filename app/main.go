@@ -104,6 +104,7 @@ func serve() error {
 		return err
 	}
 	mux := s.routes()
+	go watchStats()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()

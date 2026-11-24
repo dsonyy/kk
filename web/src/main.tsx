@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preac
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, when, type Conversation, type Event, type Harness, type PastSession } from "./api";
+import { Load } from "./load";
 import { PromptInput, useSkills } from "./prompt";
 import { SettingsView } from "./settings";
 import { Button, Field, Scope } from "./mnemonic";
@@ -116,6 +117,7 @@ function App() {
               <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => show(c.id)} />
             ))}
           </ul>
+          <Load />
         </aside>
         <div class="panels">
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}

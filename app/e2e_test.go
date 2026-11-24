@@ -481,6 +481,18 @@ func TestResumeSessionFromHistory(t *testing.T) {
 	}
 }
 
+func TestStatsReportsLoad(t *testing.T) {
+	e := newEnv(t)
+	var samples []Sample
+	for deadline := time.Now().Add(5 * time.Second); len(samples) == 0 && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/stats").Output()
+		json.Unmarshal(out, &samples)
+	}
+	if len(samples) == 0 || samples[0].RAM <= 0 || samples[0].RAM > 100 || samples[0].CPU < 0 || samples[0].CPU > 100 {
+		t.Fatalf("samples: %+v", samples)
+	}
+}
+
 func TestCoordinatorCompacts(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1", "KK_COMPACT_AFTER=2s")
 	c := e.waitFor("coordinator start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })

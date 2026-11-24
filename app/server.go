@@ -81,6 +81,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
+	api("GET /api/stats", s.handleStats)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
