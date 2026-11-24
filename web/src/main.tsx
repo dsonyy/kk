@@ -31,7 +31,11 @@ function openIds(): string[] {
 }
 
 function App() {
-  const [list, setList] = useState<Conversation[]>([]);
+  const [sessions, setList] = useState<Conversation[]>([]);
+  const [showClosed, setShowClosed] = useState(localStorage.getItem("kk.closed") !== "hide");
+  // Closed sessions come after the open ones; both keep the server's order by last activity.
+  const closed = sessions.filter((c) => c.closed);
+  const list = [...sessions.filter((c) => !c.closed), ...(showClosed ? closed : [])];
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
   const [tab, setTab] = useState<"Agents" | "Settings">("Agents");
@@ -44,7 +48,7 @@ function App() {
   };
   const hide = (id: string) => setOpen(openRef.current.filter((x) => x !== id));
 
-  const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations"))), []);
+  const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1"))), []);
   const loadDetail = useCallback(async (id: string) => {
     try {
       const c = await api<Conversation>("GET", `/api/conversations/${id}`);
@@ -122,6 +126,19 @@ function App() {
           <Scope>
             <div class="sidebar-head">
               <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
+              {closed.length > 0 && (
+                <div class="filter">
+                  <Check
+                    label="Show closed"
+                    checked={showClosed}
+                    onChange={(e) => {
+                      localStorage.setItem("kk.closed", e.currentTarget.checked ? "show" : "hide");
+                      setShowClosed(e.currentTarget.checked);
+                    }}
+                  />
+                  <span class="muted">{closed.length}</span>
+                </div>
+              )}
             </div>
           </Scope>
           <div class="groups">
@@ -167,6 +184,7 @@ function App() {
 }
 
 function stateLabel(c: Conversation) {
+  if (c.closed) return "Closed";
   if (c.attention) return "Action required";
   return { starting: "Starting", working: "Working", idle: "Your turn", exited: "Exited" }[c.status];
 }
@@ -220,7 +238,7 @@ function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: Gro
 }
 
 function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", c.attention ? "attention" : c.status === "working" && "working", c.unread && !on && "unread", c.status === "exited" && "exited"];
+  const cls = ["tile", on && "on", c.attention ? "attention" : c.status === "working" && "working", c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || undefined}>
       <div class="title">{c.title || "Untitled"}</div>
@@ -423,7 +441,9 @@ const RETRY = "The last turn was cut off by an API error. Continue from where yo
 type Pending = { text: string; files: Attachment[]; expect: number };
 
 function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void }) {
-  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminal, setShowTerminal] = useState(false);
+  // Closing kills the window, so a closed session has no terminal to show.
+  const showTerminal = terminal && !c.closed;
   const [confirmClose, setConfirmClose] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const screen = useScreen(c.id, !!c.attention);
@@ -516,13 +536,15 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
         <header class="conv-head">
           <h1>{side ? "Coordinator" : c.title || "Untitled"}</h1>
           <div class="actions">
-            <div class="modes">
-              <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
-              <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
-            </div>
-            {exited && <Button label="Resume" icon="play" class="small primary" onClick={resume} />}
+            {!c.closed && (
+              <div class="modes">
+                <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
+                <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
+              </div>
+            )}
+            {exited && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
             <Controls c={c} reload={reload} />
-            {!side && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and remove the session" onClick={close} />}
+            {!side && !c.closed && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and move the session to the closed ones" onClick={close} />}
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>
           <div class="meta">
@@ -658,8 +680,8 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   if (exited) {
     return (
       <div class="composer">
-        <span class="muted" style="flex:1;align-self:center">The agent has exited.</span>
-        <Button label="Resume session" icon="play" class="primary" onClick={onResume} />
+        <span class="muted" style="flex:1;align-self:center">{c.closed ? "The session is closed." : "The agent has exited."}</span>
+        <Button label={c.closed ? "Reopen session" : "Resume session"} icon="play" class="primary" onClick={onResume} />
       </div>
     );
   }

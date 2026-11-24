@@ -49,7 +49,7 @@ const (
 )
 
 func (c *Conversation) Unread() bool {
-	return !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
 }
 
 // Project is the directory the conversation belongs to: the one the user chose, also when the agent works in a worktree of it.
