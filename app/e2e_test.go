@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -611,5 +612,76 @@ func TestTerminal(t *testing.T) {
 			t.Fatalf("viewer session left behind: %s", out)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestRewind(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, target string
+		files                 bool
+		log                   string
+	}{
+		{"claude", "claude", "edit two\nsecond line", false, "claude: Restore conversation: edit two\n"},
+		{"claude files", "claude", "edit two\nsecond line", true, "claude: Restore code and conversation: edit two\n"},
+		{"claude none", "claude", "three", true, "claude: Restore conversation: three\n"},
+		{"cursor", "cursor", "edit two\nsecond line", false, "cursor-agent: Restore conversation: edit two\n"},
+		{"cursor files", "cursor", "edit two\nsecond line", true, "cursor-agent: Restore files and conversation: edit two\n"},
+		{"codex", "codex", "edit two\nsecond line", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t)
+			id := e.mustKK("new", tc.harness, "-C", e.work, "one")
+			answered := func(text string) convView {
+				return e.waitFor("answer to "+text, id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: "+text) })
+			}
+			answered("one")
+			for _, text := range []string{"edit two\nsecond line", "three"} {
+				e.mustKK("send", id, text)
+				answered(text)
+			}
+			c := e.conv(id)
+			target := slices.IndexFunc(c.Events, func(ev Event) bool { return ev.Kind == kindUser && ev.Text == tc.target })
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target + 1, "text": "x"}); code != 400 {
+				t.Fatalf("rewind to an event that is not a message: %d %s", code, body)
+			}
+			if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": target, "text": "changed\nmessage", "files": tc.files}); code != 200 {
+				screen, _ := e.kk("screen", id)
+				t.Fatalf("rewind: %d %s\n%s", code, body, screen)
+			}
+			c = answered("changed\nmessage")
+			want := []string{"one", "edit two\nsecond line", "changed\nmessage"}
+			if tc.target != "three" {
+				want = []string{"one", "changed\nmessage"}
+			}
+			var users []string
+			for _, ev := range c.Events {
+				if ev.Kind == kindUser {
+					users = append(users, ev.Text)
+				}
+			}
+			if !slices.Equal(users, want) || hasEvent(c, kindAssistant, "echo: "+tc.target) || !hasEvent(c, kindAssistant, "echo: one") {
+				t.Fatalf("events after the rewind: %+v", c.Events)
+			}
+			if log, _ := os.ReadFile(filepath.Join(e.fake, "rewind.log")); string(log) != tc.log {
+				t.Fatalf("rewind.log: %q", log)
+			}
+		})
+	}
+}
+
+func TestRewindSaysWhatIsRestored(t *testing.T) {
+	e := newEnv(t)
+	var hs []Harness
+	out, _ := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/harnesses").Output()
+	json.Unmarshal(out, &hs)
+	for _, h := range hs {
+		if h.Rewind == nil || h.Rewind.Conversation == "" || (h.Rewind.Files == "") != (h.Name == "codex") {
+			t.Fatalf("%s: %+v", h.Name, h.Rewind)
+		}
+	}
+	id := e.mustKK("new", "codex", "-C", e.work, "one")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: one") })
+	if code, body := e.post("/api/conversations/"+id+"/rewind", map[string]any{"event": 0, "text": "x", "files": true}); code != 400 || !strings.Contains(body, "cannot restore files") {
+		t.Fatalf("restoring files with codex: %d %s", code, body)
 	}
 }

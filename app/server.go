@@ -72,6 +72,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations", s.handleCreate)
 	api("GET /api/conversations/{id}", s.handleShow)
 	api("POST /api/conversations/{id}/send", s.handleSend)
+	api("POST /api/conversations/{id}/rewind", s.handleRewind)
 	api("POST /api/conversations/{id}/keys", s.handleKeys)
 	api("GET /api/conversations/{id}/screen", s.handleScreen)
 	api("POST /api/conversations/{id}/seen", s.handleSeen)

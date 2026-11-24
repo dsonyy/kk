@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -39,6 +41,10 @@ type Tail struct {
 	partial []byte
 	Events  []Event
 	tools   map[string]int
+	// forks maps the parent of a Claude Code prompt to the number of events before that prompt.
+	forks map[string]int
+	// check holds the bytes before offset; a harness that rewrites its transcript changes them.
+	check   []byte
 	Title   string
 	Context int
 	Last    time.Time
@@ -50,7 +56,7 @@ type Tail struct {
 }
 
 func newTail(path string) *Tail {
-	return &Tail{path: path, tools: map[string]int{}}
+	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}}
 }
 
 func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
@@ -63,7 +69,7 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 	if err != nil || st.Size() == t.offset {
 		return false, err
 	}
-	if st.Size() < t.offset {
+	if st.Size() < t.offset || !t.unchanged(f) {
 		*t = *newTail(t.path)
 	}
 	if _, err := f.Seek(t.offset, io.SeekStart); err != nil {
@@ -75,6 +81,8 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 	}
 	t.offset += int64(len(data))
 	t.stamp = st.ModTime()
+	t.check = append(t.check, data...)
+	t.check = append([]byte(nil), t.check[max(0, len(t.check)-64):]...)
 	data = append(t.partial, data...)
 	end := bytes.LastIndexByte(data, '\n')
 	if end < 0 {
@@ -88,6 +96,37 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// unchanged tells whether the bytes read last are still in place.
+func (t *Tail) unchanged(f *os.File) bool {
+	now := make([]byte, len(t.check))
+	_, err := f.ReadAt(now, t.offset-int64(len(now)))
+	return err == nil && bytes.Equal(now, t.check)
+}
+
+// cut drops the events from index n on, which a rewind has discarded.
+func (t *Tail) cut(n int) {
+	t.Events = t.Events[:n]
+	for ref, i := range t.tools {
+		if i >= n {
+			delete(t.tools, ref)
+		}
+	}
+}
+
+// fork handles a Claude Code prompt. Claude Code never rewrites its transcript: a rewind leaves the
+// old branch in place, and the prompt that replaces it has the same parent as the prompt it replaces.
+func (t *Tail) fork(l claudeLine) {
+	if l.UUID == "" {
+		return
+	}
+	parent := l.ParentUUID
+	if n, forked := t.forks[parent]; forked {
+		t.cut(n)
+	} else {
+		t.forks[parent] = len(t.Events)
+	}
 }
 
 func (t *Tail) add(e Event) {
@@ -130,6 +169,7 @@ type claudeBlock struct {
 type claudeLine struct {
 	Type              string    `json:"type"`
 	UUID              string    `json:"uuid"`
+	ParentUUID        string    `json:"parentUuid"`
 	Timestamp         time.Time `json:"timestamp"`
 	IsMeta            bool      `json:"isMeta"`
 	IsCompactSummary  bool      `json:"isCompactSummary"`
@@ -173,15 +213,19 @@ func parseClaude(t *Tail, raw []byte) {
 		}
 		var text string
 		if json.Unmarshal(l.Message.Content, &text) == nil {
-			addClaudeUserText(t, text, l.Timestamp)
+			t.fork(l)
+			addClaudeUserText(t, l, text)
 			return
 		}
 		var blocks []claudeBlock
 		json.Unmarshal(l.Message.Content, &blocks)
+		if slices.ContainsFunc(blocks, func(b claudeBlock) bool { return b.Type == "text" }) {
+			t.fork(l)
+		}
 		for _, b := range blocks {
 			switch b.Type {
 			case "text":
-				addClaudeUserText(t, b.Text, l.Timestamp)
+				addClaudeUserText(t, l, b.Text)
 			case "tool_result":
 				t.toolResult(b.ToolUseID, blockText(b.Content), b.IsError)
 			}
@@ -217,16 +261,16 @@ func parseClaude(t *Tail, raw []byte) {
 // Claude Code wraps a pasted multi-line message in these tags.
 var pastedContent = regexp.MustCompile(`</?pasted_content[^>]*>`)
 
-func addClaudeUserText(t *Tail, text string, at time.Time) {
+func addClaudeUserText(t *Tail, l claudeLine, text string) {
 	text = strings.TrimSpace(pastedContent.ReplaceAllString(text, ""))
 	if m := commandName.FindStringSubmatch(text); m != nil {
-		t.add(Event{Kind: kindUser, Text: m[1], Time: at})
+		t.add(Event{Kind: kindUser, Text: m[1], Time: l.Timestamp})
 		return
 	}
 	if strings.HasPrefix(text, "<local-command") || strings.HasPrefix(text, "[Request interrupted") || strings.TrimSpace(text) == "" {
 		return
 	}
-	t.add(Event{Kind: kindUser, Text: text, Time: at})
+	t.add(Event{ID: l.UUID, Kind: kindUser, Text: text, Time: l.Timestamp})
 }
 
 func blockText(raw json.RawMessage) string {
@@ -289,7 +333,12 @@ type codexLine struct {
 		Type    string          `json:"type"`
 		Message string          `json:"message"`
 		Item    json.RawMessage `json:"item"`
-		Info    *struct {
+		// HistoryBase is in the session_meta of a rollout that continues a reverted thread.
+		HistoryBase *struct {
+			Rollout string `json:"thread_id"`
+			End     int    `json:"end_byte_offset"`
+		} `json:"history_base"`
+		Info *struct {
 			Last struct {
 				Input int `json:"input_tokens"`
 			} `json:"last_token_usage"`
@@ -317,7 +366,13 @@ type codexItem struct {
 
 func parseCodex(t *Tail, raw []byte) {
 	var l codexLine
-	if json.Unmarshal(raw, &l) != nil || l.Type != "event_msg" {
+	if json.Unmarshal(raw, &l) != nil {
+		return
+	}
+	if b := l.Payload.HistoryBase; l.Type == "session_meta" && b != nil {
+		codexBase(t, b.Rollout, b.End)
+	}
+	if l.Type != "event_msg" {
 		return
 	}
 	switch l.Payload.Type {
@@ -371,6 +426,25 @@ func parseCodex(t *Tail, raw []byte) {
 		default:
 			t.addTool("", Event{Tool: it.Type, Detail: pretty(l.Payload.Item), Time: at})
 		}
+	}
+}
+
+// codexBase loads the history a reverted thread keeps. Codex 0.166 does not rewrite a rollout: the
+// thread continues in a new file that points at the first `end` bytes of the rollout it leaves.
+func codexBase(t *Tail, rollout string, end int) {
+	paths, _ := filepath.Glob(filepath.Join(filepath.Dir(t.path), "*"+rollout+".jsonl"))
+	more, _ := filepath.Glob(filepath.Join(codexHome(), "sessions", "*", "*", "*", "*"+rollout+".jsonl"))
+	for _, p := range append(paths, more...) {
+		data, err := os.ReadFile(p)
+		if err != nil || p == t.path {
+			continue
+		}
+		base := newTail(p)
+		for _, line := range bytes.Split(data[:min(end, len(data))], []byte{'\n'}) {
+			parseCodex(base, line)
+		}
+		t.Events, t.Context, t.Last = base.Events, base.Context, base.Last
+		return
 	}
 }
 

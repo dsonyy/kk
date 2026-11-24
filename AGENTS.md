@@ -21,6 +21,7 @@ Design and plan: `~/brain/projects/kk/`.
 
 - `app/` - Go server and CLI in one binary. No arguments: server. Arguments: client over `~/.kk/kk.sock`.
 - `app/harness.go` - how each agent is started and resumed. `app/transcript.go` - transcript parsers into one event model.
+- `app/rewind.go` - how each harness goes back to an earlier message. It drives the harness's own rewind in the terminal and checks the screen at each step.
 - `app/testdata/fakeagent` - fake `claude`, `codex` and `cursor-agent` for the end-to-end tests. Keep it in step with the real formats; `testdata/*.jsonl` are trimmed real transcripts.
 - `web/` - Vite, TypeScript and Preact, built into `web/dist` and embedded.
 

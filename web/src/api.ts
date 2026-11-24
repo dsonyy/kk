@@ -43,7 +43,10 @@ export type Settings = {
   compact_tokens: number;
 };
 
-export type Harness = { name: string; label: string; models: string[]; hooks: boolean };
+// Rewind says what going back to an earlier message does in a harness, with and without restoring files.
+export type Rewind = { conversation: string; files?: string };
+
+export type Harness = { name: string; label: string; models: string[]; hooks: boolean; rewind?: Rewind };
 
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
