@@ -27,8 +27,11 @@ const usage = `kk - web conductor for coding agents in tmux
   kk url                      print the web address
   kk ls                       list conversations
   kk show <id> [-n N]         show the last N events of a conversation
-  kk new <harness> [-m model] [-C dir] [-w] <prompt>
-                              start an agent; -w gives it its own git worktree and branch
+  kk new <harness> [-m model] [-C dir] [-w] [-g group] <prompt>
+                              start an agent; -w gives it its own git worktree and branch,
+                              -g puts it in a feature group instead of letting kk decide
+  kk group                    list the feature groups of every project
+  kk group <id> <name>        move a conversation to a feature group
   kk send <id> <text|->       type a message into the agent
   kk screen <id>              print the agent's tmux screen
   kk keys <id> <key>...       press keys in the agent's window
@@ -95,7 +98,7 @@ func serve() error {
 	}
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
-		tails: map[string]*Tail{}, subs: map[chan string]bool{},
+		tails: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
 	}
 	os.Remove(sockPath())
 	unixLn, err := net.Listen("unix", sockPath())
@@ -109,6 +112,8 @@ func serve() error {
 	}
 	mux := s.routes()
 	go watchStats()
+	go s.groupLoop()
+	s.backfillGroups()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()
@@ -229,6 +234,7 @@ func runCLI(cmd string, args []string) error {
 		model := fs.String("m", "", "model")
 		dir := fs.String("C", ".", "directory")
 		worktree := fs.Bool("w", false, "start in a new git worktree on its own branch")
+		group := fs.String("g", "", "feature group")
 		if err := need(1); err != nil {
 			return err
 		}
@@ -237,10 +243,28 @@ func runCLI(cmd string, args []string) error {
 		}
 		d, _ := filepath.Abs(*dir)
 		var c convView
-		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree}, &c); err != nil {
+		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree, "group": *group}, &c); err != nil {
 			return err
 		}
 		fmt.Println(c.ID)
+	case "group":
+		if len(args) == 0 {
+			var groups []groupView
+			if err := call("GET", "/api/groups", nil, &groups); err != nil {
+				return err
+			}
+			for _, g := range groups {
+				if g.Group == "" {
+					g.Group = ungrouped
+				}
+				fmt.Printf("%s  %-*s  %d\n", g.Project, groupMaxLen, g.Group, g.Sessions)
+			}
+			return nil
+		}
+		if err := need(2); err != nil {
+			return err
+		}
+		return call("POST", "/api/conversations/"+args[0]+"/group", map[string]string{"group": strings.Join(args[1:], " ")}, nil)
 	case "send":
 		if err := need(2); err != nil {
 			return err

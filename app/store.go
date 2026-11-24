@@ -39,6 +39,8 @@ type Conversation struct {
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
+	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
+	Group string `yaml:"group,omitempty" json:"group,omitempty"`
 }
 
 const (
