@@ -1006,9 +1006,8 @@ func TestMessagesStaySeparate(t *testing.T) {
 	for range 3 {
 		<-sent
 	}
-	c = e.waitFor("the three messages sent at once", id, func(c convView) bool { return c.Status == statusIdle && len(userMessages(c.Events)) >= 4 })
-	time.Sleep(500 * time.Millisecond)
-	got := userMessages(e.conv(id).Events)[3:]
+	c = e.waitFor("the three messages sent at once", id, func(c convView) bool { return c.Status == statusIdle && len(userMessages(c.Events)) == 6 })
+	got := userMessages(c.Events)[3:]
 	slices.Sort(got)
 	if want := []string{"alpha", "beta", "gamma"}; !slices.Equal(got, want) {
 		t.Fatalf("messages sent at once: %q, want %q", got, want)
