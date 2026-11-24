@@ -766,7 +766,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
               </select>
             </Field>
           </div>
-          <DirField value={dir} onValue={setDir} recent={dirs} />
+          <DirField label="Directory" hint="The folder the agent starts in and works on." value={dir} onValue={setDir} recent={dirs} />
           <div class="field">
             <Check label="Worktree" checked={inWorktree} disabled={!repo?.git || !!resume} onChange={(e) => setWorktree(e.currentTarget.checked)} />
             <span class="hint">

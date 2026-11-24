@@ -91,6 +91,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/stats", s.handleStats)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
+	api("POST /api/pick", handlePick)
 	api("GET /api/dirs", func(*http.Request) (any, error) {
 		dirs := s.store.recentDirs()
 		if d := s.cfg().DefaultDir; d != "" {
