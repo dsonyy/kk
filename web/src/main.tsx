@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preac
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, when, type Conversation, type Event, type Harness, type PastSession } from "./api";
+import { Controls } from "./controls";
 import { Load } from "./load";
 import { PromptInput, useSkills } from "./prompt";
 import { SettingsView } from "./settings";
@@ -431,6 +432,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
               <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
             </div>
             {exited && <Button label="Resume" icon="play" class="small primary" onClick={resume} />}
+            <Controls c={c} reload={reload} />
             {!side && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and remove the session" onClick={close} />}
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>

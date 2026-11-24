@@ -24,6 +24,7 @@ export type Conversation = {
   attention?: string;
   context_tokens: number;
   unread: boolean;
+  actions: string[];
   events: Event[];
 };
 

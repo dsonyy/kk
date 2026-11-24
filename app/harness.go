@@ -32,6 +32,39 @@ func harnesses() []Harness {
 	}
 }
 
+// controls holds, per harness, how kk acts on a running agent. A harness that is not listed gets only stop.
+var controls = map[string]struct {
+	// interrupt is the key that stops the current turn.
+	interrupt string
+	// reset is the command that starts a new conversation. Codex also has /new, which asks where to start the chat.
+	// Without a command kk starts a fresh agent: after Cursor's /clear its hooks keep reporting the old chat.
+	reset string
+	// blind marks a harness whose turns kk can miss: Cursor reports no prompt and writes its transcript late,
+	// so a turn without tool calls looks idle and must stay interruptible. It also reports no session start when it
+	// resumes a chat, so a resumed agent counts as started.
+	blind bool
+}{
+	"claude": {interrupt: "Escape", reset: "/clear"},
+	"codex":  {interrupt: "Escape", reset: "/clear"},
+	"cursor": {interrupt: "C-c", blind: true},
+}
+
+// actions lists the controls that apply to c in its current state.
+func actions(c Conversation) []string {
+	out := []string{}
+	ct, ok := controls[c.Harness]
+	if ok && (c.Status == statusWorking || ct.blind && c.Status == statusIdle) {
+		out = append(out, "interrupt")
+	}
+	if ok && c.Status == statusIdle && c.Attention == "" {
+		out = append(out, "reset")
+	}
+	if c.Status != statusExited {
+		out = append(out, "stop")
+	}
+	return out
+}
+
 func findHarness(name string) (Harness, bool) {
 	for _, h := range harnesses() {
 		if h.Name == name {

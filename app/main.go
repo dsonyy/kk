@@ -31,6 +31,9 @@ const usage = `kk - web conductor for coding agents in tmux
   kk send <id> <text|->       type a message into the agent
   kk screen <id>              print the agent's tmux screen
   kk keys <id> <key>...       press keys in the agent's window
+  kk interrupt <id>           stop the agent's current turn
+  kk stop <id>                end the agent process, resume restarts it
+  kk reset <id>               start the conversation over with a clean context
   kk resume <id>              restart an exited agent
   kk close <id>               stop the agent and hide the conversation
   kk hook <event>             hook endpoint for agents (payload on stdin)
@@ -257,7 +260,7 @@ func runCLI(cmd string, args []string) error {
 			return err
 		}
 		return call("POST", "/api/conversations/"+args[0]+"/keys", map[string][]string{"keys": args[1:]}, nil)
-	case "resume", "close":
+	case "resume", "close", "interrupt", "stop", "reset":
 		if err := need(1); err != nil {
 			return err
 		}

@@ -42,7 +42,8 @@ type Tail struct {
 	Title   string
 	Context int
 	Last    time.Time
-	// Ended is when the last turn ended, for harnesses whose transcript records it (Cursor).
+	// Ended is when the last turn ended, as far as the transcript records it: every turn for Cursor,
+	// only interrupted turns for Claude Code and Codex, whose other turns end with a Stop hook.
 	Ended time.Time
 	// Waiting is true when the last message is the user's and no turn end follows.
 	Waiting bool
@@ -95,6 +96,11 @@ func (t *Tail) add(e Event) {
 	if (e.Kind == kindUser || e.Kind == kindAssistant) && e.Time.After(t.Last) {
 		t.Last = e.Time
 	}
+}
+
+func (t *Tail) interrupted(at time.Time) {
+	t.Ended, t.Waiting = at, false
+	t.add(Event{Kind: kindNote, Text: "Interrupted", Time: at})
 }
 
 func (t *Tail) addTool(ref string, e Event) {
@@ -223,7 +229,11 @@ func addClaudeUserText(t *Tail, text string, at time.Time) {
 		t.add(Event{Kind: kindUser, Text: m[1], Time: at})
 		return
 	}
-	if strings.HasPrefix(text, "<local-command") || strings.HasPrefix(text, "[Request interrupted") || strings.TrimSpace(text) == "" {
+	if strings.HasPrefix(text, "[Request interrupted") {
+		t.interrupted(at)
+		return
+	}
+	if strings.HasPrefix(text, "<local-command") || strings.TrimSpace(text) == "" {
 		return
 	}
 	t.add(Event{Kind: kindUser, Text: text, Time: at})
@@ -288,6 +298,7 @@ type codexLine struct {
 	Payload   struct {
 		Type    string          `json:"type"`
 		Message string          `json:"message"`
+		Reason  string          `json:"reason"`
 		Item    json.RawMessage `json:"item"`
 		Info    *struct {
 			Last struct {
@@ -327,6 +338,10 @@ func parseCodex(t *Tail, raw []byte) {
 		}
 	case "error":
 		t.add(Event{Kind: kindError, Text: l.Payload.Message, Time: l.Timestamp})
+	case "turn_aborted":
+		if l.Payload.Reason == "interrupted" {
+			t.interrupted(l.Timestamp)
+		}
 	case "item_completed":
 		var it codexItem
 		if json.Unmarshal(l.Payload.Item, &it) != nil {
@@ -381,6 +396,7 @@ var userQuery = regexp.MustCompile(`(?s)<user_query>\n?(.*?)\n?</user_query>`)
 func parseCursor(t *Tail, raw []byte) {
 	var l struct {
 		Type    string `json:"type"`
+		Status  string `json:"status"`
 		Role    string `json:"role"`
 		Message struct {
 			Content []claudeBlock `json:"content"`
@@ -391,7 +407,11 @@ func parseCursor(t *Tail, raw []byte) {
 	}
 	at := t.stamp
 	if l.Type == "turn_ended" {
-		t.Ended, t.Waiting = at, false
+		if l.Status == "aborted" {
+			t.interrupted(at)
+		} else {
+			t.Ended, t.Waiting = at, false
+		}
 		return
 	}
 	for _, b := range l.Message.Content {

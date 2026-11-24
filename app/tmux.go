@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -113,6 +115,29 @@ func sendKeys(id string, keys []string) error {
 	}
 	_, err := tmux("", append([]string{"send-keys", "-t", id}, keys...)...)
 	return err
+}
+
+// hangUp ends the process in a window the way a closed terminal does and keeps the window with its dead pane,
+// like an agent that exited by itself. A process that ignores the hangup is killed.
+func hangUp(id string) error {
+	out, err := tmux("", "display-message", "-p", "-t", id, "#{pane_dead} #{pane_pid}")
+	if err != nil {
+		return err
+	}
+	dead, pane, _ := strings.Cut(out, " ")
+	pid, err := strconv.Atoi(pane)
+	if dead == "1" || err != nil {
+		return err
+	}
+	// The pane's process leads its own process group.
+	syscall.Kill(-pid, syscall.SIGHUP)
+	for range 30 {
+		time.Sleep(100 * time.Millisecond)
+		if alive, _ := windows(); !alive[id] {
+			return nil
+		}
+	}
+	return syscall.Kill(-pid, syscall.SIGKILL)
 }
 
 func killWindow(id string) error {

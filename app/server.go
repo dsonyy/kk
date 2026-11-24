@@ -34,8 +34,9 @@ type Server struct {
 
 type convView struct {
 	Conversation
-	Unread bool    `json:"unread"`
-	Events []Event `json:"events"`
+	Unread  bool     `json:"unread"`
+	Actions []string `json:"actions"`
+	Events  []Event  `json:"events"`
 }
 
 type apiError struct {
@@ -77,6 +78,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/seen", s.handleSeen)
 	api("POST /api/conversations/{id}/resume", s.handleResume)
 	api("POST /api/conversations/{id}/close", s.handleClose)
+	api("POST /api/conversations/{id}/interrupt", s.handleInterrupt)
+	api("POST /api/conversations/{id}/stop", s.handleStop)
+	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
@@ -147,10 +151,10 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Unread: c.Unread(), Events: []Event{}}
+	v := convView{Conversation: c, Unread: c.Unread(), Actions: actions(c), Events: []Event{}}
 	if events {
 		s.mu.Lock()
-		if t := s.tails[c.ID]; t != nil {
+		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
 			v.Events = append(v.Events, t.Events...)
 		}
 		s.mu.Unlock()
@@ -259,6 +263,9 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	c.Status = statusStarting
 	if !h.Hooks {
 		c.Status = statusWorking
+	}
+	if resume && controls[c.Harness].blind {
+		c.Status = statusIdle
 	}
 	c.Attention = ""
 	c.Closed = false
@@ -420,6 +427,77 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	return map[string]bool{"ok": true}, nil
 }
 
+// control returns the conversation of r when the action applies to it now.
+func (s *Server) control(r *http.Request, action string) (Conversation, error) {
+	c, err := s.conv(r)
+	if err != nil {
+		return c, err
+	}
+	if !slices.Contains(actions(c), action) {
+		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
+	}
+	return c, nil
+}
+
+func (s *Server) handleInterrupt(r *http.Request) (any, error) {
+	c, err := s.control(r, "interrupt")
+	if err != nil {
+		return nil, err
+	}
+	if err := sendKeys(c.Window, []string{controls[c.Harness].interrupt}); err != nil {
+		return nil, err
+	}
+	// Claude Code leaves no trace of a turn that is interrupted before it answered, so the turn is ended here.
+	// A hook from a turn that went on sets it back to working.
+	s.store.update(c.ID, func(c *Conversation) bool {
+		c.Status, c.Attention, c.TurnEnded = statusIdle, "", time.Now()
+		return true
+	})
+	s.publish(c.ID)
+	return map[string]bool{"ok": true}, nil
+}
+
+func (s *Server) handleStop(r *http.Request) (any, error) {
+	c, err := s.control(r, "stop")
+	if err != nil {
+		return nil, err
+	}
+	if err := hangUp(c.Window); err != nil {
+		return nil, err
+	}
+	s.store.update(c.ID, func(c *Conversation) bool {
+		c.Status, c.Attention = statusExited, ""
+		return true
+	})
+	s.publish(c.ID)
+	return map[string]bool{"ok": true}, nil
+}
+
+func (s *Server) handleReset(r *http.Request) (any, error) {
+	c, err := s.control(r, "reset")
+	if err != nil {
+		return nil, err
+	}
+	// The old session is let go before the command is typed: Codex reports the new one only with its first turn.
+	c, _ = s.store.update(c.ID, func(c *Conversation) bool {
+		c.Session, c.Transcript, c.Prompt, c.Context = "", "", "", 0
+		return true
+	})
+	command := controls[c.Harness].reset
+	if command == "" {
+		return map[string]bool{"ok": true}, s.launch(&c, false, "")
+	}
+	// A draft left in the input, such as the prompt an interrupt puts back, would be sent together with the command.
+	if _, err := tmux("", "send-keys", "-N", "50", "-t", c.Window, "C-u"); err != nil {
+		return nil, err
+	}
+	if err := pasteText(c.Window, command); err != nil {
+		return nil, err
+	}
+	s.publish(c.ID)
+	return map[string]bool{"ok": true}, nil
+}
+
 func (s *Server) handleHook(r *http.Request) (any, error) {
 	id, event := r.PathValue("id"), r.PathValue("event")
 	var p struct {
@@ -435,18 +513,24 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		if c.Status == statusExited {
 			return false
 		}
+		// The harness moves to a new session when the user starts the conversation over, for example with /clear.
+		switched := p.SessionID != "" && c.Session != "" && p.SessionID != c.Session
 		if p.SessionID != "" {
 			c.Session = p.SessionID
 		}
 		if p.TranscriptPath != "" {
 			c.Transcript = p.TranscriptPath
-		} else if c.Harness == "cursor" && c.Session != "" && c.Transcript == "" {
+		} else if c.Harness == "cursor" && c.Session != "" {
 			c.Transcript = cursorTranscript(c.Dir, c.Session)
+		}
+		if switched {
+			// The first prompt belongs to the session that was left and must not be sent again on a restart.
+			c.Prompt, c.Context = "", 0
 		}
 		c.Activity = now
 		switch event {
 		case "SessionStart":
-			if c.Status == statusStarting {
+			if c.Status == statusStarting || switched {
 				c.Status = statusIdle
 			}
 			c.Attention = ""
@@ -550,7 +634,8 @@ func (s *Server) tick() {
 				if t.Context != c.Context {
 					c.Context, changed = t.Context, true
 				}
-				if t.Ended.After(c.TurnEnded) && c.Status != statusExited {
+				// A turn end from before this launch is history, read again after a resume.
+				if t.Ended.After(c.TurnEnded) && t.Ended.After(c.Launched) && c.Status != statusExited {
 					c.Status, c.TurnEnded, changed = statusIdle, t.Ended, true
 				}
 				if t.Waiting && c.Status == statusIdle {

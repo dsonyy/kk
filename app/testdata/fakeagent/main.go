@@ -21,7 +21,9 @@ var (
 	hooks      = map[string]string{}
 	session    string
 	transcript string
-	in         = bufio.NewReader(os.Stdin)
+	// Codex reports a session cleared with /clear only when its first turn starts.
+	cleared bool
+	in      = bufio.NewReader(os.Stdin)
 )
 
 func main() {
@@ -29,6 +31,10 @@ func main() {
 	args := os.Args[1:]
 	logArgs(args)
 	prompt, resume := parseArgs(args)
+	// Real agents read the terminal raw, so Escape and Ctrl-C arrive as bytes instead of being held or turned into a signal.
+	raw := exec.Command("stty", "-icanon", "-isig", "min", "1", "time", "0")
+	raw.Stdin = os.Stdin
+	raw.Run()
 	fmt.Print("\x1b[?2004h")
 	fmt.Printf("fake %s started\n", mode)
 	if strings.Contains(prompt, "TRUST") {
@@ -40,19 +46,7 @@ func main() {
 	if session == "" {
 		session = uuid()
 	}
-	dir := filepath.Join(os.Getenv("FAKE_HOME"), mode)
-	transcript = filepath.Join(dir, session+".jsonl")
-	if mode == "cursor-agent" {
-		wd, _ := os.Getwd()
-		slug := strings.Trim(regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(wd, "-"), "-")
-		dir = filepath.Join(os.Getenv("HOME"), ".cursor", "projects", slug, "agent-transcripts", session)
-		transcript = filepath.Join(dir, session+".jsonl")
-	}
-	os.MkdirAll(dir, 0o755)
-	if mode == "codex" && !resume {
-		write(map[string]any{"type": "session_meta", "payload": map[string]any{"session_id": session}})
-	}
-	hook("SessionStart", nil)
+	openSession(!resume, map[bool]string{false: "startup", true: "resume"}[resume])
 	if prompt != "" {
 		handle(prompt)
 	}
@@ -63,6 +57,45 @@ func main() {
 			continue
 		}
 		handle(msg)
+	}
+}
+
+// openSession points the transcript at the current session and reports its start.
+func openSession(fresh bool, source string) {
+	dir := filepath.Join(os.Getenv("FAKE_HOME"), mode)
+	if mode == "cursor-agent" {
+		wd, _ := os.Getwd()
+		slug := strings.Trim(regexp.MustCompile(`[^A-Za-z0-9]+`).ReplaceAllString(wd, "-"), "-")
+		dir = filepath.Join(os.Getenv("HOME"), ".cursor", "projects", slug, "agent-transcripts", session)
+	}
+	transcript = filepath.Join(dir, session+".jsonl")
+	os.MkdirAll(dir, 0o755)
+	if mode == "codex" && fresh {
+		write(map[string]any{"type": "session_meta", "payload": map[string]any{"session_id": session}})
+	}
+	// Cursor CLI 2026.11 reports no session start when it resumes a chat.
+	if mode != "cursor-agent" || source != "resume" {
+		hook("SessionStart", map[string]any{"source": source})
+	}
+}
+
+// Each harness stops a turn with its own key. Cursor's /clear is left out: kk restarts Cursor instead.
+var (
+	resetCommand = map[string]string{"claude": "/clear", "codex": "/clear"}
+	interruptKey = map[string]byte{"claude": 0x1b, "codex": 0x1b, "cursor-agent": 0x03}
+)
+
+// slowTurn works until the user interrupts it.
+func slowTurn() {
+	fmt.Println("working, waiting for an interrupt")
+	for {
+		b, err := in.ReadByte()
+		if err != nil {
+			os.Exit(0)
+		}
+		if b == interruptKey[mode] {
+			return
+		}
 	}
 }
 
@@ -138,6 +171,8 @@ func readMessage() string {
 		}
 		text += more
 	}
+	// Ctrl-U clears what was typed before it.
+	text = text[strings.LastIndexByte(text, 0x15)+1:]
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\x1b[200~", ""), "\x1b[201~", "")
 	return strings.TrimRight(strings.ReplaceAll(text, "\r", "\n"), "\n")
 }
@@ -178,12 +213,28 @@ func handle(prompt string) {
 		}
 		cursorLine(map[string]any{"role": "user", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "<timestamp>Monday</timestamp>\n<user_query>\n" + prompt + "\n</user_query>"}}}})
 		hook("PreToolUse", map[string]any{"tool_name": "Shell"})
+		if strings.Contains(prompt, "slow") {
+			slowTurn()
+			cursorLine(map[string]any{"type": "turn_ended", "status": "aborted"})
+			return
+		}
 		cursorLine(map[string]any{"role": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "tool_use", "name": "Shell", "input": map[string]any{"command": "ls", "description": "List"}}}}})
 		hook("PostToolUse", map[string]any{"tool_name": "Shell"})
 		cursorLine(map[string]any{"role": "assistant", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "echo: " + prompt}}}})
 		cursorLine(map[string]any{"type": "turn_ended", "status": "success"})
 		fmt.Printf("cursor answer: %s\n", prompt)
 		return
+	}
+	if prompt == resetCommand[mode] {
+		session = uuid()
+		if cleared = mode == "codex"; !cleared {
+			openSession(true, "clear")
+		}
+		return
+	}
+	if cleared {
+		cleared = false
+		openSession(true, "clear")
 	}
 	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
 	if prompt == "exit" {
@@ -196,6 +247,17 @@ func handle(prompt string) {
 		return
 	}
 	userLine(prompt)
+	if strings.Contains(prompt, "slow") {
+		hook("PreToolUse", map[string]any{"tool_name": "Bash"})
+		slowTurn()
+		// An interrupted turn leaves a marker in the transcript and fires no Stop hook.
+		if mode == "codex" {
+			write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "turn_aborted", "reason": "interrupted"}})
+		} else {
+			write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "[Request interrupted by user]"}}}})
+		}
+		return
+	}
 	if strings.Contains(prompt, "permission") {
 		hook("PreToolUse", map[string]any{"tool_name": "Bash"})
 		hook("Notification", map[string]any{"message": "Claude needs your permission to use Bash", "notification_type": "permission_prompt"})
