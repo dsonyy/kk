@@ -149,3 +149,32 @@ func TestNotifyStall(t *testing.T) {
 		t.Fatalf("%d stall notifications: %q", n, e.notifications())
 	}
 }
+
+func TestNotifyEveryRaise(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	twice := e.mustKK("new", "claude", "-C", e.work, "permission twice")
+	e.waitNotified(twice, "needs action")
+	e.mustKK("keys", twice, "1", "Enter")
+	e.waitFor("second dialog", twice, func(c convView) bool {
+		return c.Attention != "" && strings.Count(e.mustKK("screen", twice), "Allow Bash?") == 2
+	})
+	for deadline := time.Now().Add(10 * time.Second); countLines(e.notifications(), twice, "needs action") < 2; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("second dialog not reported: %q", e.notifications())
+		}
+	}
+
+	// An agent that dies again right after a resume is news.
+	id := e.mustKK("new", "claude", "-C", e.work, "first")
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.mustKK("send", id, "exit")
+	e.waitNotified(id, "exited")
+	e.mustKK("resume", id)
+	e.waitFor("resumed", id, func(c convView) bool { return c.Status == statusIdle })
+	e.mustKK("send", id, "exit")
+	for deadline := time.Now().Add(10 * time.Second); countLines(e.notifications(), id, "exited") < 2; time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("second exit not reported: %q", e.notifications())
+		}
+	}
+}

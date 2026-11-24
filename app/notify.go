@@ -13,7 +13,7 @@ const (
 	notifyMarker = "[kk notification - automatic, not from the user]"
 	// notifyGather is how long the first event waits for others to arrive in the same message.
 	notifyGather = 2 * time.Second
-	// controlQuiet is how long after a stop, close, interrupt, reset or resume the conversation's events are not reported.
+	// controlQuiet is how long after a stop, close or interrupt the conversation's events are not reported.
 	controlQuiet = 5 * time.Second
 )
 
@@ -21,6 +21,7 @@ const (
 type watch struct {
 	last      Conversation
 	attention bool
+	raises    int
 	stirred   time.Time
 	screen    string
 	checked   time.Time
@@ -73,10 +74,17 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 		}
 	}
 	attention := c.Attention != ""
+	s.mu.Lock()
+	raises := s.raises[c.ID]
+	quiet := now.Sub(s.controls[c.ID]) < controlQuiet
+	s.mu.Unlock()
+	if s.ticks == 1 {
+		w.raises = raises
+	}
 	var reason string
 	switch {
 	case c.Closed:
-	case attention && !w.attention:
+	case attention && (!w.attention || raises > w.raises):
 		reason = "needs action"
 	case c.Status == statusExited && prev.Status != statusExited && prev.Status != "":
 		reason = "exited without being stopped"
@@ -86,10 +94,7 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 		w.stalled = true
 		reason = fmt.Sprintf("working with no hook, transcript or screen change for %s", stall.Round(time.Second))
 	}
-	w.attention = attention
-	s.mu.Lock()
-	quiet := now.Sub(s.controls[c.ID]) < controlQuiet
-	s.mu.Unlock()
+	w.attention, w.raises = attention, raises
 	if reason != "" && !quiet {
 		s.notices[c.ID] = notice{reason, now}
 	}

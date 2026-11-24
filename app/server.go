@@ -30,10 +30,12 @@ type Server struct {
 	tails    map[string]*Tail
 	subs     map[chan string]bool
 	ticks    int
-	// controls holds when a conversation was last stopped, closed, interrupted, reset or resumed.
+	// controls holds when a conversation was last stopped, closed or interrupted.
 	controls map[string]time.Time
-	watches  map[string]*watch
-	notices  map[string]notice
+	// raises counts per conversation how often a hook raised attention, which may clear and come back between two ticks.
+	raises  map[string]int
+	watches map[string]*watch
+	notices map[string]notice
 }
 
 type convView struct {
@@ -430,7 +432,6 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
-	s.controlled(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
 		return nil, err
 	}
@@ -477,7 +478,6 @@ func (s *Server) control(r *http.Request, action string) (Conversation, error) {
 	if !slices.Contains(actions(c), action) {
 		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
 	}
-	s.controlled(c.ID)
 	return c, midRewind(c.ID)
 }
 
@@ -486,6 +486,7 @@ func (s *Server) handleInterrupt(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.controlled(c.ID)
 	if err := sendKeys(c.Window, []string{controls[c.Harness].interrupt}); err != nil {
 		return nil, err
 	}
@@ -504,6 +505,7 @@ func (s *Server) handleStop(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.controlled(c.ID)
 	if err := hangUp(c.Window); err != nil {
 		return nil, err
 	}
@@ -556,7 +558,9 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	json.Unmarshal(body, &p)
 	now := time.Now()
+	raised := false
 	_, changed := s.store.update(id, func(c *Conversation) bool {
+		defer func(was string) { raised = was == "" && c.Attention != "" }(c.Attention)
 		if c.Status == statusExited {
 			return false
 		}
@@ -600,6 +604,11 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		}
 		return true
 	})
+	if raised {
+		s.mu.Lock()
+		s.raises[id]++
+		s.mu.Unlock()
+	}
 	if changed {
 		s.publish(id)
 	}

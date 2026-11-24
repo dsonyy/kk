@@ -522,7 +522,15 @@ func handle(prompt string) {
 		}
 		return
 	}
+	asks := 0
 	if strings.Contains(prompt, "permission") {
+		asks = 1
+	}
+	if strings.Contains(prompt, "twice") {
+		// Two tool calls in one message: the second dialog follows the first within milliseconds.
+		asks = 2
+	}
+	for range asks {
 		hook("PreToolUse", map[string]any{"tool_name": "Bash"})
 		hook("Notification", map[string]any{"message": "Claude needs your permission to use Bash", "notification_type": "permission_prompt"})
 		fmt.Println("Allow Bash? 1. Yes 2. No")
