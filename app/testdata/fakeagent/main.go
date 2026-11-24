@@ -484,6 +484,13 @@ func handle(prompt string) {
 		hook("SessionStart", map[string]any{"source": "resume"})
 	}
 	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
+	// A kk notification quotes other agents, whose words must not trigger the behaviours below.
+	if strings.HasPrefix(prompt, "[kk notification") {
+		userLine(prompt)
+		answer("noted", 1000)
+		hook("Stop", nil)
+		return
+	}
 	if prompt == "exit" {
 		os.Exit(0)
 	}

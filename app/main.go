@@ -96,6 +96,7 @@ func serve() error {
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
 		tails: map[string]*Tail{}, subs: map[chan string]bool{},
+		controls: map[string]time.Time{}, watches: map[string]*watch{}, notices: map[string]notice{},
 	}
 	os.Remove(sockPath())
 	unixLn, err := net.Listen("unix", sockPath())
@@ -143,6 +144,8 @@ func call(method, path string, body any, out any) error {
 		rd = bytes.NewReader(data)
 	}
 	req, _ := http.NewRequest(method, "http://kk"+path, rd)
+	// An agent that runs kk is named, so the server knows which agents it started.
+	req.Header.Set("X-KK-Conversation", os.Getenv("KK_CONVERSATION"))
 	resp, err := client.Do(req)
 	if err != nil {
 		return errors.New("kk server is not running, start it with `kk`")

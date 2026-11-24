@@ -20,4 +20,5 @@ Without the service: `just build && ./kk`.
 - A blinking tile needs you: a permission prompt, a trust dialog or a question. Answer in the reply box or with the screen keys.
 - Each session has controls in its header: Interrupt stops the current turn, Kill ends the agent process and keeps the session for Resume, Reset starts the conversation over with a clean context. A control shows only when the session's program and state allow it.
 - The coordinator on the right is a Claude Code session that can list, start and steer the other agents through the `kk` CLI (`kk help`).
+- kk tells the coordinator when an agent needs action (a permission or trust dialog, an API error), exits without being stopped, works for 10 minutes with no visible progress, or, if the coordinator started it, finishes its turn. The coordinator handles routine cases and asks you about the rest.
 - State lives in `~/.kk`.

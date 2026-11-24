@@ -39,6 +39,8 @@ type Conversation struct {
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
+	// StartedBy is the conversation whose agent started this one with kk new.
+	StartedBy string `yaml:"started_by,omitempty" json:"started_by,omitempty"`
 }
 
 const (

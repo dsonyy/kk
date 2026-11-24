@@ -30,6 +30,10 @@ type Server struct {
 	tails    map[string]*Tail
 	subs     map[chan string]bool
 	ticks    int
+	// controls holds when a conversation was last stopped, closed, interrupted, reset or resumed.
+	controls map[string]time.Time
+	watches  map[string]*watch
+	notices  map[string]notice
 }
 
 type convView struct {
@@ -241,6 +245,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, err
 	}
 	now := time.Now()
+	by := r.Header.Get("X-KK-Conversation")
 	if in.Session != "" {
 		if in.Worktree {
 			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
@@ -254,7 +259,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			if p.ID != in.Session {
 				continue
 			}
-			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now}
+			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, StartedBy: by}
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
@@ -265,7 +270,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, fail(400, "prompt is empty")
 	}
-	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now}
+	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, StartedBy: by}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -425,6 +430,7 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	s.controlled(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
 		return nil, err
 	}
@@ -450,6 +456,7 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	if c.Role != "" {
 		return nil, fail(400, "the coordinator cannot be closed")
 	}
+	s.controlled(c.ID)
 	if c.Window != "" {
 		killWindow(c.Window)
 	}
@@ -470,6 +477,7 @@ func (s *Server) control(r *http.Request, action string) (Conversation, error) {
 	if !slices.Contains(actions(c), action) {
 		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
 	}
+	s.controlled(c.ID)
 	return c, midRewind(c.ID)
 }
 
@@ -649,6 +657,7 @@ func (s *Server) tick() {
 	s.ticks++
 	now := time.Now()
 	startTimeout := s.cfg().startTimeout()
+	notify := s.cfg().coordinator()
 	for _, c := range s.store.list() {
 		if c.Closed {
 			continue
@@ -696,10 +705,15 @@ func (s *Server) tick() {
 		if changed || events != nil {
 			s.publish(c.ID)
 		}
+		if notify {
+			cur, _ := s.store.get(c.ID)
+			s.observe(cur, events != nil, now)
+		}
 		if c.Role == coordinatorID {
 			s.maybeCompact(c, now)
 		}
 	}
+	s.flushNotices(now)
 }
 
 // readTail returns the tail of c's transcript when it has new lines.
