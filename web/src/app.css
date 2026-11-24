@@ -252,6 +252,21 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .past .tile .meta { font-size: 12px; }
 .past .tile .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; font-size: 12px; }
 .past .tile button { align-self: flex-start; margin-top: 4px; }
+.dir-input { display: flex; gap: 6px; }
+.dir-input input { flex: 1; min-width: 0; }
+.dir-input button.on { background: var(--surface-2); border-color: var(--text-strong); color: var(--text-strong); }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { max-width: 260px; padding: 2px 8px; overflow: hidden; text-overflow: ellipsis; direction: rtl; font-size: 12px; color: var(--text-dim); }
+.badge.on { border-color: var(--text-strong); color: var(--text-strong); }
+.browser { display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--bg); color: var(--text); }
+.browser-head, .browser-foot { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
+.browser-head { border-bottom: 1px solid var(--line); }
+.browser-foot { justify-content: space-between; border-top: 1px solid var(--line); }
+.browser .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+.browser ul { max-height: 220px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.browser li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; border: 0; text-align: left; }
+.browser li button:hover { background: var(--surface-2); }
+.browser .empty { padding: 6px 8px; color: var(--text-dim); }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .new-session .row { display: flex; justify-content: flex-end; gap: 8px; }
 
