@@ -379,6 +379,26 @@ func TestServerRestartKeepsAgents(t *testing.T) {
 	}
 }
 
+func TestWindowNamedLikeSession(t *testing.T) {
+	sock := fmt.Sprintf("kk-test-host-%d", time.Now().UnixNano())
+	out, err := exec.Command("tmux", "-L", sock, "-f", "/dev/null", "new-session", "-d", "-s", "host", "-n", tmuxSession, "-P", "-F", "#{socket_path},#{pid},0 #{pane_id}", "sleep 600").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	client, pane, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	e := newEnv(t, "KK_TMUX="+sock, "TMUX="+client, "TMUX_PANE="+pane)
+	// The agents inherit the environment of the tmux server, which this test started instead of kk.
+	exec.Command("tmux", "-L", sock, "set-environment", "-g", "FAKE_HOME", e.fake).Run()
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hello") })
+	// The server gives a launch one second before it believes that the window is gone.
+	time.Sleep(2 * time.Second)
+	if c := e.conv(id); c.Status != statusIdle {
+		t.Fatalf("status of a running agent: %s", c.Status)
+	}
+}
+
 func TestClose(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "to close")
