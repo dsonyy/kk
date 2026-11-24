@@ -695,6 +695,9 @@ func TestAttachments(t *testing.T) {
 				}
 			}
 		}
+		if show := e.mustKK("show", id); !strings.Contains(show, "[attachment] "+page.Path) {
+			t.Fatalf("%s show: %s", harness, show)
+		}
 		want := []string{"look:" + shot.Name + ":" + shot.URL, "and these:" + shot.Name + ":" + shot.URL, "and these:" + page.Name + ":" + page.URL}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("%s attachments: %v\nevents: %+v", harness, got, c.Events)

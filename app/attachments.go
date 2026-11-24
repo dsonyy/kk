@@ -105,7 +105,7 @@ func (s *Server) withAttachments(e Event) Event {
 	for _, line := range strings.Split(e.Text, "\n") {
 		rel, ok := strings.CutPrefix(strings.TrimSpace(line), prefix)
 		if m := attachmentLine.FindStringSubmatch(rel); ok && m != nil {
-			e.Attachments = append(e.Attachments, Attachment{Name: m[2], URL: "/api/attachments/" + rel})
+			e.Attachments = append(e.Attachments, Attachment{Name: m[2], Path: prefix + rel, URL: "/api/attachments/" + rel})
 		} else {
 			text = append(text, line)
 		}

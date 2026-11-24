@@ -177,7 +177,8 @@ export function PromptInput({ value, onValue, skills, attachments, up, onEnter, 
         value={value}
         onPaste={(e) => {
           const files = e.clipboardData?.files;
-          if (!files?.length) return;
+          // A copy from a spreadsheet or a document carries its text and a rendered picture of it; the text is what was meant.
+          if (!files?.length || e.clipboardData!.types.includes("text/html")) return;
           e.preventDefault();
           attachments.add(files);
         }}
