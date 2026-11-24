@@ -21,6 +21,7 @@ type Attachment struct {
 
 var (
 	unsafeName     = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+	attachmentID   = regexp.MustCompile(`^[0-9a-f]+$`)
 	attachmentLine = regexp.MustCompile(`^([0-9a-f]+)/([A-Za-z0-9_-][A-Za-z0-9._-]*)$`)
 	inlineTypes    = map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".pdf": "application/pdf"}
 )
@@ -104,12 +105,29 @@ func (s *Server) withAttachments(e Event) Event {
 	var text []string
 	for _, line := range strings.Split(e.Text, "\n") {
 		rel, ok := strings.CutPrefix(strings.TrimSpace(line), prefix)
-		if m := attachmentLine.FindStringSubmatch(rel); ok && m != nil {
-			e.Attachments = append(e.Attachments, Attachment{Name: m[2], Path: prefix + rel, URL: "/api/attachments/" + rel})
-		} else {
-			text = append(text, line)
+		if n := s.attachmentAt(rel); ok && n > 0 {
+			e.Attachments = append(e.Attachments, Attachment{Name: rel[strings.Index(rel, "/")+1 : n], Path: prefix + rel[:n], URL: "/api/attachments/" + rel[:n]})
+			if line = rel[n:]; line == "" {
+				continue
+			}
 		}
+		text = append(text, line)
 	}
 	e.Text = strings.TrimSpace(strings.Join(text, "\n"))
 	return e
+}
+
+// attachmentAt returns the length of the "id/name" that rel starts with. A message queued behind another
+// reaches the agent glued to the last path, so the name is the one on disk and not the rest of the line.
+func (s *Server) attachmentAt(rel string) int {
+	id, rest, _ := strings.Cut(rel, "/")
+	if attachmentID.MatchString(id) {
+		if files, _ := os.ReadDir(filepath.Join(s.attachmentsDir(), id)); len(files) == 1 && strings.HasPrefix(rest, files[0].Name()) {
+			return len(id) + 1 + len(files[0].Name())
+		}
+	}
+	if attachmentLine.MatchString(rel) {
+		return len(rel)
+	}
+	return 0
 }

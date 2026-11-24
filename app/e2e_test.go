@@ -773,6 +773,20 @@ func TestAttachments(t *testing.T) {
 		if show := e.mustKK("show", id); !strings.Contains(show, "[attachment] "+page.Path) {
 			t.Fatalf("%s show: %s", harness, show)
 		}
+		// A message queued behind another reaches the agent glued to the last path of the first.
+		e.mustKK("send", id, "first\n\n"+shot.Path+"second\n\n"+page.Path+"third")
+		var glued Event
+		e.waitFor(harness+" glued", id, func(c convView) bool {
+			for _, ev := range c.Events {
+				if ev.Kind == kindUser && strings.HasPrefix(ev.Text, "first") {
+					glued = ev
+				}
+			}
+			return glued.Kind != ""
+		})
+		if glued.Text != "first\n\nsecond\n\nthird" || len(glued.Attachments) != 2 || glued.Attachments[0].URL != shot.URL || glued.Attachments[1].Name != page.Name {
+			t.Fatalf("%s glued message: %+v", harness, glued)
+		}
 		want := []string{"look:" + shot.Name + ":" + shot.URL, "and these:" + shot.Name + ":" + shot.URL, "and these:" + page.Name + ":" + page.URL}
 		if strings.Join(got, "\n") != strings.Join(want, "\n") {
 			t.Fatalf("%s attachments: %v\nevents: %+v", harness, got, c.Events)
