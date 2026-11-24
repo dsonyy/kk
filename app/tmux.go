@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -87,7 +88,14 @@ func capture(id string) (string, error) {
 	return tmux("", "capture-pane", "-p", "-t", id)
 }
 
+// pasting holds a lock per window: a message pasted before the Enter of the one before it would join it.
+var pasting sync.Map
+
 func pasteText(id, text string) error {
+	lock, _ := pasting.LoadOrStore(id, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()
+	defer lock.(*sync.Mutex).Unlock()
+	before, _ := capture(id)
 	buf := "kk-" + strings.TrimPrefix(id, "@")
 	if _, err := tmux(text, "load-buffer", "-b", buf, "-"); err != nil {
 		return err
@@ -95,10 +103,29 @@ func pasteText(id, text string) error {
 	if _, err := tmux("", "paste-buffer", "-p", "-d", "-b", buf, "-t", id); err != nil {
 		return err
 	}
+	awaitPaste(id, before, text)
 	// TUIs treat an Enter that arrives together with the paste as part of it.
 	time.Sleep(150 * time.Millisecond)
 	_, err := tmux("", "send-keys", "-t", id, "Enter")
 	return err
+}
+
+// awaitPaste waits until the input box shows the pasted text. Claude Code takes a paste with an image path
+// in only after it has looked at the file, and loses an Enter that comes earlier, which leaves the message
+// in the input box for the next one to join. A TUI that shows a placeholder for the paste counts as well,
+// and one that shows neither gets the Enter after two seconds.
+func awaitPaste(id, before, text string) {
+	end := []rune(spaces.ReplaceAllString(text, ""))
+	end = end[max(0, len(end)-20):]
+	shown := func(screen string) int {
+		screen = spaces.ReplaceAllString(screen, "")
+		return strings.Count(screen, string(end)) + strings.Count(screen, "[Pasted") + strings.Count(screen, "[Image")
+	}
+	for until := time.Now().Add(2 * time.Second); time.Now().Before(until); time.Sleep(30 * time.Millisecond) {
+		if screen, err := capture(id); err != nil || shown(screen) > shown(before) {
+			return
+		}
+	}
 }
 
 var allowedKeys = map[string]bool{

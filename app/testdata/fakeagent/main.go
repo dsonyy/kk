@@ -117,14 +117,61 @@ func openSession(fresh bool, source string) {
 // Each harness stops a turn with its own key. Cursor's /clear is left out: kk restarts Cursor instead.
 var (
 	resetCommand = map[string]string{"claude": "/clear", "codex": "/clear"}
-	interruptKey = map[string]byte{"claude": 0x1b, "codex": 0x1b, "cursor-agent": 0x03}
+	interruptKey = map[string]string{"claude": "Escape", "codex": "Escape", "cursor-agent": "\x03"}
 )
 
-// slowTurn works until the user interrupts it.
+// slowTurn works until the user interrupts it. Claude Code 2.1 queues the messages sent meanwhile and
+// hands them over one by one at its next tool call, which here comes with a message that has "boundary" in it.
 func slowTurn() {
 	fmt.Println("working, waiting for an interrupt")
-	for <-keys != interruptKey[mode] {
+	var queue []string
+	for text := ""; ; {
+		switch k := readKey(); {
+		case k == interruptKey[mode]:
+			return
+		case mode != "claude":
+		case strings.HasPrefix(k, "paste:"):
+			text += pasted(k[6:])
+		case k == "Enter" && text != "":
+			write(map[string]any{"type": "queue-operation", "operation": "enqueue", "content": text})
+			queue = append(queue, text)
+			if strings.Contains(text, "boundary") {
+				for _, q := range queue {
+					write(map[string]any{"type": "queue-operation", "operation": "remove", "content": q})
+				}
+				for _, q := range queue {
+					write(map[string]any{"type": "attachment", "attachment": map[string]any{"type": "queued_command", "prompt": q, "commandMode": "prompt", "origin": map[string]any{"kind": "human"}}})
+				}
+				queue = nil
+			}
+			text = ""
+		case len(k) == 1:
+			text += k
+		}
 	}
+}
+
+// pasted puts a paste in the input box. Claude Code 2.1 first looks at a paste that has text and the
+// path of an image, for about 150 ms on an idle machine, and loses an Enter that arrives meanwhile.
+func pasted(text string) string {
+	if mode == "claude" && strings.Contains(text, ".png") && strings.Contains(text, "\n") {
+		var late []byte
+		for end := time.After(250 * time.Millisecond); end != nil; {
+			select {
+			case b := <-keys:
+				if b != '\r' && b != '\n' {
+					late = append(late, b)
+				}
+			case <-end:
+				end = nil
+			}
+		}
+		for _, b := range late {
+			keys <- b
+		}
+	}
+	fmt.Print(text)
+	return text
 }
 
 func logArgs(args []string) {
@@ -229,7 +276,7 @@ func readMessage() string {
 		case k == "Escape" && mode == "codex" && text == "" && prefill == "":
 			backtrack()
 		case strings.HasPrefix(k, "paste:"):
-			text += k[6:]
+			text += pasted(k[6:])
 		case len(k) == 1:
 			text += k
 			fmt.Print(k)

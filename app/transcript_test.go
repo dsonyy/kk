@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -125,5 +127,50 @@ func TestRewrittenTranscriptIsReadAgain(t *testing.T) {
 	tail.read(parseCursor)
 	if len(tail.Events) != 4 || tail.Events[2].Text != "a longer second message" {
 		t.Fatalf("events: %+v", tail.Events)
+	}
+}
+
+func TestParseClaudeQueue(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude-queue.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := newTail("")
+	var queued [][]string
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte{'\n'}) {
+		parseClaude(tail, line)
+		var texts []string
+		for _, e := range tail.Queue {
+			texts = append(texts, firstLine(e.Text, 40))
+		}
+		if len(queued) == 0 || !slices.Equal(queued[len(queued)-1], texts) {
+			queued = append(queued, texts)
+		}
+	}
+	// The first three messages reach the agent at a tool call, the last three at the end of a turn.
+	wantQueued := [][]string{nil, {"test one"}, {"test one", "are u here?"}, {"test one", "are u here?", "third with image"}, {"are u here?", "third with image"}, {"third with image"}, nil,
+		{"q-one"}, {"q-one", "q-two, reply ok"}, {"q-one", "q-two, reply ok", "q-three"}, nil}
+	if !slices.EqualFunc(queued, wantQueued, slices.Equal) {
+		t.Fatalf("queue over time: %q", queued)
+	}
+	var users []string
+	for _, e := range tail.Events {
+		if e.Kind == kindUser {
+			users = append(users, firstLine(e.Text, 40))
+		}
+	}
+	var notes []string
+	for _, e := range tail.Events {
+		if e.Kind == kindNote {
+			notes = append(notes, e.Text)
+		}
+	}
+	// A task notification is not something the user typed, whichever way it reaches the model.
+	if want := []string{`Background command "Start Codex and Cursor conversations in the private instance" completed (exit code 0)`, `Background command "Run the test suite" completed (exit code 0)`, `Background agent "Research task chunking" was stopped by the user.`}; !slices.Equal(notes, want) {
+		t.Fatalf("notes: %q", notes)
+	}
+	want := []string{"Run /tmp/scratch/build.sh with the Bash…", "test one", "are u here?", "third with image", "reply only ok Areply only ok Breply onl…", "Without using any tools, write a 900 wo…", "q-one", "q-two, reply ok", "q-three"}
+	if !slices.Equal(users, want) {
+		t.Fatalf("messages: %q", users)
 	}
 }

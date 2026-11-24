@@ -37,6 +37,8 @@ type convView struct {
 	Unread  bool     `json:"unread"`
 	Actions []string `json:"actions"`
 	Events  []Event  `json:"events"`
+	// Queued are the messages the agent holds until it gets to them, for a harness that records its queue.
+	Queued []Event `json:"queued"`
 }
 
 type apiError struct {
@@ -155,12 +157,18 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Unread: c.Unread(), Actions: actions(c), Events: []Event{}}
+	v := convView{Conversation: c, Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
 			for _, e := range t.Events {
 				v.Events = append(v.Events, s.withAttachments(e))
+			}
+			for _, e := range t.Queue {
+				// A queue dies with the agent's process, and the transcript does not say so. Task notifications wait in it too.
+				if c.Status == statusWorking && e.Time.After(c.Launched) && !strings.HasPrefix(e.Text, "<") && e.Text != "" {
+					v.Queued = append(v.Queued, s.withAttachments(e))
+				}
 			}
 		}
 		s.mu.Unlock()
