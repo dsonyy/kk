@@ -186,12 +186,25 @@ function App() {
 
 function stateLabel(c: Conversation) {
   if (c.closed) return "Closed";
+  if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
   if (c.attention) return "Action required";
+  if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
   return { starting: "Starting", working: "Working", idle: "Your turn", exited: "Exited" }[c.status];
 }
 
 function Dot({ c }: { c: Conversation }) {
-  return <i class={`dot ${c.attention ? "attention" : c.status}`} />;
+  return <i class={`dot ${c.attention ? "attention" : c.status} ${c.waiting_for}`} />;
+}
+
+function attention(c: Conversation) {
+  return c.attention ? (c.waiting_for === "conductor" ? "warn" : "attention") : "";
+}
+
+// A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work, then one the conductor holds.
+function loudness(c: Conversation) {
+  if (c.waiting_for === "user") return c.attention ? 0 : 1;
+  if (c.status === "working" || c.status === "starting") return 2;
+  return c.waiting_for === "conductor" ? 3 : 4;
 }
 
 // A directory goes by its last segment, and by its last two when another group ends the same way.
@@ -212,17 +225,16 @@ type GroupProps = {
 };
 
 function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
-  // A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work.
-  const loud = list.find((c) => c.attention) ?? list.find((c) => c.status === "working" || c.status === "starting");
+  const loud = list.filter((c) => loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
   const unread = list.some((c) => c.unread && !open.includes(c.id));
-  const cls = ["group", collapsed && loud?.attention && "attention", collapsed && unread && "unread"];
+  const cls = ["group", collapsed && loud && attention(loud), collapsed && unread && "unread"];
   return (
     <details class={cls.filter(Boolean).join(" ")} open={!collapsed} onToggle={(e) => e.currentTarget.open === collapsed && onCollapse(!collapsed)}>
       <summary title={project}>
         <Icon name="chevron" />
         <span class="name mono">{name}</span>
         {collapsed && loud && (
-          <span class="state">
+          <span class={`state ${loud.waiting_for}`} title={loud.escalation || loud.attention || undefined}>
             <Dot c={loud} />
             {stateLabel(loud)}
           </span>
@@ -239,15 +251,16 @@ function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: Gro
 }
 
 function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", c.attention ? "attention" : c.status === "working" && "working", c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
+  const cls = ["tile", on && "on", attention(c) || (c.status === "working" && "working"), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
-    <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || undefined}>
+    <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <div class="title">{c.title || "Untitled"}</div>
+      {c.escalation && <div class="reason">{c.escalation}</div>}
       <div class="meta">
         <span>
           {harnessLabel(c.harness)} · {c.model || "default"}
         </span>
-        <span class="state">
+        <span class={`state ${c.waiting_for}`}>
           <Dot c={c} />
           {stateLabel(c)}
         </span>
@@ -535,7 +548,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
     <Tag class="conversation" id={`panel-${c.id}`} data-scope={side ? "coordinator" : `conversation-${c.id}`}>
       <Scope>
         <header class="conv-head">
-          <h1>{side ? "Coordinator" : c.title || "Untitled"}</h1>
+          <h1>{side ? "Conductor" : c.title || "Untitled"}</h1>
           <div class="actions">
             {!c.closed && (
               <div class="modes">
@@ -549,7 +562,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>
           <div class="meta">
-            <span class={c.attention ? "status attention" : "status"}>
+            <span class={`status ${attention(c)} ${c.waiting_for}`}>
               <Dot c={c} />
               {stateLabel(c)}
             </span>
@@ -595,6 +608,14 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
               <div class="busy">
                 <i class="pulse" />
                 <span>{c.status === "starting" ? "Starting the agent" : last?.kind === "tool" && !last.output ? `Running ${last.tool}` : "Working"}</span>
+              </div>
+            )}
+            {c.escalation && (
+              <div class="box-warn">
+                <p>
+                  <Icon name="alert" />
+                  The conductor hands this to you: {c.escalation}
+                </p>
               </div>
             )}
             {c.attention && (
@@ -696,7 +717,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         onValue={setText}
         skills={skills}
         attachments={attachments}
-        placeholder={c.role === COORDINATOR ? "Message the coordinator" : "Reply to the agent, / for skills"}
+        placeholder={c.role === COORDINATOR ? "Message the conductor" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
             e.preventDefault();
@@ -728,7 +749,7 @@ function CoordinatorPanel({ c, reload }: { c?: Conversation; reload: () => void 
   return (
     <aside class="side-panel" style={{ "--panel-width": `${width}px` }}>
       <div class={dragging ? "panel-resize dragging" : "panel-resize"} onPointerDown={() => setDragging(true)} />
-      {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">The coordinator is not running.</div>}
+      {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">The conductor is not running.</div>}
     </aside>
   );
 }

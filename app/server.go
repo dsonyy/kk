@@ -41,6 +41,8 @@ type convView struct {
 	Events  []Event  `json:"events"`
 	// Queued are the messages the agent holds until it gets to them, for a harness that records its queue.
 	Queued []Event `json:"queued"`
+	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
+	WaitingFor string `json:"waiting_for"`
 }
 
 type apiError struct {
@@ -86,6 +88,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/interrupt", s.handleInterrupt)
 	api("POST /api/conversations/{id}/stop", s.handleStop)
 	api("POST /api/conversations/{id}/reset", s.handleReset)
+	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
@@ -168,7 +171,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -266,7 +269,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			if p.ID != in.Session {
 				continue
 			}
-			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now}
+			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: !byUser(r)}
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
@@ -277,7 +280,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, fail(400, "prompt is empty")
 	}
-	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now}
+	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: !byUser(r)}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -365,6 +368,7 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	if err := pasteText(c.Window, in.Text); err != nil {
 		return nil, err
 	}
+	s.driven(c.ID, r)
 	s.markSeen(c.ID)
 	return map[string]bool{"ok": true}, nil
 }
@@ -389,6 +393,7 @@ func (s *Server) handleKeys(r *http.Request) (any, error) {
 	if err := sendKeys(c.Window, in.Keys); err != nil {
 		return nil, fail(400, "%v", err)
 	}
+	s.driven(c.ID, r)
 	return map[string]bool{"ok": true}, nil
 }
 
@@ -420,6 +425,55 @@ func (s *Server) markSeen(id string) {
 	}
 }
 
+// byUser reports whether the user made the request, from the web app or their own shell, rather than an agent through the kk CLI.
+func byUser(r *http.Request) bool {
+	return r.Header.Get(agentHeader) == ""
+}
+
+// driven records who acted on the conversation last, so its next stop waits for them.
+func (s *Server) driven(id string, r *http.Request) {
+	agent := !byUser(r)
+	if _, changed := s.store.update(id, func(c *Conversation) bool {
+		if c.ByAgent == agent {
+			return false
+		}
+		c.ByAgent = agent
+		return true
+	}); changed {
+		s.publish(id)
+	}
+}
+
+// handleEscalate hands a waiting agent from the conductor to the user, with the reason the user sees.
+func (s *Server) handleEscalate(r *http.Request) (any, error) {
+	c, err := s.conv(r)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	reason := firstLine(in.Reason, 200)
+	if reason == "" {
+		return nil, fail(400, "reason is empty")
+	}
+	if c.Role != "" {
+		return nil, fail(400, "the conductor waits for the user already")
+	}
+	if !c.Waiting() {
+		return nil, fail(409, "the agent is %s, escalate it once it stops", c.Status)
+	}
+	s.store.update(c.ID, func(c *Conversation) bool {
+		c.Escalation = reason
+		return true
+	})
+	s.publish(c.ID)
+	return map[string]bool{"ok": true}, nil
+}
+
 func (s *Server) handleSeen(r *http.Request) (any, error) {
 	c, err := s.conv(r)
 	if err != nil {
@@ -437,6 +491,8 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	s.driven(c.ID, r)
+	c, _ = s.store.get(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
 		return nil, err
 	}
@@ -460,7 +516,7 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		return nil, err
 	}
 	if c.Role != "" {
-		return nil, fail(400, "the coordinator cannot be closed")
+		return nil, fail(400, "the conductor cannot be closed")
 	}
 	if c.Window != "" {
 		killWindow(c.Window)
@@ -482,6 +538,7 @@ func (s *Server) control(r *http.Request, action string) (Conversation, error) {
 	if !slices.Contains(actions(c), action) {
 		return c, fail(409, "cannot %s a %s agent that is %s", action, c.Harness, c.Status)
 	}
+	s.driven(c.ID, r)
 	return c, midRewind(c.ID)
 }
 
@@ -743,10 +800,10 @@ func (s *Server) maybeCompact(c Conversation, now time.Time) {
 		return
 	}
 	if err := pasteText(c.Window, "/compact"); err != nil {
-		log.Printf("compact coordinator: %v", err)
+		log.Printf("compact conductor: %v", err)
 		return
 	}
-	log.Printf("coordinator compacted at %d tokens", c.Context)
+	log.Printf("conductor compacted at %d tokens", c.Context)
 	s.store.update(c.ID, func(c *Conversation) bool {
 		c.Compacted = true
 		return true

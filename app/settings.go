@@ -114,7 +114,7 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	}
 	claude, _ := findHarness("claude")
 	if !slices.Contains(claude.Models, st.CoordinatorModel) {
-		return nil, fail(400, "unknown coordinator model %q", st.CoordinatorModel)
+		return nil, fail(400, "unknown conductor model %q", st.CoordinatorModel)
 	}
 	dirs := []string{}
 	for _, d := range st.SkillDirs {
