@@ -1239,4 +1239,10 @@ func TestNoConductorTurn(t *testing.T) {
 	e := newEnv(t)
 	id := e.asConductor("new", "claude", "-C", e.work, "hello")
 	e.waitFor("a stop for the user", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
+	code, body := e.post("/api/conversations", map[string]any{"harness": "claude", "dir": e.work, "prompt": "hello", "conductor": true})
+	var handed convView
+	if err := json.Unmarshal([]byte(body), &handed); code != 200 || err != nil {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	e.waitFor("a handed over stop for the user", handed.ID, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 }

@@ -100,7 +100,7 @@ func serve() error {
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
 		tails: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
-		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{},
+		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{}, handovers: map[string]bool{},
 	}
 	os.Remove(sockPath())
 	unixLn, err := net.Listen("unix", sockPath())
