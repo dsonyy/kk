@@ -67,13 +67,16 @@ func (s slackSource) fetch(ctx context.Context) ([]InboxItem, error) {
 	return parseSlack(out)
 }
 
-// parseSlack checks the run's answer item by item; the answer itself is never logged, since it holds message text.
+// parseSlack takes the JSON object out of the run's answer and drops the items that are not valid.
+// The answer itself is never logged, since it holds message text.
 func parseSlack(out []byte) ([]InboxItem, error) {
 	text := strings.TrimSpace(string(out))
 	if strings.Contains(text, slackMissing) {
 		return nil, notSetUp("Connect Slack to your Claude account at claude.ai, Settings, Connectors.")
 	}
-	text = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(text, "```json"), "```"), "```")
+	if i, j := strings.Index(text, "{"), strings.LastIndex(text, "}"); i >= 0 && j > i {
+		text = text[i : j+1]
+	}
 	var answer struct {
 		Items []struct {
 			Kind   string `json:"kind"`
@@ -84,9 +87,7 @@ func parseSlack(out []byte) ([]InboxItem, error) {
 			Time   string `json:"time"`
 		} `json:"items"`
 	}
-	dec := json.NewDecoder(strings.NewReader(text))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&answer); err != nil || answer.Items == nil {
+	if err := json.Unmarshal([]byte(text), &answer); err != nil || answer.Items == nil {
 		return nil, errors.New("the Slack run did not answer with the expected JSON")
 	}
 	var items []InboxItem
@@ -95,7 +96,7 @@ func parseSlack(out []byte) ([]InboxItem, error) {
 		t, terr := time.Parse(time.RFC3339, a.Time)
 		if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Host, ".slack.com") || terr != nil || a.Title == "" ||
 			(a.Kind != "mention" && a.Kind != "direct message") {
-			return nil, errors.New("the Slack run answered with an item that is not valid")
+			continue
 		}
 		items = append(items, InboxItem{ID: u.Host + u.Path, Kind: a.Kind, Title: a.Title, Description: a.Text, URL: a.URL, Author: a.Author, Time: t})
 	}

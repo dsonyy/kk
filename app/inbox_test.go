@@ -108,9 +108,10 @@ func linearServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-const slackAnswer = `{"items":[
-{"kind":"mention","title":"#eng: review the rollout","text":"Can you review the rollout plan?","author":"Cleo","url":"https://acme.slack.com/archives/C1/p1700000000000100","time":"2026-11-22T09:00:00Z"},
-{"kind":"direct message","title":"Dan: quick question","text":"Do you have a minute?","author":"Dan","url":"https://acme.slack.com/archives/D2/p1700000000000200","time":"2026-11-23T09:00:00Z"}]}`
+const slackAnswer = "Here is your inbox:\n```json\n" + `{"items":[
+{"kind":"mention","channel":"eng","title":"#eng: review the rollout","text":"Can you review the rollout plan?","author":"Cleo","url":"https://acme.slack.com/archives/C1/p1700000000000100","time":"2026-11-22T09:00:00Z"},
+{"kind":"direct message","title":"Dan: quick question","text":"Do you have a minute?","author":"Dan","url":"https://acme.slack.com/archives/D2/p1700000000000200","time":"2026-11-23T09:00:00Z"},
+{"kind":"mention","title":"Not a Slack link","text":"x","author":"Eve","url":"http://evil.example/p1","time":"2026-11-24T09:00:00Z"}]}` + "\n```"
 
 func TestInbox(t *testing.T) {
 	linear := linearServer(t)
@@ -127,8 +128,8 @@ func TestInbox(t *testing.T) {
 	writeFile(t, filepath.Join(gh, "assigned.json"), `[{"title":"Crash on start","body":"Steps","url":"https://github.com/acme/kk/issues/3","updatedAt":"2026-11-19T08:00:00Z","isPullRequest":false,"author":{"login":"fay"},"repository":{"nameWithOwner":"acme/kk"}}]`)
 	writeFile(t, filepath.Join(gh, "mentions.json"), `[{"title":"Add the inbox","body":"Body of the PR","url":"https://github.com/acme/kk/pull/7","updatedAt":"2026-11-24T08:00:00Z","author":{"login":"eve"},"repository":{"nameWithOwner":"acme/kk"}}]`)
 	writeFile(t, filepath.Join(gh, "notifications.json"), `[
-		{"id":"1","reason":"ci_activity","updated_at":"2026-11-25T08:00:00Z","subject":{"title":"CI failed","url":null,"type":"CheckSuite"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}},
-		{"id":"2","reason":"review_requested","updated_at":"2026-11-24T09:00:00Z","subject":{"title":"Add the inbox","url":"https://api.github.com/repos/acme/kk/pulls/7","type":"PullRequest"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}},
+		{"id":"1","reason":"ci_activity","updated_at":"2026-11-25T08:00:00Z","subject":{"title":"CI failed","url":null,"type":"CheckSuite"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}}]
+		[{"id":"2","reason":"review_requested","updated_at":"2026-11-24T09:00:00Z","subject":{"title":"Add the inbox","url":"https://api.github.com/repos/acme/kk/pulls/7","type":"PullRequest"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}},
 		{"id":"3","reason":"comment","updated_at":"2026-11-18T09:00:00Z","subject":{"title":"Old issue","url":"https://api.github.com/repos/acme/kk/issues/2","type":"Issue"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}}]`)
 	writeFile(t, filepath.Join(e.fake, "slack.out"), slackAnswer)
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -25,7 +26,8 @@ func (githubSource) ready() error {
 	return nil
 }
 
-func gh(ctx context.Context, out any, args ...string) error {
+// gh runs a gh command that prints JSON lists; a paginated call prints one list per page, back to back.
+func gh[T any](ctx context.Context, args ...string) ([]T, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -33,11 +35,21 @@ func gh(ctx context.Context, out any, args ...string) error {
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if strings.Contains(msg, "gh auth login") {
-			return notSetUp("Run gh auth login in a terminal.")
+			return nil, notSetUp("Run gh auth login in a terminal.")
 		}
-		return fmt.Errorf("gh %s: %s", args[0], firstLine(msg, 200))
+		return nil, fmt.Errorf("gh %s: %s", args[0], firstLine(msg, 200))
 	}
-	return json.Unmarshal(data, out)
+	var all []T
+	dec := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var page []T
+		if err := dec.Decode(&page); err == io.EOF {
+			return all, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("gh %s printed no JSON list", args[0])
+		}
+		all = append(all, page...)
+	}
 }
 
 type ghSearchItem struct {
@@ -91,8 +103,8 @@ func (githubSource) fetch(ctx context.Context) ([]InboxItem, error) {
 		}
 	}
 	for _, s := range searches {
-		var found []ghSearchItem
-		if err := gh(ctx, &found, s.args...); err != nil {
+		found, err := gh[ghSearchItem](ctx, s.args...)
+		if err != nil {
 			return nil, err
 		}
 		for _, f := range found {
@@ -103,8 +115,8 @@ func (githubSource) fetch(ctx context.Context) ([]InboxItem, error) {
 			add(InboxItem{ID: f.URL, Kind: kind, Title: f.Title, Description: f.Body, URL: f.URL, Author: f.Author.Login, Time: f.UpdatedAt})
 		}
 	}
-	var notes []ghNotification
-	if err := gh(ctx, &notes, "api", "notifications?per_page=50"); err != nil {
+	notes, err := gh[ghNotification](ctx, "api", "--paginate", "notifications?per_page=100")
+	if err != nil {
 		return nil, err
 	}
 	for _, n := range notes {
