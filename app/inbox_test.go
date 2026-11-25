@@ -447,13 +447,22 @@ func TestInboxCrossesWorkingHours(t *testing.T) {
 	} {
 		in, src := testInbox(t, tc.checked)
 		in.tick(tc.early)
-		if n := src.fetches.Load(); n != 0 {
+		if running(in) {
 			t.Fatalf("checked at %s: a check started at %s", tc.checked.Format("15:04"), tc.early.Format("15:04"))
 		}
 		in.tick(tc.late)
-		waitFor(t, func() bool { return src.fetches.Load() == 1 })
+		if !running(in) {
+			t.Fatalf("checked at %s: no check started at %s", tc.checked.Format("15:04"), tc.late.Format("15:04"))
+		}
 		close(src.release)
+		waitFor(t, func() bool { return !running(in) })
 	}
+}
+
+func running(in *Inbox) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.running["github"]
 }
 
 func TestInboxOneRunPerSource(t *testing.T) {
@@ -466,7 +475,10 @@ func TestInboxOneRunPerSource(t *testing.T) {
 		t.Fatalf("%d runs of one source at once", n)
 	}
 	close(src.release)
-	waitFor(t, func() bool { in.mu.Lock(); defer in.mu.Unlock(); return !in.running["github"] })
+	waitFor(t, func() bool { return !running(in) })
+	if n := src.fetches.Load(); n != 1 {
+		t.Fatalf("%d runs of one source at once", n)
+	}
 }
 
 func waitFor(t *testing.T, ok func() bool) {
