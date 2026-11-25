@@ -2,13 +2,16 @@ import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { act, api, flash, when, type Settings } from "./api";
 import { Button, Check, Field, Scope } from "./mnemonic";
+import { dayKey, dayLabel } from "./board";
 import "./inbox.css";
 
 export type InboxItem = { source: string; id: string; kind: string; title: string; description: string; url: string; author: string; time: string };
 
 type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; interval_minutes: number };
 
-type View = { items: InboxItem[]; sources: Source[] };
+type Item = InboxItem & { status: Status; changed?: string };
+
+type View = { items: Item[]; sources: Source[] };
 
 const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack" };
 
@@ -71,8 +74,56 @@ function status(s: Source) {
   );
 }
 
-export function Inbox({ onStart }: { onStart: (prompt: string) => void }) {
+const statuses = [
+  ["backlog", "Backlog"],
+  ["todo", "To do"],
+  ["in_progress", "In progress"],
+  ["closed", "Closed"],
+] as const;
+
+type Status = (typeof statuses)[number][0];
+
+// Closed items stay on the board for a week after they were closed; older ones show on request.
+const closedDays = 7;
+
+function recent(it: Item): boolean {
+  return it.status !== "closed" || (!!it.changed && Date.now() - new Date(it.changed).getTime() < closedDays * 864e5);
+}
+
+function Card({ it, onStart, onStatus }: { it: Item; onStart: () => void; onStatus: (s: Status) => void }) {
+  return (
+    <li class={`tile inbox-item ${it.status}`} data-item={`${it.source}:${it.id}`} tabIndex={0} title="Start a session on this" onClick={onStart} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart()}>
+      <div class="inbox-meta">
+        <SourceIcon name={it.source} />
+        <span>{sentence(it.kind)}</span>
+        {it.author && <span>{it.author}</span>}
+        <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
+      </div>
+      <div class="title">{it.title}</div>
+      {it.description && <div class="inbox-desc">{it.description}</div>}
+      <div class="inbox-actions" onClick={(e) => e.stopPropagation()}>
+        <select value={it.status} aria-label="Status" title="Move to another status" onChange={(e) => onStatus(e.currentTarget.value as Status)}>
+          {statuses.map(([value, label]) => (
+            <option value={value}>{label}</option>
+          ))}
+        </select>
+        <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url}>
+          Open
+        </a>
+        {it.status !== "closed" && (
+          <button type="button" class="small" title="Move to Closed" onClick={() => onStatus("closed")}>
+            Close
+          </button>
+        )}
+      </div>
+    </li>
+  );
+}
+
+export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => void) => void }) {
   const [view, setView] = useState<View>();
+  const [collapsed, setCollapsed] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.inbox.collapsed") || "[]"));
+  const [allClosed, setAllClosed] = useState(false);
   const running = !!view?.sources.some((s) => s.running);
 
   const load = () => act(async () => setView(await api<View>("GET", "/api/inbox")));
@@ -83,10 +134,31 @@ export function Inbox({ onStart }: { onStart: (prompt: string) => void }) {
   }, [running]);
 
   const refresh = (source = "") => act(async () => setView(await api<View>("POST", "/api/inbox/refresh", { source })));
-  const dismiss = (it: InboxItem) => act(async () => setView(await api<View>("POST", "/api/inbox/dismiss", { source: it.source, id: it.id })));
+  // A moved card renders under another column, so the focus that was on one of its controls goes back to its status menu.
+  const [refocus, setRefocus] = useState<string>();
+  useEffect(() => {
+    if (refocus) document.querySelector<HTMLElement>(`[data-item="${CSS.escape(refocus)}"] select`)?.focus();
+    setRefocus(undefined);
+  }, [view, refocus]);
+  const move = (it: Item, status: Status) =>
+    act(async () => {
+      const key = `${it.source}:${it.id}`;
+      const focused = document.activeElement?.closest("[data-item]")?.getAttribute("data-item") === key;
+      setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status }));
+      if (focused) setRefocus(key);
+    });
+  const collapse = (day: string, on: boolean) => {
+    const next = on ? [...collapsed, day] : collapsed.filter((d) => d !== day);
+    localStorage.setItem("kk.inbox.collapsed", JSON.stringify(next));
+    setCollapsed(next);
+  };
 
   if (!view) return <main class="inbox muted">Loading…</main>;
   const ready = view.sources.some((s) => !s.setup);
+  const older = view.items.filter((it) => !recent(it)).length;
+  const shown = allClosed ? view.items : view.items.filter(recent);
+  const days = new Map<string, Item[]>();
+  for (const it of shown) days.set(dayKey(it.time), [...(days.get(dayKey(it.time)) ?? []), it]);
 
   return (
     <main class="inbox" data-scope="inbox">
@@ -103,35 +175,45 @@ export function Inbox({ onStart }: { onStart: (prompt: string) => void }) {
               </li>
             ))}
           </ul>
+          {(older > 0 || allClosed) && <Check label={`Show ${older} closed earlier`} checked={allClosed} onChange={(e) => setAllClosed(e.currentTarget.checked)} />}
         </header>
       </Scope>
-      {view.items.length === 0 ? (
-        <p class="inbox-empty muted">{ready ? "Nothing waits for you." : "No source is set up yet. See Settings, Inbox."}</p>
+      {days.size === 0 ? (
+        <p class="inbox-empty muted">{!ready ? "No source is set up yet. See Settings, Inbox." : view.items.length ? "Everything is closed." : "Nothing waits for you."}</p>
       ) : (
-        <ul class="inbox-items">
-          {view.items.map((it) => (
-            <li key={`${it.source}:${it.id}`} class="inbox-item" tabIndex={0} title="Start a session on this" onClick={() => onStart(prompt(it))} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart(prompt(it))}>
-              <SourceIcon name={it.source} />
-              <div class="inbox-body">
-                <div class="inbox-meta">
-                  <span>{sentence(it.kind)}</span>
-                  {it.author && <span>{it.author}</span>}
-                  <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
-                  <span class="inbox-actions" onClick={(e) => e.stopPropagation()}>
-                    <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url}>
-                      Open
-                    </a>
-                    <button type="button" class="small" title="Dismiss, it does not come back" aria-label="Dismiss" onClick={() => dismiss(it)}>
-                      <i class="icon icon-close" />
-                    </button>
-                  </span>
+        <div class="inbox-board">
+          {[...days.entries()]
+            .sort((a, b) => b[0].localeCompare(a[0]))
+            .map(([day, items]) => (
+              <details class="day" key={day} open={!collapsed.includes(day)} onToggle={(e) => e.currentTarget.open === collapsed.includes(day) && collapse(day, !e.currentTarget.open)}>
+                <summary class="day-label">
+                  <i class="icon icon-chevron" />
+                  {dayLabel(day)}
+                  <span class="count">{items.length}</span>
+                </summary>
+                <div class="inbox-columns">
+                  {statuses.map(([value, label]) => {
+                    const cell = items.filter((it) => it.status === value);
+                    return (
+                      <section class={`column inbox-column ${cell.length ? "" : "empty"}`} key={value}>
+                        <header>
+                          <h1>{label}</h1>
+                          <span class="count">{cell.length}</span>
+                        </header>
+                        {cell.length > 0 && (
+                          <ul class="tiles">
+                            {cell.map((it) => (
+                              <Card key={`${it.source}:${it.id}`} it={it} onStart={() => onStart(prompt(it), () => move(it, "in_progress"))} onStatus={(s) => move(it, s)} />
+                            ))}
+                          </ul>
+                        )}
+                      </section>
+                    );
+                  })}
                 </div>
-                <div class="inbox-title">{it.title}</div>
-                {it.description && <div class="inbox-desc">{it.description}</div>}
-              </div>
-            </li>
-          ))}
-        </ul>
+              </details>
+            ))}
+        </div>
       )}
     </main>
   );

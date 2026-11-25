@@ -57,11 +57,20 @@ export function Field(props: { label: string; children: ComponentChildren }) {
   );
 }
 
-export function Check({ label, ...rest }: { label: string; checked: boolean; disabled?: boolean; onChange: (e: TargetedEvent<HTMLInputElement>) => void }) {
+type CheckProps = {
+  label: string;
+  type?: "checkbox" | "radio";
+  checked: boolean;
+  disabled?: boolean;
+  onChange?: (e: TargetedEvent<HTMLInputElement>) => void;
+  onClick?: () => void;
+};
+
+export function Check({ label, type = "checkbox", ...rest }: CheckProps) {
   const [index, key] = useMnemonic(label);
   return (
     <label class="check" data-key={key}>
-      <input type="checkbox" {...rest} />
+      <input type={type} {...rest} />
       <Underlined label={label} index={index} />
     </label>
   );
@@ -83,6 +92,6 @@ document.addEventListener("keydown", (e) => {
   const el = candidates.find((c) => scope && scope.contains(c)) ?? candidates[0];
   e.preventDefault();
   const input = el.matches("label") && el.querySelector<HTMLInputElement>("input, select, textarea");
-  if (input && input.type !== "checkbox") input.focus();
+  if (input && input.type !== "checkbox" && input.type !== "radio") input.focus();
   else (input || el).click();
 });

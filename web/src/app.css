@@ -187,7 +187,16 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .column .project { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column h1 { font-size: 15px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column h1.muted { color: var(--text-dim); }
+.column .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.column .name h1 { flex: 1; min-width: 0; }
+.column .name .count { flex: none; font-size: 12px; color: var(--text-dim); }
+.column header.foldable { cursor: pointer; }
+.column header.foldable:hover h1 { color: var(--text-strong); }
+.column header .icon-chevron { flex: none; width: 9px; height: 9px; color: var(--text-dim); transition: transform .12s; }
+.column header[aria-expanded="true"] .icon-chevron { transform: rotate(90deg); }
+.column.folded header { border-bottom: 0; }
 .column .tiles { gap: 0; padding: 8px; }
+.column .tiles.unlinked { gap: 8px; }
 .column .link { position: relative; flex: none; height: 16px; }
 .column .link::before { content: ""; position: absolute; left: 50%; top: 5px; bottom: 2px; border-left: 1px solid var(--text-dim); }
 .column .link::after { content: ""; position: absolute; left: calc(50% - 4px); top: 1px; border: 4.5px solid transparent; border-top: 0; border-bottom: 6px solid var(--text-dim); }
