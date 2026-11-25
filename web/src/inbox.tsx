@@ -162,12 +162,12 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
     act(async () => {
       const key = `${it.source}:${it.id}`;
       const focused = document.activeElement?.closest("[data-item]")?.getAttribute("data-item") === key;
-      const before = view;
-      setView((v) => v && { ...v, items: v.items.map((x) => (x === it ? { ...x, status, changed: new Date().toISOString() } : x)) });
+      const set = (s: Status, changed?: string) => setView((v) => v && { ...v, items: v.items.map((x) => (`${x.source}:${x.id}` === key ? { ...x, status: s, changed } : x)) });
+      set(status, new Date().toISOString());
       try {
         setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status }));
       } catch (e) {
-        setView(before);
+        set(it.status, it.changed);
         throw e;
       }
       if (focused) setRefocus(key);

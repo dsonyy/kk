@@ -20,24 +20,24 @@
 .inbox-columns { display: grid; grid-template-columns: 1fr; gap: 8px; padding-top: 8px; }
 @container (min-width: 520px) { .inbox-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @container (min-width: 960px) { .inbox-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@container (max-width: 519px) { .inbox-columns:not(.drag-here) .inbox-column.empty { display: none; } }
 .column.inbox-column header { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 10px; }
 .column.inbox-column h1 { font-size: 13px; }
 .inbox-column .count { font-size: 11px; color: var(--text-dim); }
 .inbox-column.empty header { border-bottom: 0; }
 .inbox-column.empty h1 { color: var(--text-dim); }
+/* In one column an empty status is only its header, which stays as a drop target so a drag does not shift the cards. */
 .inbox-column { min-height: 120px; }
+@container (max-width: 519px) { .inbox-column.empty { min-height: 0; } }
 .column.inbox-column .tiles { gap: 8px; }
 .inbox-column.target { outline: 1px dashed var(--line-strong); outline-offset: -1px; }
 .inbox-column.over { outline: 1px solid var(--text-strong); background: var(--surface-2); }
 .inbox-column.over h1 { color: var(--text-strong); }
 .inbox-columns.drag-elsewhere { opacity: .4; }
-.inbox-columns.drag-elsewhere .inbox-column, .inbox-columns.drag-here .inbox-column:not(.target) { cursor: no-drop; }
 /* The source icon takes a column of its own beside the meta line and the title, and everything below lines up with the title. */
 .tile.inbox-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 4px 10px; }
 .inbox-item > * { grid-column: 2; min-width: 0; }
 .inbox-item > .source-icon { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; margin-top: 1px; stroke-width: .9; }
-.inbox-item.lifted { border-color: var(--text-strong); background: var(--surface-2); }
+.inbox-item.lifted { border-color: var(--text-strong); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--text-strong); }
 .inbox-item.dragging { border-style: dashed; border-color: var(--line-strong); background: none; }
 .inbox-item.dragging > * { visibility: hidden; }
 .inbox-item:focus-visible { border-color: var(--text); }
