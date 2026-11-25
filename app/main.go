@@ -112,6 +112,8 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	s.inbox = openInbox(store.dir, func() map[string]InboxSettings { return s.cfg().Inbox })
 	mux := s.routes()
 	go watchStats()
@@ -132,9 +134,8 @@ func serve() error {
 			s.tick()
 		}
 	}()
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
+	s.inbox.stop()
 	os.Remove(sockPath())
 	return nil
 }

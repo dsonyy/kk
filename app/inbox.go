@@ -78,6 +78,10 @@ type Inbox struct {
 	mu       sync.Mutex
 	state    inboxState
 	running  map[string]bool
+	// ctx ends the running fetches when the server stops, and wait waits for them.
+	ctx    context.Context
+	cancel context.CancelFunc
+	wait   sync.WaitGroup
 }
 
 const (
@@ -89,6 +93,7 @@ const (
 
 func openInbox(dir string, settings func() map[string]InboxSettings) *Inbox {
 	in := &Inbox{dir: dir, settings: settings, running: map[string]bool{}, state: inboxState{Sources: map[string]*sourceState{}}}
+	in.ctx, in.cancel = context.WithCancel(context.Background())
 	in.sources = []inboxSource{githubSource{}, linearSource{dir: dir}, slackSource{dir: dir}, gmailSource{dir: dir}}
 	if data, err := os.ReadFile(in.path()); err == nil {
 		yaml.Unmarshal(data, &in.state)
@@ -170,22 +175,36 @@ func (in *Inbox) tick(now time.Time) {
 	}
 }
 
+// stop ends the running fetches and waits for them, so no run outlives the server.
+func (in *Inbox) stop() {
+	in.mu.Lock()
+	in.cancel()
+	in.mu.Unlock()
+	in.wait.Wait()
+}
+
 // refresh fetches one source in the background unless it already runs.
 func (in *Inbox) refresh(s inboxSource) {
 	in.mu.Lock()
-	if in.running[s.name()] {
+	if in.running[s.name()] || in.ctx.Err() != nil {
 		in.mu.Unlock()
 		return
 	}
 	in.running[s.name()] = true
+	in.wait.Add(1)
 	in.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), inboxFetchLimit)
+		defer in.wait.Done()
+		ctx, cancel := context.WithTimeout(in.ctx, inboxFetchLimit)
 		defer cancel()
 		items, err := s.fetch(ctx)
 		in.mu.Lock()
 		defer in.mu.Unlock()
 		delete(in.running, s.name())
+		// A fetch cut short by the server stopping did not check the source.
+		if in.ctx.Err() != nil {
+			return
+		}
 		st := in.state.Sources[s.name()]
 		st.Checked = time.Now()
 		st.Error, st.Missing = "", ""

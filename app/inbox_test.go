@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -429,7 +431,7 @@ func (s blockingSource) fetch(context.Context) ([]InboxItem, error) {
 
 func testInbox(t *testing.T, checked time.Time) (*Inbox, blockingSource) {
 	src := blockingSource{&atomic.Int32{}, make(chan struct{})}
-	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{},
+	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{}, ctx: context.Background(),
 		settings: func() map[string]InboxSettings { return map[string]InboxSettings{"github": {true, 15, 60}} },
 		state:    inboxState{Sources: map[string]*sourceState{"github": {Checked: checked}}, Status: map[string]itemStatus{}}}
 	return in, src
@@ -486,6 +488,28 @@ func waitFor(t *testing.T, ok func() bool) {
 	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("timed out")
+		}
+	}
+}
+
+// A connector run that outlives the server keeps writing where the server no longer looks, and here into a test's removed directory.
+func TestInboxStopsRunsWithServer(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\necho $$ > \"$FAKE_HOME/run.$$\"\nexec sleep 600\n"), 0o755)
+	e := newEnv(t, "PATH="+bin+":"+fakeBin+":"+os.Getenv("PATH"))
+	var runs []string
+	for deadline := time.Now().Add(10 * time.Second); len(runs) < 2; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("connector runs started: %v, want slack and gmail", runs)
+		}
+		runs, _ = filepath.Glob(filepath.Join(e.fake, "run.*"))
+	}
+	e.stop()
+	for _, run := range runs {
+		pid, _ := strconv.Atoi(strings.TrimPrefix(filepath.Ext(run), "."))
+		if syscall.Kill(pid, 0) == nil {
+			syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("connector run %d outlived the server", pid)
 		}
 	}
 }
