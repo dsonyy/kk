@@ -92,6 +92,6 @@ document.addEventListener("keydown", (e) => {
   const el = candidates.find((c) => scope && scope.contains(c)) ?? candidates[0];
   e.preventDefault();
   const input = el.matches("label") && el.querySelector<HTMLInputElement>("input, select, textarea");
-  if (input && input.type !== "checkbox") input.focus();
+  if (input && input.type !== "checkbox" && input.type !== "radio") input.focus();
   else (input || el).click();
 });
