@@ -2,17 +2,20 @@ import { useEffect, useState } from "preact/hooks";
 import { act, api, flash, when, type Settings } from "./api";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { dayKey, dayLabel } from "./board";
+import { Menu } from "./filter";
 import "./inbox.css";
 
 export type InboxItem = { source: string; id: string; kind: string; title: string; description: string; url: string; author: string; time: string };
 
-type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; work_minutes: number; off_minutes: number };
+type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; methods: Record<string, boolean>; interval_minutes: number };
 
 type Item = InboxItem & { status: Status; changed?: string };
 
-type View = { items: Item[]; sources: Source[]; work_hours: [number, number] };
+type View = { items: Item[]; sources: Source[] };
 
 const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack", gmail: "Gmail" };
+
+const methods: Record<string, string> = { gh: "GitHub CLI (gh)", api_key: "API key", connector: "claude.ai connector" };
 
 export function SourceIcon({ name }: { name: string }) {
   return <i class={`source-icon source-${name}`} aria-label={labels[name] ?? name} role="img" />;
@@ -37,13 +40,11 @@ function prompt(it: InboxItem): string {
   return lines.join("\n");
 }
 
-const hour = (h: number) => `${String(h).padStart(2, "0")}:00`;
-
-function status(s: Source, [from, to]: View["work_hours"]) {
+function status(s: Source) {
   if (s.running) return <span>Checking…</span>;
   if (s.setup) return <span class="muted">Not set up. {s.setup}</span>;
   const checked = s.checked ? `Checked ${ago(s.checked)}` : "Not checked yet";
-  const every = s.enabled ? `every ${s.work_minutes} min from ${hour(from)} to ${hour(to)}, every ${s.off_minutes} min outside` : "automatic checks off";
+  const every = s.enabled ? `every ${s.interval_minutes} min while kk has focus` : "switched off in Settings";
   return (
     <>
       <span class="muted">
@@ -56,18 +57,35 @@ function status(s: Source, [from, to]: View["work_hours"]) {
 
 const statuses = [
   ["backlog", "Backlog"],
-  ["todo", "To do"],
   ["in_progress", "In progress"],
+  ["dismissed", "Dismissed"],
   ["closed", "Closed"],
 ] as const;
 
 type Status = (typeof statuses)[number][0];
 
-// Closed items stay on the board for a week after they were closed; older ones show on request.
-const closedDays = 7;
+const dates: Record<string, [string, number]> = { any: ["Any time", Infinity], today: ["Today", 0], week: ["Last 7 days", 6], month: ["Last 30 days", 29] };
 
-function recent(it: Item): boolean {
-  return it.status !== "closed" || (!!it.changed && Date.now() - new Date(it.changed).getTime() < closedDays * 864e5);
+type Filter = { date: string; kinds: string[]; sources: string[] };
+
+const noFilter: Filter = { date: "any", kinds: [], sources: [] };
+
+function matches(f: Filter, it: Item) {
+  const days = dates[f.date]?.[1] ?? Infinity;
+  const today = new Date();
+  const since = new Date(today.getFullYear(), today.getMonth(), today.getDate() - days).getTime();
+  return (days === Infinity || Date.parse(it.time) >= since) && (!f.kinds.length || f.kinds.includes(it.kind)) && (!f.sources.length || f.sources.includes(it.source));
+}
+
+function useStored<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => JSON.parse(localStorage.getItem(key) ?? "null") ?? initial);
+  return [
+    value,
+    (v) => {
+      localStorage.setItem(key, JSON.stringify(v));
+      setValue(v);
+    },
+  ];
 }
 
 type Drag = { key: string; day: string; status: Status };
@@ -94,11 +112,28 @@ function Card({ it, dragging, onStart, onStatus, onDrag }: { it: Item; dragging:
         onDrag(false);
       }}
     >
-      <SourceIcon name={it.source} />
-      <div class="inbox-meta">
-        <span>{sentence(it.kind)}</span>
-        {it.author && <span>{it.author}</span>}
-        <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
+      <div class="inbox-top">
+        <SourceIcon name={it.source} />
+        <div class="inbox-meta">
+          <span>{sentence(it.kind)}</span>
+          {it.author && <span>{it.author}</span>}
+          <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
+        </div>
+        {it.status !== "dismissed" && (
+          <button
+            type="button"
+            class="inbox-dismiss"
+            aria-label="Dismiss"
+            title="Move to Dismissed"
+            draggable={false}
+            onClick={(e) => {
+              e.stopPropagation();
+              onStatus("dismissed");
+            }}
+          >
+            <i class="icon icon-close" />
+          </button>
+        )}
       </div>
       <div class="title">{it.title}</div>
       {it.description && <div class="inbox-desc">{it.description}</div>}
@@ -106,11 +141,6 @@ function Card({ it, dragging, onStart, onStatus, onDrag }: { it: Item; dragging:
         <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url} draggable={false}>
           Open
         </a>
-        {it.status !== "closed" && (
-          <button type="button" class="small" title="Move to Closed" onClick={() => onStatus("closed")}>
-            Close
-          </button>
-        )}
       </div>
     </li>
   );
@@ -118,8 +148,9 @@ function Card({ it, dragging, onStart, onStatus, onDrag }: { it: Item; dragging:
 
 export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => void) => void }) {
   const [view, setView] = useState<View>();
-  const [collapsed, setCollapsed] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.inbox.collapsed") || "[]"));
-  const [allClosed, setAllClosed] = useState(false);
+  const [collapsed, setCollapsed] = useStored<string[]>("kk.inbox.collapsed", []);
+  const [hidden, setHidden] = useStored<string[]>("kk.inbox.hidden", ["dismissed", "closed"]);
+  const [filter, setFilter] = useStored<Filter>("kk.inbox.filter", noFilter);
   const running = !!view?.sources.some((s) => s.running);
 
   const load = () => act(async () => setView(await api<View>("GET", "/api/inbox")));
@@ -157,16 +188,15 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
       }
       if (focused) setRefocus(key);
     });
-  const collapse = (day: string, on: boolean) => {
-    const next = on ? [...collapsed, day] : collapsed.filter((d) => d !== day);
-    localStorage.setItem("kk.inbox.collapsed", JSON.stringify(next));
-    setCollapsed(next);
-  };
+  const collapse = (day: string, on: boolean) => setCollapsed(on ? [...collapsed, day] : collapsed.filter((d) => d !== day));
 
   if (!view) return <main class="inbox muted">Loading…</main>;
   const ready = view.sources.some((s) => !s.setup);
-  const older = view.items.filter((it) => !recent(it)).length;
-  const shown = allClosed ? view.items : view.items.filter(recent);
+  const columns = statuses.filter(([value]) => !hidden.includes(value));
+  const matching = view.items.filter((it) => matches(filter, it));
+  const shown = matching.filter((it) => !hidden.includes(it.status));
+  const filtered = filter.date !== "any" || filter.kinds.length + filter.sources.length > 0;
+  const kinds = [...new Set([...view.items.map((it) => it.kind), ...filter.kinds])].sort();
   const days = new Map<string, Item[]>();
   for (const it of shown) days.set(dayKey(it.time), [...(days.get(dayKey(it.time)) ?? []), it]);
 
@@ -181,15 +211,34 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
                 <SourceIcon name={s.name} />
                 <b>{labels[s.name]}</b>
                 {s.running && <i class="spinner" />}
-                {status(s, view.work_hours)}
+                {status(s)}
               </li>
             ))}
           </ul>
-          {(older > 0 || allClosed) && <Check label={`Show ${older} closed earlier`} checked={allClosed} onChange={(e) => setAllClosed(e.currentTarget.checked)} />}
+          <div class="filters">
+            <Menu label="Date" single options={Object.entries(dates).map(([v, [text]]) => [v, text])} selected={[filter.date]} onChange={([date]) => setFilter({ ...filter, date })} />
+            <Menu label="Type" options={kinds.map((k) => [k, sentence(k)])} selected={filter.kinds} onChange={(k) => setFilter({ ...filter, kinds: k })} />
+            <Menu label="Source" options={view.sources.map((s) => [s.name, labels[s.name] ?? s.name])} selected={filter.sources} onChange={(s) => setFilter({ ...filter, sources: s })} />
+            <Menu
+              label="Columns"
+              plain
+              options={statuses.map(([value, label]) => [value, label])}
+              selected={columns.map(([value]) => value)}
+              onChange={(shownColumns) => shownColumns.length && setHidden(statuses.map(([value]) => value).filter((v) => !shownColumns.includes(v)))}
+            />
+            {filtered && <Button label="Clear" class="small" title="Show every item" onClick={() => setFilter(noFilter)} />}
+            {filtered && (
+              <span class="muted">
+                {matching.length} of {view.items.length}
+              </span>
+            )}
+          </div>
         </header>
       </Scope>
       {days.size === 0 ? (
-        <p class="inbox-empty muted">{!ready ? "No source is set up yet. See Settings, Inbox." : view.items.length ? "Everything is closed." : "Nothing waits for you."}</p>
+        <p class="inbox-empty muted">
+          {!ready ? "No source is set up yet. See Settings, Inbox." : !view.items.length ? "Nothing waits for you." : filtered ? "No items match the filters." : "Nothing in the columns shown."}
+        </p>
       ) : (
         <div class="inbox-board">
           {[...days.entries()]
@@ -201,8 +250,8 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
                   {dayLabel(day)}
                   <span class="count">{items.length}</span>
                 </summary>
-                <div class={`inbox-columns ${drag ? (drag.day === day ? "drag-here" : "drag-elsewhere") : ""}`}>
-                  {statuses.map(([value, label]) => {
+                <div class={`inbox-columns ${drag ? (drag.day === day ? "drag-here" : "drag-elsewhere") : ""}`} data-n={columns.length} style={{ "--n": columns.length }}>
+                  {columns.map(([value, label]) => {
                     const cell = items.filter((it) => it.status === value);
                     const target = drag?.day === day && drag.status !== value;
                     return (
@@ -262,10 +311,8 @@ type Draft = Settings["inbox"];
 export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: Draft) => void }) {
   const [keySet, setKeySet] = useState<boolean>();
   const [key, setKey] = useState("");
-  const [hours, setHours] = useState<View["work_hours"]>();
   useEffect(() => {
     act(async () => setKeySet((await api<{ set: boolean }>("GET", "/api/inbox/linear-key")).set));
-    act(async () => setHours((await api<View>("GET", "/api/inbox")).work_hours));
   }, []);
   const saveKey = (next: string) =>
     act(async () => {
@@ -276,20 +323,25 @@ export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: D
 
   return (
     <>
-      <span class="hint">kk checks each source on its own and shows what it finds in the Inbox tab. The Slack and Gmail checks are model runs and cost tokens.</span>
+      <span class="hint">kk checks each source on its own through each way switched on, only while the kk page has focus, and shows what it finds in the Inbox tab. The claude.ai connector checks are model runs and cost tokens.</span>
       <table class="inbox-settings">
         {Object.keys(labels).map((name) => {
-          const s = value[name] ?? { enabled: false, work_minutes: 15, off_minutes: 60 };
+          const s = value[name];
+          if (!s) return null;
           const set = (patch: Partial<typeof s>) => onValue({ ...value, [name]: { ...s, ...patch } });
           return (
             <tr key={name}>
+              <th>
+                <SourceIcon name={name} />
+                {labels[name]}
+              </th>
               <td>
-                <Check label={`Check ${labels[name]}`} checked={s.enabled} onChange={(e) => set({ enabled: e.currentTarget.checked })} />
+                {Object.keys(s.methods).map((m) => (
+                  <Check key={m} label={methods[m] ?? m} checked={s.methods[m]} onChange={(e) => set({ methods: { ...s.methods, [m]: e.currentTarget.checked } })} />
+                ))}
               </td>
               <td>
-                every <input type="number" min={1} value={s.work_minutes} aria-label={`${labels[name]} interval in working hours, minutes`} onInput={(e) => set({ work_minutes: Number(e.currentTarget.value) })} /> min
-                {hours && ` from ${hour(hours[0])} to ${hour(hours[1])}`}, every
-                <input type="number" min={1} value={s.off_minutes} aria-label={`${labels[name]} interval outside working hours, minutes`} onInput={(e) => set({ off_minutes: Number(e.currentTarget.value) })} /> min outside
+                every <input type="number" min={1} value={s.interval_minutes} aria-label={`${labels[name]} interval, minutes`} onInput={(e) => set({ interval_minutes: Number(e.currentTarget.value) })} /> min
               </td>
             </tr>
           );

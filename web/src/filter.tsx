@@ -94,9 +94,10 @@ export function shortName(project: string, all: string[]) {
   return all.filter((p) => p.endsWith(`/${last}`)).length > 1 ? parts.slice(-2).join("/") : last;
 }
 
-type MenuProps = { label: string; options: [string, string][]; selected: string[]; mono?: boolean; single?: boolean; onChange: (selected: string[]) => void };
+// A plain menu shows its label alone, for choices that are not a filter.
+type MenuProps = { label: string; options: [string, string][]; selected: string[]; mono?: boolean; single?: boolean; plain?: boolean; onChange: (selected: string[]) => void };
 
-function Menu({ label, options, selected, mono, single, onChange }: MenuProps) {
+export function Menu({ label, options, selected, mono, single, plain, onChange }: MenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -116,10 +117,10 @@ function Menu({ label, options, selected, mono, single, onChange }: MenuProps) {
     setOpen(false);
     onChange([value]);
   };
-  const text = single ? `${label}: ${options.find(([v]) => v === selected[0])?.[1]}` : selected.length ? `${label} (${selected.length})` : label;
+  const text = single ? `${label}: ${options.find(([v]) => v === selected[0])?.[1]}` : selected.length && !plain ? `${label} (${selected.length})` : label;
   return (
     <div class="menu" ref={ref}>
-      <Button label={text} class={selected.length && !single ? "small on" : "small"} aria-expanded={open} onClick={() => setOpen(!open)} />
+      <Button label={text} class={selected.length && !single && !plain ? "small on" : "small"} aria-expanded={open} onClick={() => setOpen(!open)} />
       {open && (
         <div class={mono ? "menu-list mono" : "menu-list"}>
           {options.map(([value, text]) => (
