@@ -29,8 +29,18 @@ function Markdown({ text, partial }: { text: string; partial?: boolean }) {
   return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function openIds(): string[] {
-  return [...new Set(decodeURIComponent(location.hash.slice(1)).split(",").filter(Boolean))];
+// The hash lists the open panels in order. Pinned ones stay until hidden; the one marked with ~ is reused by the next
+// session the user opens, so at most one panel is unpinned.
+type Panel = { id: string; pinned: boolean };
+
+function openPanels(): Panel[] {
+  const out: Panel[] = [];
+  for (const part of decodeURIComponent(location.hash.slice(1)).split(",")) {
+    const id = part.replace(/^~/, "");
+    if (id && !out.some((p) => p.id === id)) out.push({ id, pinned: !part.startsWith("~") });
+  }
+  const slot = out.map((p) => p.pinned).lastIndexOf(false);
+  return out.map((p, i) => ({ ...p, pinned: p.pinned || i !== slot }));
 }
 
 function App() {
@@ -42,24 +52,30 @@ function App() {
   const empty = sessions.length ? "No sessions match the filters." : "No sessions yet.";
   const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} />;
   const [details, setDetails] = useState<Record<string, Conversation>>({});
-  const [open, setOpenState] = useState(openIds);
+  const [panels, setPanels] = useState(openPanels);
+  const open = panels.map((p) => p.id);
   const [tab, setTab] = useState<"Agents" | "Sessions" | "Inbox" | "Settings">("Agents");
   // The prompt a new session starts with; undefined while the dialog is closed.
   const [creating, setCreating] = useState<string>();
-  const openRef = useRef(open);
-  openRef.current = open;
+  const openRef = useRef(panels);
+  openRef.current = panels;
+  const isOpen = (id: string) => openRef.current.some((p) => p.id === id);
 
-  const setOpen = (ids: string[]) => {
-    location.hash = ids.join(",");
+  const setOpen = (next: Panel[]) => {
+    openRef.current = next;
+    setPanels(next);
+    location.hash = next.map((p) => (p.pinned ? p.id : `~${p.id}`)).join(",");
   };
-  const hide = (id: string) => setOpen(openRef.current.filter((x) => x !== id));
+  const hide = (id: string) => setOpen(openRef.current.filter((p) => p.id !== id));
+  // Unpinning a panel makes it the reusable one, so the panel that held that place stays open as a pinned one.
+  const pin = (id: string, on: boolean) => setOpen(openRef.current.map((p) => (p.id === id ? { id, pinned: on } : { ...p, pinned: p.pinned || !on })));
 
   const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1"))), []);
   const loadDetail = useCallback(async (id: string) => {
     try {
       const c = await api<Conversation>("GET", `/api/conversations/${id}`);
       setDetails((d) => ({ ...d, [id]: c }));
-      if (c.unread && (openRef.current.includes(id) || id === COORDINATOR) && document.hasFocus()) {
+      if (c.unread && (isOpen(id) || id === COORDINATOR) && document.hasFocus()) {
         await api("POST", `/api/conversations/${id}/seen`, {});
       }
     } catch (e) {
@@ -80,16 +96,16 @@ function App() {
       clearTimeout(timer);
       timer = window.setTimeout(() => {
         loadList();
-        for (const id of pending) if (openRef.current.includes(id) || id === COORDINATOR) loadDetail(id);
+        for (const id of pending) if (isOpen(id) || id === COORDINATOR) loadDetail(id);
         pending.clear();
       }, 100);
     };
     source.onopen = () => {
       loadList();
       loadDetail(COORDINATOR);
-      for (const id of openRef.current) loadDetail(id);
+      for (const p of openRef.current) loadDetail(p.id);
     };
-    const onHash = () => setOpenState(openIds());
+    const onHash = () => setPanels(openPanels());
     window.addEventListener("hashchange", onHash);
     return () => {
       source.close();
@@ -114,9 +130,16 @@ function App() {
 
   const [conductor, setConductor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
 
+  // An object, so that showing the same panel twice scrolls to it again.
+  const [focus, setFocus] = useState<{ id: string }>();
+  useEffect(() => {
+    if (focus) document.getElementById(`panel-${focus.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  }, [focus]);
   const show = (id: string) => {
-    if (open.includes(id)) document.getElementById(`panel-${id}`)?.scrollIntoView({ behavior: "smooth", inline: "nearest" });
-    else setOpen([...open, id]);
+    const cur = openRef.current;
+    const slot = cur.findIndex((p) => !p.pinned);
+    if (!isOpen(id)) setOpen(slot < 0 ? [...cur, { id, pinned: false }] : cur.map((p, i) => (i === slot ? { id, pinned: false } : p)));
+    setFocus({ id });
   };
 
   return (
@@ -180,11 +203,11 @@ function App() {
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
-          {open.map((id) =>
+          {panels.map(({ id, pinned }) =>
             details[id] ? (
-              <ConversationView key={id} c={details[id]} reload={() => loadDetail(id)} onHide={() => hide(id)} />
+              <ConversationView key={id} c={details[id]} reload={() => loadDetail(id)} onHide={() => hide(id)} pinned={pinned} onPin={(on) => pin(id, on)} />
             ) : (
-              <main key={id} class="conversation placeholder">Loading…</main>
+              <main key={id} id={`panel-${id}`} class="conversation placeholder">Loading…</main>
             ),
           )}
         </div>
@@ -194,9 +217,10 @@ function App() {
         <NewSession
           initial={creating}
           onClose={() => setCreating(undefined)}
-          onCreated={() => {
+          onCreated={(c) => {
             loadList();
             setCreating(undefined);
+            show(c.id);
           }}
         />
       )}
@@ -467,7 +491,9 @@ const RETRY = "The last turn was cut off by an API error. Continue from where yo
 
 type Pending = { text: string; files: Attachment[]; expect: number };
 
-function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void }) {
+type ConversationViewProps = { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void; pinned?: boolean; onPin?: (on: boolean) => void };
+
+function ConversationView({ c, reload, side, onHide, pinned, onPin }: ConversationViewProps) {
   const [terminal, setShowTerminal] = useState(false);
   // Closing kills the window, so a closed session has no terminal to show.
   const showTerminal = terminal && !c.closed;
@@ -558,9 +584,20 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
   };
   const Tag = side ? "div" : "main";
   return (
-    <Tag class="conversation" id={`panel-${c.id}`} data-scope={side ? "coordinator" : `conversation-${c.id}`}>
+    <Tag class={onPin && !pinned ? "conversation unpinned" : "conversation"} id={`panel-${c.id}`} data-scope={side ? "coordinator" : `conversation-${c.id}`}>
       <Scope>
         <header class="conv-head">
+          {onPin && (
+            <button
+              type="button"
+              class={pinned ? "pin on" : "pin"}
+              aria-label={pinned ? "Unpin" : "Pin"}
+              title={pinned ? "Unpin: the next session you open replaces this panel" : "Pin: keep this panel open when you open another session"}
+              onClick={() => onPin(!pinned)}
+            >
+              <Icon name="pin" />
+            </button>
+          )}
           <h1>{side ? "Conductor" : c.title || "Untitled"}</h1>
           <div class="actions">
             {!c.closed && (
@@ -669,7 +706,7 @@ function ConversationView({ c, reload, side, onHide }: { c: Conversation; reload
             ))}
           </div>
         )}
-        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} />}
+        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} onDraft={onPin && !pinned ? () => onPin(true) : undefined} />}
       </Scope>
     </Tag>
   );
@@ -681,10 +718,15 @@ type ComposerProps = {
   onResume: () => void;
   onSend: (text: string, files: Attachment[]) => Promise<boolean>;
   insert: preact.RefObject<((text: string) => void) | undefined>;
+  // Called when the user starts a draft, so that opening another session does not drop it.
+  onDraft?: () => void;
 };
 
-function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
+function Composer({ c, exited, onResume, onSend, insert, onDraft }: ComposerProps) {
   const [text, setText] = useState("");
+  useEffect(() => {
+    if (text.trim()) onDraft?.();
+  }, [text]);
   const area = useRef<HTMLTextAreaElement>(null);
   const skills = useSkills(c.harness, c.dir);
   const attachments = useAttachments();
@@ -777,7 +819,7 @@ function span(from: string, to: string): string {
   return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
-function NewSession({ initial, onClose, onCreated }: { initial: string; onClose: () => void; onCreated: () => void }) {
+function NewSession({ initial, onClose, onCreated }: { initial: string; onClose: () => void; onCreated: (c: Conversation) => void }) {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [dirs, setDirs] = useState<string[]>([]);
   const [prompt, setPrompt] = useState(initial);
@@ -851,13 +893,13 @@ function NewSession({ initial, onClose, onCreated }: { initial: string; onClose:
     setBusy(true);
     act(async () => {
       try {
-        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt: withPaths(prompt, attachments.items as Attachment[]), session: resume?.id, worktree: inWorktree, conductor: managed });
+        const c = await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt: withPaths(prompt, attachments.items as Attachment[]), session: resume?.id, worktree: inWorktree, conductor: managed });
         localStorage.setItem("kk.harness", harness);
         localStorage.setItem("kk.models", JSON.stringify({ ...models, [harness]: model }));
         localStorage.setItem("kk.dir", dir);
         localStorage.setItem("kk.worktree", worktree ? "1" : "");
         localStorage.setItem("kk.managed", managed ? "1" : "");
-        onCreated();
+        onCreated(c);
       } finally {
         setBusy(false);
       }

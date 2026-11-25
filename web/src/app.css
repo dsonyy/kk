@@ -79,6 +79,7 @@ u.mnemonic { text-decoration: underline; text-decoration-color: var(--text-dim);
 .icon-interrupt { mask-image: url("/icons/interrupt.svg"); }
 .icon-reset { mask-image: url("/icons/reset.svg"); }
 .icon-power { mask-image: url("/icons/power.svg"); }
+.icon-pin { mask-image: url("/icons/pin.svg"); }
 button:has(.icon) { display: inline-flex; align-items: center; gap: 6px; }
 button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
@@ -201,6 +202,11 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .conversation.placeholder { align-items: center; justify-content: center; color: var(--text-dim); }
 .conv-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 4px var(--gap); padding: 10px var(--gap); border-bottom: 1px solid var(--line); }
 .conv-head h1 { flex: 1 1 12em; min-width: 0; font-size: 16px; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unpinned > .conv-head h1 { font-style: italic; }
+.conv-head .pin { flex: none; align-self: center; display: flex; margin: 0 -6px 0 -5px; padding: 4px; border-color: transparent; color: var(--text-dim); }
+.conv-head .pin:hover { border-color: var(--line-strong); color: var(--text-strong); }
+.conv-head .pin.on { border-color: var(--line-strong); background: var(--surface-2); color: var(--text-strong); }
+.conv-head .pin .icon { width: 13px; height: 13px; }
 .conv-head .meta { color: var(--text-dim); font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; flex: 0 0 100%; min-width: 0; }
 .conv-head .dir { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 60px; font-size: 12px; }
 .conv-head .dir .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
