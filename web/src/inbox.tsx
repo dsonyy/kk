@@ -90,11 +90,32 @@ function recent(it: Item): boolean {
   return it.status !== "closed" || (!!it.changed && Date.now() - new Date(it.changed).getTime() < closedDays * 864e5);
 }
 
-function Card({ it, onStart, onStatus }: { it: Item; onStart: () => void; onStatus: (s: Status) => void }) {
+type Drag = { key: string; day: string; status: Status };
+
+function Card({ it, dragging, onStart, onStatus, onDrag }: { it: Item; dragging: boolean; onStart: () => void; onStatus: (s: Status) => void; onDrag: (on: boolean) => void }) {
   return (
-    <li class={`tile inbox-item ${it.status}`} data-item={`${it.source}:${it.id}`} tabIndex={0} title="Start a session on this" onClick={onStart} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart()}>
+    <li
+      class={`tile inbox-item ${it.status} ${dragging ? "dragging" : ""}`}
+      data-item={`${it.source}:${it.id}`}
+      tabIndex={0}
+      title="Start a session on this, or drag it to another status"
+      draggable
+      onClick={onStart}
+      onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart()}
+      onDragStart={(e) => {
+        e.dataTransfer!.effectAllowed = "move";
+        e.dataTransfer!.setData("text/plain", it.title);
+        // The drag image is taken after this handler, so the card is lifted for it now and turns into a placeholder only afterwards.
+        e.currentTarget.classList.add("lifted");
+        setTimeout(() => onDrag(true));
+      }}
+      onDragEnd={(e) => {
+        e.currentTarget.classList.remove("lifted");
+        onDrag(false);
+      }}
+    >
+      <SourceIcon name={it.source} />
       <div class="inbox-meta">
-        <SourceIcon name={it.source} />
         <span>{sentence(it.kind)}</span>
         {it.author && <span>{it.author}</span>}
         <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
@@ -102,12 +123,7 @@ function Card({ it, onStart, onStatus }: { it: Item; onStart: () => void; onStat
       <div class="title">{it.title}</div>
       {it.description && <div class="inbox-desc">{it.description}</div>}
       <div class="inbox-actions" onClick={(e) => e.stopPropagation()}>
-        <select value={it.status} aria-label="Status" title="Move to another status" onChange={(e) => onStatus(e.currentTarget.value as Status)}>
-          {statuses.map(([value, label]) => (
-            <option value={value}>{label}</option>
-          ))}
-        </select>
-        <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url}>
+        <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url} draggable={false}>
           Open
         </a>
         {it.status !== "closed" && (
@@ -134,17 +150,26 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
   }, [running]);
 
   const refresh = (source = "") => act(async () => setView(await api<View>("POST", "/api/inbox/refresh", { source })));
-  // A moved card renders under another column, so the focus that was on one of its controls goes back to its status menu.
+  // A moved card renders under another column, so the focus that was on one of its controls goes back to the card.
   const [refocus, setRefocus] = useState<string>();
   useEffect(() => {
-    if (refocus) document.querySelector<HTMLElement>(`[data-item="${CSS.escape(refocus)}"] select`)?.focus();
+    if (refocus) document.querySelector<HTMLElement>(`[data-item="${CSS.escape(refocus)}"]`)?.focus();
     setRefocus(undefined);
   }, [view, refocus]);
+  const [drag, setDrag] = useState<Drag>();
+  const [over, setOver] = useState<Status>();
   const move = (it: Item, status: Status) =>
     act(async () => {
       const key = `${it.source}:${it.id}`;
       const focused = document.activeElement?.closest("[data-item]")?.getAttribute("data-item") === key;
-      setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status }));
+      const before = view;
+      setView((v) => v && { ...v, items: v.items.map((x) => (x === it ? { ...x, status, changed: new Date().toISOString() } : x)) });
+      try {
+        setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status }));
+      } catch (e) {
+        setView(before);
+        throw e;
+      }
       if (focused) setRefocus(key);
     });
   const collapse = (day: string, on: boolean) => {
@@ -191,11 +216,29 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
                   {dayLabel(day)}
                   <span class="count">{items.length}</span>
                 </summary>
-                <div class="inbox-columns">
+                <div class={`inbox-columns ${drag ? (drag.day === day ? "drag-here" : "drag-elsewhere") : ""}`}>
                   {statuses.map(([value, label]) => {
                     const cell = items.filter((it) => it.status === value);
+                    const target = drag?.day === day && drag.status !== value;
                     return (
-                      <section class={`column inbox-column ${cell.length ? "" : "empty"}`} key={value}>
+                      <section
+                        class={`column inbox-column ${cell.length ? "" : "empty"} ${target ? "target" : ""} ${target && over === value ? "over" : ""}`}
+                        key={value}
+                        onDragOver={(e) => {
+                          if (!target) return;
+                          e.preventDefault();
+                          e.dataTransfer!.dropEffect = "move";
+                          setOver(value);
+                        }}
+                        onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver((o) => (o === value ? undefined : o))}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const it = items.find((x) => `${x.source}:${x.id}` === drag?.key);
+                          setDrag(undefined);
+                          setOver(undefined);
+                          if (it && target) move(it, value);
+                        }}
+                      >
                         <header>
                           <h1>{label}</h1>
                           <span class="count">{cell.length}</span>
@@ -203,7 +246,17 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
                         {cell.length > 0 && (
                           <ul class="tiles">
                             {cell.map((it) => (
-                              <Card key={`${it.source}:${it.id}`} it={it} onStart={() => onStart(prompt(it), () => move(it, "in_progress"))} onStatus={(s) => move(it, s)} />
+                              <Card
+                                key={`${it.source}:${it.id}`}
+                                it={it}
+                                dragging={drag?.key === `${it.source}:${it.id}`}
+                                onStart={() => onStart(prompt(it), () => move(it, "in_progress"))}
+                                onStatus={(s) => move(it, s)}
+                                onDrag={(on) => {
+                                  setDrag(on ? { key: `${it.source}:${it.id}`, day, status: it.status } : undefined);
+                                  setOver(undefined);
+                                }}
+                              />
                             ))}
                           </ul>
                         )}
