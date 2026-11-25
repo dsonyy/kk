@@ -786,6 +786,7 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   const [resume, setResume] = useState<PastSession>();
   const [filter, setFilter] = useState("");
   const [worktree, setWorktree] = useState(localStorage.getItem("kk.worktree") === "1");
+  const [managed, setManaged] = useState(localStorage.getItem("kk.managed") === "1");
   const [repo, setRepo] = useState<Repo>();
   const promptRef = useRef<HTMLTextAreaElement>(null);
   // Cursor keeps its history per directory; the others have one history for all directories.
@@ -847,11 +848,12 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
     setBusy(true);
     act(async () => {
       try {
-        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt: withPaths(prompt, attachments.items as Attachment[]), session: resume?.id, worktree: inWorktree });
+        await api<Conversation>("POST", "/api/conversations", { harness, model, dir, prompt: withPaths(prompt, attachments.items as Attachment[]), session: resume?.id, worktree: inWorktree, conductor: managed });
         localStorage.setItem("kk.harness", harness);
         localStorage.setItem("kk.models", JSON.stringify({ ...models, [harness]: model }));
         localStorage.setItem("kk.dir", dir);
         localStorage.setItem("kk.worktree", worktree ? "1" : "");
+        localStorage.setItem("kk.managed", managed ? "1" : "");
         onCreated();
       } finally {
         setBusy(false);
@@ -896,6 +898,10 @@ function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: ()
                     ? "The directory is not a git repository."
                     : `The agent works in its own git worktree on a new branch off ${repo.branch}, apart from this checkout.`}
             </span>
+          </div>
+          <div class="field">
+            <Check label="Hand over to conductor" checked={managed} onChange={(e) => setManaged(e.currentTarget.checked)} />
+            <span class="hint">The conductor drives the session when it stops, until you write into it yourself.</span>
           </div>
           <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput

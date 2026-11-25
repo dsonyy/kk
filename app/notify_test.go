@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -188,5 +189,39 @@ func TestNotifyEveryRaise(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("second exit not reported: %q", e.notifications())
 		}
+	}
+}
+
+func TestHandOverToConductor(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	create := func(prompt string, conductor bool) string {
+		code, body := e.post("/api/conversations", map[string]any{"harness": "claude", "dir": e.work, "prompt": prompt, "conductor": conductor})
+		var c convView
+		if err := json.Unmarshal([]byte(body), &c); code != 200 || err != nil {
+			t.Fatalf("create: %d %s", code, body)
+		}
+		return c.ID
+	}
+	handed := create("hello\nfrom the user "+strings.Repeat("x", 400), true)
+	mine := create("hello mine", false)
+	e.waitNotified(handed, "the user started it in "+e.work+" and handed it over to you, first prompt \"hello from the user xxx")
+	e.waitNotified(handed, "\"; finished its turn. Look: kk screen "+handed)
+	e.waitFor("conductor's turn", handed, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
+	e.waitFor("user's turn", mine, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
+
+	e.mustKK("send", handed, "from the user")
+	e.waitFor("taken back by the user", handed, func(c convView) bool {
+		return hasEvent(c, kindAssistant, "echo: from the user") && c.Status == statusIdle && c.WaitingFor == waitingUser
+	})
+	time.Sleep(3 * time.Second)
+	got := e.notifications()
+	if n := countLines(got, handed, "handed it over"); n != 1 {
+		t.Errorf("%d handover lines, want one", n)
+	}
+	if n := countLines(got, mine, ""); n != 0 {
+		t.Errorf("%d lines for the user's own session, want none", n)
+	}
+	if t.Failed() {
+		t.Fatalf("notifications:\n%s", strings.Join(got, "\n---\n"))
 	}
 }
