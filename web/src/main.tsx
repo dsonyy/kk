@@ -180,8 +180,9 @@ function App() {
           </a>
         ))}
         <Button
-          class="conductor-toggle"
-          label={conductor ? "Hide conductor" : "Show conductor"}
+          class={conductor ? "conductor-toggle on" : "conductor-toggle"}
+          label="Conductor"
+          aria-pressed={conductor}
           title={conductor ? "Hide the conductor panel" : "Show the conductor panel"}
           onClick={() => {
             localStorage.setItem("kk.conductor", conductor ? "hidden" : "");

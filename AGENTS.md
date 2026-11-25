@@ -8,7 +8,7 @@ Design and plan: `~/brain/projects/kk/`.
 
 - English in code, UI text and commits.
 - Reproduce a bug with a failing end-to-end test before fixing it.
-- `just test` before committing. Tests need `tmux` and `curl`.
+- `just test` before committing. Tests need `tmux` and `curl`; the UI tests in `app/ui_test.go` need Chrome and are skipped without it.
 
 ## Never
 
