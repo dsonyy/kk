@@ -29,8 +29,9 @@ type watch struct {
 }
 
 type notice struct {
-	reason string
-	at     time.Time
+	reason   string
+	handover bool
+	at       time.Time
 }
 
 // stallAfter is how long a working agent may go without a hook, a transcript line or a change on its screen.
@@ -47,7 +48,20 @@ func (s *Server) controlled(id string) {
 // driven through the kk CLI and not escalated. The user sees their own agents in the web app.
 func conductorsTurn(c Conversation) bool { return c.ByAgent && c.Escalation == "" }
 
+// handOver tells the conductor about a conversation the user started and handed to it. With no conductor running, nobody hears of it.
+func (s *Server) handOver(id string) {
+	if !s.cfg().coordinator() {
+		return
+	}
+	s.mu.Lock()
+	s.handovers[id] = true
+	s.mu.Unlock()
+}
+
 var nonLetters = regexp.MustCompile(`[^\pL]+`)
+
+// shorten puts s on one line of at most max characters.
+func shorten(s string, max int) string { return firstLine(strings.Join(strings.Fields(s), " "), max) }
 
 // observe compares c with what the notifier last knew and queues the events the conductor should hear about.
 // The first tick only takes note: a restart is no news.
@@ -81,6 +95,8 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	s.mu.Lock()
 	raises := s.raises[c.ID]
 	quiet := now.Sub(s.controls[c.ID]) < controlQuiet
+	handover := s.handovers[c.ID]
+	delete(s.handovers, c.ID)
 	s.mu.Unlock()
 	if s.ticks == 1 {
 		w.raises = raises
@@ -99,8 +115,15 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 		reason = fmt.Sprintf("working with no hook, transcript or screen change for %s", stall.Round(time.Second))
 	}
 	w.attention, w.raises = attention, raises
+	n := s.notices[c.ID]
 	if reason != "" && !quiet {
-		s.notices[c.ID] = notice{reason, now}
+		n.reason, n.at = reason, now
+	}
+	if handover {
+		n.handover, n.at = true, now
+	}
+	if n.reason != "" || n.handover {
+		s.notices[c.ID] = n
 	}
 }
 
@@ -134,13 +157,31 @@ func (s *Server) flushNotices(now time.Time) {
 		c, ok := s.store.get(id)
 		n := s.notices[id]
 		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer news.
-		if !ok || c.Closed || !conductorsTurn(c) || n.reason == "needs action" && c.Attention == "" {
+		if !ok || c.Closed || !conductorsTurn(c) {
 			continue
 		}
-		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, n.reason)
-		if c.Attention != "" {
-			line += ": " + strings.TrimSuffix(firstLine(c.Attention, 300), ".")
+		if n.reason == "needs action" && c.Attention == "" {
+			n.reason = ""
 		}
+		var parts []string
+		if n.handover {
+			handover := "the user started it in " + c.Dir + " and handed it over to you"
+			if c.Prompt != "" {
+				handover += fmt.Sprintf(", first prompt %q", shorten(c.Prompt, 300))
+			}
+			parts = append(parts, handover)
+		}
+		if n.reason != "" {
+			reason := n.reason
+			if c.Attention != "" {
+				reason += ": " + strings.TrimSuffix(firstLine(c.Attention, 300), ".")
+			}
+			parts = append(parts, reason)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, strings.Join(parts, "; "))
 		lines = append(lines, line+". Look: kk screen "+id)
 	}
 	clear(s.notices)

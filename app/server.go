@@ -40,6 +40,8 @@ type Server struct {
 	raises  map[string]int
 	watches map[string]*watch
 	notices map[string]notice
+	// handovers holds the conversations the user started and handed to the conductor, until the conductor hears of them.
+	handovers map[string]bool
 }
 
 type convView struct {
@@ -259,6 +261,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Worktree bool `json:"worktree"`
 		// Group puts the conversation in a feature group. Without it kk decides from the prompt.
 		Group string `json:"group"`
+		// Conductor hands a conversation the user starts to the conductor, as if the conductor had started it.
+		Conductor bool `json:"conductor"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -278,6 +282,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "a group name is 1 to %d characters and not %q", groupMaxLen, ungrouped)
 	}
 	now := time.Now()
+	byAgent := !byUser(r) || in.Conductor
 	if in.Session != "" {
 		if in.Worktree {
 			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
@@ -291,10 +296,13 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			if p.ID != in.Session {
 				continue
 			}
-			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: !byUser(r)}
+			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: byAgent}
 			c.Group = s.groupName(c.Project(), in.Group)
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
+			}
+			if byUser(r) && in.Conductor {
+				s.handOver(c.ID)
 			}
 			s.queueGroup(c.ID)
 			return s.view(c, false), nil
@@ -304,7 +312,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return nil, fail(400, "prompt is empty")
 	}
-	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: !byUser(r)}
+	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: byAgent}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -314,6 +322,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	c.Group = s.groupName(c.Project(), in.Group)
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
+	}
+	if byUser(r) && in.Conductor {
+		s.handOver(c.ID)
 	}
 	s.queueGroup(c.ID)
 	return s.view(c, false), nil
