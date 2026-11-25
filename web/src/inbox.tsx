@@ -92,7 +92,7 @@ function recent(it: Item): boolean {
 
 function Card({ it, onStart, onStatus }: { it: Item; onStart: () => void; onStatus: (s: Status) => void }) {
   return (
-    <li class={`tile inbox-item ${it.status}`} tabIndex={0} title="Start a session on this" onClick={onStart} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart()}>
+    <li class={`tile inbox-item ${it.status}`} data-item={`${it.source}:${it.id}`} tabIndex={0} title="Start a session on this" onClick={onStart} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart()}>
       <div class="inbox-meta">
         <SourceIcon name={it.source} />
         <span>{sentence(it.kind)}</span>
@@ -134,7 +134,19 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
   }, [running]);
 
   const refresh = (source = "") => act(async () => setView(await api<View>("POST", "/api/inbox/refresh", { source })));
-  const move = (it: Item, status: Status) => act(async () => setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status })));
+  // A moved card renders under another column, so the focus that was on one of its controls goes back to its status menu.
+  const [refocus, setRefocus] = useState<string>();
+  useEffect(() => {
+    if (refocus) document.querySelector<HTMLElement>(`[data-item="${CSS.escape(refocus)}"] select`)?.focus();
+    setRefocus(undefined);
+  }, [view, refocus]);
+  const move = (it: Item, status: Status) =>
+    act(async () => {
+      const key = `${it.source}:${it.id}`;
+      const focused = document.activeElement?.closest("[data-item]")?.getAttribute("data-item") === key;
+      setView(await api<View>("POST", "/api/inbox/status", { source: it.source, id: it.id, status }));
+      if (focused) setRefocus(key);
+    });
   const collapse = (day: string, on: boolean) => {
     const next = on ? [...collapsed, day] : collapsed.filter((d) => d !== day);
     localStorage.setItem("kk.inbox.collapsed", JSON.stringify(next));
