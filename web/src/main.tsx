@@ -7,7 +7,7 @@ import { act, api, flash, harnessLabel, when, type Attachment, type Conversation
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
-import { Board } from "./board";
+import { Board, CardTitle } from "./board";
 import { Inbox } from "./inbox";
 import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
@@ -328,7 +328,7 @@ function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => v
   const cls = ["tile", on && "on", attention(c) || ((c.status === "working" || c.status === "background") && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || c.escalation || undefined}>
-      <div class="title">{c.title || "Untitled"}</div>
+      <CardTitle c={c} />
       {c.escalation && <div class="reason">{c.escalation}</div>}
       <div class="meta">
         <span>

@@ -80,6 +80,7 @@ u.mnemonic { text-decoration: underline; text-decoration-color: var(--text-dim);
 .icon-reset { mask-image: url("/icons/reset.svg"); }
 .icon-power { mask-image: url("/icons/power.svg"); }
 .icon-pin { mask-image: url("/icons/pin.svg"); }
+.icon-worktree { mask-image: url("/icons/worktree.svg"); }
 button:has(.icon) { display: inline-flex; align-items: center; gap: 6px; }
 button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
@@ -143,12 +144,16 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile:hover { border-color: var(--text); }
 .tile.on { border-color: var(--text-strong); background: var(--surface-2); }
 .tile .title { color: var(--text-strong); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tile .head { display: flex; align-items: flex-start; gap: 8px; }
+.tile .head .title { flex: 1; min-width: 0; }
+/* The margin centers the icon on the first line of the title, however many lines the title takes. */
+.tile .head .icon { flex: none; width: 12px; height: 12px; margin-top: 4px; color: var(--text-dim); }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .tile .state.user { color: var(--text-strong); }
 .tile .reason { padding-left: 8px; border-left: 2px solid var(--text-strong); color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile.warn { border-color: var(--warn-line); }
 .tile.unread { box-shadow: inset 3px 0 0 var(--text-strong); }
-.tile.unread .title::before { content: "● "; font-size: 10px; vertical-align: 1px; }
+.tile.unread .title::before { content: "●\00a0"; font-size: 10px; vertical-align: 1px; }
 .tile.exited { opacity: .6; }
 .tile.closed .title { color: var(--text-dim); }
 .tile.closed:not(.on, :hover) { opacity: .65; background: none; }

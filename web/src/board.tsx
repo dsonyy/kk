@@ -25,6 +25,15 @@ function columns(list: Conversation[], sort: Sort): Column[] {
   return cols.sort((a, b) => Number(!a.group) - Number(!b.group) || byName(a.group, b.group) || byName(a.project, b.project));
 }
 
+export function CardTitle({ c }: { c: Conversation }) {
+  return (
+    <div class="head">
+      <div class="title">{c.title || "Untitled"}</div>
+      {c.worktree && <i class="icon icon-worktree" role="img" aria-label="Git worktree" title={`Works in a git worktree: ${c.dir}`} />}
+    </div>
+  );
+}
+
 export const dayKey = (t: string | number) => new Date(t).toLocaleDateString("en-CA");
 
 export function dayLabel(key: string): string {
@@ -94,7 +103,7 @@ export function Board({ list, sort, empty, folded, onFold, onOpen }: BoardProps)
                           <Fragment key={c.id}>
                             {i > 0 && arrows && <li class="link" aria-hidden="true" />}
                             <li class={`tile ${cls}`} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
-                              <div class="title">{c.title || "Untitled"}</div>
+                              <CardTitle c={c} />
                               <div class="meta">
                                 <span>{harnessLabel(c.harness)}</span>
                                 <span class="state">

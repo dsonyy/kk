@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +19,36 @@ func git(dir string, args ...string) (string, error) {
 		return "", errors.New(text)
 	}
 	return text, nil
+}
+
+// inWorktree reports whether the agent of c works in a linked git worktree, whether kk made it or not. It reads files
+// because the list asks about every conversation, too often to run git for each.
+func inWorktree(c Conversation) bool {
+	if c.Repo != "" {
+		return true
+	}
+	dir, err := filepath.EvalSymlinks(c.Dir)
+	if err != nil {
+		// A removed directory can only tell by its path.
+		return strings.Contains(c.Dir, "/"+worktreesDir+"/")
+	}
+	for {
+		data, err := os.ReadFile(filepath.Join(dir, ".git"))
+		if errors.Is(err, fs.ErrNotExist) && filepath.Dir(dir) != dir {
+			dir = filepath.Dir(dir)
+			continue
+		}
+		// In a linked worktree .git is a file naming a directory that has a commondir file. A submodule's has none.
+		gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+		if !ok {
+			return false
+		}
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(dir, gitdir)
+		}
+		_, err = os.Stat(filepath.Join(gitdir, "commondir"))
+		return err == nil
+	}
 }
 
 func handleRepo(r *http.Request) (any, error) {

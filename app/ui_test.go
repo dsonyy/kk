@@ -297,3 +297,145 @@ func TestNewSessionWindowKeepsItsSize(t *testing.T) {
 	p.until(`!document.querySelector(".past .tile")`)
 	same("on a low screen without earlier sessions", low)
 }
+
+// worktreeSessions starts or resumes sessions in and outside git worktrees and returns, by title, the ids and whether
+// each agent works in a worktree.
+func (e *env) worktreeSessions() (map[string]string, map[string]bool) {
+	t := e.t
+	t.Helper()
+	root := filepath.Dir(e.home)
+	git := func(dir string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=kk", "-c", "user.email=kk@example.com"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(e.work, "init", "-q", "-b", "trunk")
+	os.MkdirAll(filepath.Join(e.work, "sub"), 0o755)
+	os.WriteFile(filepath.Join(e.work, "sub", "file"), []byte("x"), 0o644)
+	git(e.work, "add", ".")
+	git(e.work, "commit", "-q", "-m", "first")
+	side, own := filepath.Join(root, "side"), filepath.Join(e.work, ".claude", "worktrees", "own")
+	git(e.work, "worktree", "add", "-q", "-b", "side", side)
+	git(e.work, "worktree", "add", "-q", "-b", "own", own)
+	link, separate, bare := filepath.Join(root, "link"), filepath.Join(root, "separate"), filepath.Join(root, "no-git")
+	os.Symlink(filepath.Join(side, "sub"), link)
+	os.MkdirAll(bare, 0o755)
+	// Like a submodule, this checkout has a .git file and is not a linked worktree.
+	git(root, "init", "-q", "--separate-git-dir", filepath.Join(root, "separate.git"), separate)
+
+	ids, inWorktree := map[string]string{}, map[string]bool{}
+	start := func(title, dir string, worktree bool, flags ...string) {
+		args := append([]string{"new", "codex", "-C", dir}, flags...)
+		ids[title], inWorktree[title] = e.mustKK(append(args, title)...), worktree
+	}
+	start("Investigate why the nightly pipeline fails on the main branch only", e.work, true, "-w")
+	start("Rename_the_configuration_loader_and_every_caller_of_it_in_one_go", side, true)
+	start("Made by hand", filepath.Join(side, "sub"), true)
+	start("Behind a link", link, true)
+	start("Main checkout", filepath.Join(e.work, "sub"), false)
+	start("Separate git directory", separate, false)
+	start("Outside git", bare, false)
+
+	project := filepath.Join(root, ".claude", "projects", "-work")
+	os.MkdirAll(project, 0o755)
+	resume := func(n int, title, dir string, worktree bool) {
+		session := fmt.Sprintf("11111111-2222-4333-8444-%012d", n)
+		lines := fmt.Sprintf(`{"type":"user","timestamp":"2026-11-20T10:00:00Z","cwd":%q,"message":{"content":"earlier question"}}`+"\n"+`{"type":"ai-title","aiTitle":%q}`+"\n", dir, title)
+		os.WriteFile(filepath.Join(project, session+".jsonl"), []byte(lines), 0o644)
+		code, body := e.post("/api/conversations", map[string]string{"harness": "claude", "session": session})
+		var c convView
+		if err := json.Unmarshal([]byte(body), &c); code != 200 || err != nil {
+			t.Fatalf("resume %s: %d %s", title, code, body)
+		}
+		ids[title], inWorktree[title] = c.ID, worktree
+	}
+	resume(1, "Resumed in a worktree", own, true)
+	resume(2, "Resumed in the checkout", e.work, false)
+	return ids, inWorktree
+}
+
+func TestWorktreeSessionsAreMarked(t *testing.T) {
+	e := newEnv(t)
+	ids, want := e.worktreeSessions()
+	check := func(state string) {
+		t.Helper()
+		for title, id := range ids {
+			if got := e.conv(id).Worktree; got != want[title] {
+				t.Errorf("%s: %q in a worktree: %v, want %v", state, title, got, want[title])
+			}
+		}
+	}
+	check("at the start")
+	// A removed worktree stays marked when kk made it or its path says what it was.
+	kk := e.conv(ids["Investigate why the nightly pipeline fails on the main branch only"])
+	for _, dir := range []string{kk.Dir, e.conv(ids["Resumed in a worktree"]).Dir} {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("after the worktrees were removed")
+}
+
+func TestWorktreeIcon(t *testing.T) {
+	e := newEnv(t)
+	ids, want := e.worktreeSessions()
+	for title, id := range ids {
+		if !strings.HasPrefix(title, "Resumed") {
+			e.waitFor(title, id, func(c convView) bool { return c.Status == statusIdle })
+		}
+	}
+	p := e.openPage(1600, 1000)
+	type card struct {
+		Title, Label, Tooltip, Dir string
+		Icon                       bool
+		// Distances in pixels: from the title to the icon, from the icon to the card's inner edge, and between the middles of the icon and the title's first line.
+		Gap, Edge, Middle float64
+		// Start is how far below the top of the title its text begins, past the mark of an unread card.
+		Width, Height, Lines, Start float64
+	}
+	for _, view := range []struct{ tab, cards string }{{"Agents", ".sidebar .tile"}, {"Sessions", ".board .tile"}} {
+		p.click(fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .tab")].find((a) => a.textContent === %q)`, view.tab))
+		p.until(fmt.Sprintf(`document.querySelectorAll(%q).length === %d`, view.cards, len(ids)))
+		var cards []card
+		p.eval(fmt.Sprintf(`[...document.querySelectorAll(%q)].map((tile) => {
+			const title = tile.querySelector(".title"), icon = tile.querySelector(".icon-worktree")
+			const out = { title: title.textContent, icon: !!icon }
+			const line = parseFloat(getComputedStyle(title).lineHeight), t = title.getBoundingClientRect()
+			out.lines = t.height / line
+			const first = document.createRange()
+			first.setStart(title.firstChild, 0)
+			first.setEnd(title.firstChild, 1)
+			out.start = first.getBoundingClientRect().top - t.top
+			if (!icon) return out
+			const i = icon.getBoundingClientRect(), s = getComputedStyle(tile)
+			return { ...out, label: icon.getAttribute("aria-label"), tooltip: icon.title, width: i.width, height: i.height,
+				gap: i.left - t.right, edge: tile.getBoundingClientRect().right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth) - i.right,
+				middle: i.top + i.height / 2 - (t.top + line / 2) }
+		})`, view.cards), &cards)
+		long := 0
+		for _, c := range cards {
+			if c.Icon != want[c.Title] {
+				t.Errorf("%s: icon on %q: %v, want %v", view.tab, c.Title, c.Icon, want[c.Title])
+			}
+			if c.Lines > 2.05 || c.Start > 10 {
+				t.Errorf("%s: %q takes %.1f lines, starting %.0f px down", view.tab, c.Title, c.Lines, c.Start)
+			}
+			if !c.Icon {
+				continue
+			}
+			if c.Lines > 1.5 {
+				long++
+			}
+			if dir := e.conv(ids[c.Title]).Dir; c.Label != "Git worktree" || c.Tooltip != "Works in a git worktree: "+dir {
+				t.Errorf("%s: tooltip of %q: %q %q", view.tab, c.Title, c.Label, c.Tooltip)
+			}
+			if c.Width != 12 || c.Height != 12 || c.Gap < 6 || math.Abs(c.Edge) > 0.5 || math.Abs(c.Middle) > 1 {
+				t.Errorf("%s: icon of %q is out of place: %+v", view.tab, c.Title, c)
+			}
+		}
+		if long == 0 {
+			t.Errorf("%s: no title long enough to wrap next to the icon", view.tab)
+		}
+	}
+}

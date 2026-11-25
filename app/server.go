@@ -57,6 +57,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// Worktree says the agent works in a git worktree, apart from the main checkout.
+	Worktree bool `json:"worktree"`
 }
 
 type apiError struct {
@@ -193,7 +195,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), Worktree: inWorktree(c), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
