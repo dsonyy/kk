@@ -52,22 +52,27 @@ type sourceState struct {
 // An item without a status record is in the backlog.
 const (
 	statusBacklog    = "backlog"
-	statusTodo       = "todo"
 	statusInProgress = "in_progress"
+	statusDismissed  = "dismissed"
 	statusClosed     = "closed"
 )
+
+var statuses = []string{statusBacklog, statusInProgress, statusDismissed, statusClosed}
 
 type itemStatus struct {
 	Status  string    `yaml:"status"`
 	Changed time.Time `yaml:"changed,omitempty"`
+	// Auto is set when kk closed the item because the source stopped returning it, so it reopens when it comes back.
+	Auto bool `yaml:"auto,omitempty"`
 }
 
 type inboxState struct {
+	// Items holds what the sources returned on their last successful check, and the items out of the backlog they no longer return.
 	Items   []InboxItem             `yaml:"items"`
 	Sources map[string]*sourceState `yaml:"sources"`
-	// Status is keyed by source:id and kept apart from the items, which every refresh replaces.
+	// Status is keyed by source:id and outlives the item, so an item that comes back keeps it.
 	Status map[string]itemStatus `yaml:"status"`
-	// Dismissed is the list of an earlier version, read once and turned into closed items.
+	// Dismissed is the list of an earlier version, read once and turned into status records.
 	Dismissed []string `yaml:"dismissed,omitempty"`
 }
 
@@ -87,6 +92,7 @@ type Inbox struct {
 const (
 	descriptionMax  = 600
 	statusMax       = 2000
+	keptMax         = 300
 	inboxFetchLimit = 5 * time.Minute
 )
 
@@ -103,12 +109,7 @@ func openInbox(dir string, settings func() map[string]InboxSettings) *Inbox {
 	if in.state.Status == nil {
 		in.state.Status = map[string]itemStatus{}
 	}
-	if len(in.state.Dismissed) > 0 {
-		// Without a close time, the dismissed items count as closed long ago.
-		for _, key := range in.state.Dismissed {
-			in.state.Status[key] = itemStatus{Status: statusClosed}
-		}
-		in.state.Dismissed = nil
+	if in.migrate() {
 		in.save()
 	}
 	for _, s := range in.sources {
@@ -117,6 +118,28 @@ func openInbox(dir string, settings func() map[string]InboxSettings) *Inbox {
 		}
 	}
 	return in
+}
+
+// migrate turns the records of earlier versions into the statuses of this one: the legacy dismissed list, which an earlier
+// version turned into closed records without a time, becomes dismissed, and to do becomes the backlog.
+func (in *Inbox) migrate() bool {
+	changed := len(in.state.Dismissed) > 0
+	for _, key := range in.state.Dismissed {
+		in.state.Status[key] = itemStatus{Status: statusDismissed}
+	}
+	in.state.Dismissed = nil
+	for key, st := range in.state.Status {
+		switch {
+		case st.Status == "todo":
+			delete(in.state.Status, key)
+		case st.Status == statusClosed && st.Changed.IsZero():
+			in.state.Status[key] = itemStatus{Status: statusDismissed}
+		default:
+			continue
+		}
+		changed = true
+	}
+	return changed
 }
 
 func (in *Inbox) path() string { return filepath.Join(in.dir, "inbox.yaml") }
@@ -142,17 +165,6 @@ func (in *Inbox) source(name string) inboxSource {
 	return nil
 }
 
-// Working hours are local server time, every day of the week.
-const workFrom, workTo = 8, 20
-
-// interval is the source's interval at the time of the tick, so crossing 08:00 or 20:00 applies on the next tick.
-func (c InboxSettings) interval(now time.Time) time.Duration {
-	if h := now.Hour(); h >= workFrom && h < workTo {
-		return time.Duration(c.WorkMinutes) * time.Minute
-	}
-	return time.Duration(c.OffMinutes) * time.Minute
-}
-
 // tick refreshes every enabled source whose interval has passed since its last check, also across restarts.
 // The page calls it while it has focus, so sources are not checked while nobody looks.
 func (in *Inbox) tick(now time.Time) {
@@ -160,9 +172,9 @@ func (in *Inbox) tick(now time.Time) {
 	for _, s := range in.sources {
 		c := cfg[s.name()]
 		in.mu.Lock()
-		due := now.Sub(in.state.Sources[s.name()].Checked) >= c.interval(now)
+		due := now.Sub(in.state.Sources[s.name()].Checked) >= time.Duration(c.IntervalMinutes)*time.Minute
 		in.mu.Unlock()
-		if c.Enabled && due && s.ready() == nil {
+		if c.enabled() && due && s.ready() == nil {
 			in.refresh(s)
 		}
 	}
@@ -205,7 +217,6 @@ func (in *Inbox) refresh(s inboxSource) {
 		switch {
 		case errors.As(err, &missing):
 			st.Missing = string(missing)
-			in.setItems(s.name(), nil)
 		case err != nil:
 			// Only the error, never the output, which may hold message text.
 			st.Error = err.Error()
@@ -217,8 +228,11 @@ func (in *Inbox) refresh(s inboxSource) {
 	}()
 }
 
+// setItems takes the items of a successful check. Backlog items the source no longer returns leave the inbox, the others
+// stay, and those in progress close until they come back.
 func (in *Inbox) setItems(source string, items []InboxItem) {
-	kept := slices.DeleteFunc(in.state.Items, func(it InboxItem) bool { return it.Source == source })
+	now := time.Now()
+	var next, gone []InboxItem
 	seen := map[string]bool{}
 	for _, it := range items {
 		it.Source = source
@@ -227,9 +241,31 @@ func (in *Inbox) setItems(source string, items []InboxItem) {
 			continue
 		}
 		seen[it.ID] = true
-		kept = append(kept, it)
+		key := source + ":" + it.ID
+		if st := in.state.Status[key]; st.Status == statusClosed && st.Auto {
+			in.state.Status[key] = itemStatus{Status: statusInProgress, Changed: now}
+		}
+		next = append(next, it)
 	}
-	in.state.Items = kept
+	for _, it := range in.state.Items {
+		key := it.Source + ":" + it.ID
+		st := in.state.Status[key]
+		switch {
+		case it.Source != source:
+			next = append(next, it)
+		case seen[it.ID] || st.Status == "":
+		case st.Status == statusInProgress:
+			in.state.Status[key] = itemStatus{Status: statusClosed, Changed: now, Auto: true}
+			fallthrough
+		default:
+			gone = append(gone, it)
+		}
+	}
+	sort.SliceStable(gone, func(i, j int) bool {
+		return in.state.Status[gone[i].Source+":"+gone[i].ID].Changed.After(in.state.Status[gone[j].Source+":"+gone[j].ID].Changed)
+	})
+	in.state.Items = append(next, gone[:min(len(gone), keptMax)]...)
+	in.prune()
 }
 
 func safeURL(u string) bool { return strings.HasPrefix(u, "https://") }
@@ -248,8 +284,9 @@ type sourceView struct {
 	Checked time.Time `json:"checked,omitzero"`
 	Error   string    `json:"error"`
 	Running bool      `json:"running"`
-	Work    int       `json:"work_minutes"`
-	Off     int       `json:"off_minutes"`
+	// Methods holds every way of integrating the source, switched on or off.
+	Methods  map[string]bool `json:"methods"`
+	Interval int             `json:"interval_minutes"`
 }
 
 type itemView struct {
@@ -261,20 +298,22 @@ type itemView struct {
 type inboxView struct {
 	Items   []itemView   `json:"items"`
 	Sources []sourceView `json:"sources"`
-	// WorkHours is [from, to) in whole local hours.
-	WorkHours [2]int `json:"work_hours"`
 }
 
 func (in *Inbox) view() inboxView {
 	cfg := in.settings()
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	v := inboxView{Items: []itemView{}, WorkHours: [2]int{workFrom, workTo}}
+	v := inboxView{Items: []itemView{}}
 	setUp := map[string]bool{}
 	for _, s := range in.sources {
 		st := in.state.Sources[s.name()]
 		c := cfg[s.name()]
-		sv := sourceView{Name: s.name(), Enabled: c.Enabled, Checked: st.Checked, Error: st.Error, Running: in.running[s.name()], Work: c.WorkMinutes, Off: c.OffMinutes}
+		methods := map[string]bool{}
+		for _, m := range inboxMethods[s.name()] {
+			methods[m] = c.Methods[m]
+		}
+		sv := sourceView{Name: s.name(), Enabled: c.enabled(), Checked: st.Checked, Error: st.Error, Running: in.running[s.name()], Methods: methods, Interval: c.IntervalMinutes}
 		if err := s.ready(); err != nil {
 			sv.Setup = err.Error()
 		} else if !sv.Running {
@@ -283,9 +322,10 @@ func (in *Inbox) view() inboxView {
 		setUp[s.name()] = sv.Setup == ""
 		v.Sources = append(v.Sources, sv)
 	}
+	// The backlog of a source that is not set up is out of date, but the items the user moved on stay in sight.
 	for _, it := range in.state.Items {
-		if setUp[it.Source] {
-			st := in.state.Status[it.Source+":"+it.ID]
+		st := in.state.Status[it.Source+":"+it.ID]
+		if setUp[it.Source] || st.Status != "" {
 			v.Items = append(v.Items, itemView{it, cmp.Or(st.Status, statusBacklog), st.Changed})
 		}
 	}
@@ -308,7 +348,7 @@ func (s *Server) handleInboxRefresh(r *http.Request) (any, error) {
 	cfg := s.cfg().Inbox
 	for _, src := range s.inbox.sources {
 		// One source refreshes on demand even when it is switched off; everything means every enabled source.
-		if (in.Source == src.name() || in.Source == "" && cfg[src.name()].Enabled) && src.ready() == nil {
+		if (in.Source == src.name() || in.Source == "" && cfg[src.name()].enabled()) && src.ready() == nil {
 			s.inbox.refresh(src)
 		}
 	}
@@ -327,7 +367,7 @@ func (s *Server) handleInboxStatus(r *http.Request) (any, error) {
 	if in.Source == "" || in.ID == "" {
 		return nil, fail(400, "source and id are required")
 	}
-	if !slices.Contains([]string{statusBacklog, statusTodo, statusInProgress, statusClosed}, in.Status) {
+	if !slices.Contains(statuses, in.Status) {
 		return nil, fail(400, "unknown status %q", in.Status)
 	}
 	s.inbox.setStatus(in.Source+":"+in.ID, in.Status)
@@ -340,8 +380,14 @@ func (in *Inbox) setStatus(key, status string) {
 	if status == statusBacklog {
 		delete(in.state.Status, key)
 	} else if in.state.Status[key].Status != status {
-		in.state.Status[key] = itemStatus{status, time.Now()}
+		in.state.Status[key] = itemStatus{Status: status, Changed: time.Now()}
 	}
+	in.prune()
+	in.save()
+}
+
+// prune forgets the oldest status records of items the inbox no longer holds, beyond statusMax.
+func (in *Inbox) prune() {
 	if len(in.state.Status) > statusMax {
 		// Forget the oldest records of items no source returns any more.
 		present := map[string]bool{}
@@ -359,5 +405,4 @@ func (in *Inbox) setStatus(key, status string) {
 			delete(in.state.Status, k)
 		}
 	}
-	in.save()
 }

@@ -59,7 +59,7 @@ export type Settings = {
   start_timeout_seconds: number;
   compact_after_minutes: number;
   compact_tokens: number;
-  inbox: Record<string, { enabled: boolean; work_minutes: number; off_minutes: number }>;
+  inbox: Record<string, { interval_minutes: number; methods: Record<string, boolean> }>;
 };
 
 // Rewind says what going back to an earlier message does in a harness, with and without restoring files.
