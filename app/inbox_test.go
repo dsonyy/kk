@@ -76,6 +76,15 @@ func (e *env) refreshInbox(source string) inboxView {
 	})
 }
 
+func statusOf(v inboxView, title string) string {
+	for _, it := range v.Items {
+		if it.Title == title {
+			return it.Status
+		}
+	}
+	return ""
+}
+
 func writeFile(t *testing.T, path, data string) {
 	t.Helper()
 	os.MkdirAll(filepath.Dir(path), 0o755)
@@ -125,7 +134,8 @@ func TestInbox(t *testing.T) {
 
 	gh := filepath.Join(e.fake, "gh")
 	writeFile(t, filepath.Join(gh, "review.json"), `[{"title":"Add the inbox","body":"Body of the PR","url":"https://github.com/acme/kk/pull/7","updatedAt":"2026-11-24T08:00:00Z","author":{"login":"eve"},"repository":{"nameWithOwner":"acme/kk"}}]`)
-	writeFile(t, filepath.Join(gh, "assigned.json"), `[{"title":"Crash on start","body":"Steps","url":"https://github.com/acme/kk/issues/3","updatedAt":"2026-11-19T08:00:00Z","isPullRequest":false,"author":{"login":"fay"},"repository":{"nameWithOwner":"acme/kk"}}]`)
+	assigned := `[{"title":"Crash on start","body":"Steps","url":"https://github.com/acme/kk/issues/3","updatedAt":"2026-11-19T08:00:00Z","isPullRequest":false,"author":{"login":"fay"},"repository":{"nameWithOwner":"acme/kk"}}]`
+	writeFile(t, filepath.Join(gh, "assigned.json"), assigned)
 	writeFile(t, filepath.Join(gh, "mentions.json"), `[{"title":"Add the inbox","body":"Body of the PR","url":"https://github.com/acme/kk/pull/7","updatedAt":"2026-11-24T08:00:00Z","author":{"login":"eve"},"repository":{"nameWithOwner":"acme/kk"}}]`)
 	writeFile(t, filepath.Join(gh, "notifications.json"), `[
 		{"id":"1","reason":"ci_activity","updated_at":"2026-11-25T08:00:00Z","subject":{"title":"CI failed","url":null,"type":"CheckSuite"},"repository":{"full_name":"acme/kk","html_url":"https://github.com/acme/kk"}}]
@@ -188,24 +198,35 @@ func TestInbox(t *testing.T) {
 		}
 	}
 
-	if code, out := e.post("/api/inbox/dismiss", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3"}); code != 200 {
-		t.Fatalf("dismiss: %d %s", code, out)
+	if code, _ := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": "done"}); code != 400 {
+		t.Fatalf("an unknown status should be refused: %d", code)
 	}
-	v = e.refreshInbox("github")
-	if slices.ContainsFunc(v.Items, func(it InboxItem) bool { return it.Title == "Crash on start" }) || len(v.Items) != 6 {
-		t.Fatalf("dismissed item came back: %+v", v.Items)
+	if code, out := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": "closed"}); code != 200 {
+		t.Fatalf("close: %d %s", code, out)
+	}
+	if code, out := e.post("/api/inbox/status", map[string]string{"source": "linear", "id": "issue:ENG-1", "status": "in_progress"}); code != 200 {
+		t.Fatalf("move: %d %s", code, out)
+	}
+	writeFile(t, filepath.Join(gh, "assigned.json"), `[]`)
+	if v = e.refreshInbox("github"); statusOf(v, "Crash on start") != "" {
+		t.Fatalf("an item the source no longer returns should leave the inbox: %+v", v.Items)
+	}
+	writeFile(t, filepath.Join(gh, "assigned.json"), assigned)
+	v = e.refreshInbox("")
+	if statusOf(v, "Crash on start") != "closed" || statusOf(v, "ENG-1 Fix the export") != "in_progress" || statusOf(v, "ENG-2 Search is slow") != "backlog" || len(v.Items) != 7 {
+		t.Fatalf("a refresh should keep the statuses: %+v", v.Items)
 	}
 
 	writeFile(t, filepath.Join(e.fake, "slack.out"), "Here are your messages: none worth noting.")
 	v = e.refreshInbox("slack")
-	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "expected JSON") || len(v.Items) != 6 {
+	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "expected JSON") || len(v.Items) != 7 {
 		t.Fatalf("bad Slack output should keep the items and record the error: %+v %d", s, len(v.Items))
 	}
 
 	e.stop()
 	e.start()
 	v = e.inbox()
-	if len(v.Items) != 6 || sourceOf(v, "slack").Error == "" {
+	if len(v.Items) != 7 || sourceOf(v, "slack").Error == "" || statusOf(v, "Crash on start") != "closed" {
 		t.Fatalf("the inbox did not survive a restart: %+v", v)
 	}
 
@@ -243,6 +264,30 @@ func TestInbox(t *testing.T) {
 	e.request("PUT", "/api/inbox/linear-key", strings.NewReader(`{"key":""}`))
 	if _, err := os.Stat(filepath.Join(e.home, "linear.key")); !os.IsNotExist(err) {
 		t.Fatal("clearing the key should remove the file")
+	}
+}
+
+func TestInboxMigratesDismissed(t *testing.T) {
+	e := newEnv(t)
+	e.stop()
+	writeFile(t, filepath.Join(e.home, "inbox.yaml"), `items:
+  - {source: github, id: a, kind: comment, title: Dismissed, url: "https://github.com/acme/kk/issues/1", time: 2026-11-20T10:00:00Z}
+  - {source: github, id: b, kind: comment, title: Kept, url: "https://github.com/acme/kk/issues/2", time: 2026-11-21T10:00:00Z}
+sources:
+  github: {checked: 2099-01-01T00:00:00Z}
+dismissed: ["github:a", "github:gone"]
+`)
+	for range 2 {
+		e.start()
+		v := e.inbox()
+		if statusOf(v, "Dismissed") != "closed" || statusOf(v, "Kept") != "backlog" || len(v.Items) != 2 {
+			t.Fatalf("dismissed items should be closed: %+v", v.Items)
+		}
+		e.stop()
+	}
+	data, _ := os.ReadFile(filepath.Join(e.home, "inbox.yaml"))
+	if strings.Contains(string(data), "dismissed") || !strings.Contains(string(data), "github:gone") {
+		t.Fatalf("the dismissed list should become status records:\n%s", data)
 	}
 }
 

@@ -46,6 +46,12 @@ function App() {
   const [tab, setTab] = useState<"Agents" | "Sessions" | "Inbox" | "Settings">("Agents");
   // The prompt a new session starts with; undefined while the dialog is closed.
   const [creating, setCreating] = useState<string>();
+  // Called once the session from the dialog exists, for the Inbox item it was started from.
+  const created = useRef<(() => void) | undefined>(undefined);
+  const create = (prompt: string, then?: () => void) => {
+    created.current = then;
+    setCreating(prompt);
+  };
   const openRef = useRef(open);
   openRef.current = open;
 
@@ -140,7 +146,7 @@ function App() {
       {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
-        {tab === "Inbox" && <Inbox onStart={setCreating} />}
+        {tab === "Inbox" && <Inbox onStart={create} />}
         {tab === "Sessions" && (
           <div class="sessions">
             <Scope>{filters()}</Scope>
@@ -157,7 +163,7 @@ function App() {
         <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">
-              <Button label="New session" icon="plus" class="primary" onClick={() => setCreating("")} />
+              <Button label="New session" icon="plus" class="primary" onClick={() => create("")} />
               {filters()}
             </div>
           </Scope>
@@ -195,6 +201,7 @@ function App() {
           initial={creating}
           onClose={() => setCreating(undefined)}
           onCreated={() => {
+            created.current?.();
             loadList();
             setCreating(undefined);
           }}

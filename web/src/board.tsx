@@ -23,9 +23,9 @@ function columns(list: Conversation[]): Column[] {
   return [...out.values()].sort((a, b) => projects.indexOf(a.project) - projects.indexOf(b.project) || Number(!a.group) - Number(!b.group));
 }
 
-const dayKey = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
+export const dayKey = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
 
-function dayLabel(key: string): string {
+export function dayLabel(key: string): string {
   const today = new Date();
   const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
   if (key === dayKey(today.toISOString())) return "Today";
