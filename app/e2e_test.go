@@ -628,10 +628,10 @@ func TestCoordinatorCompacts(t *testing.T) {
 	}
 	e.mustKK("send", coordinatorID, "big context")
 	e.waitFor("big answer", coordinatorID, func(c convView) bool { return c.Context == 60000 })
-	c = e.waitFor("compaction", coordinatorID, func(c convView) bool { return hasEvent(c, kindNote, "Conversation compacted") })
-	if c.Context != 3000 {
-		t.Fatalf("context after compaction: %d", c.Context)
-	}
+	// The note shows from the transcript as soon as it is read, the context only once the server's tick has stored it.
+	e.waitFor("compaction to 3000 tokens", coordinatorID, func(c convView) bool {
+		return hasEvent(c, kindNote, "Conversation compacted") && c.Context == 3000
+	})
 
 	e.stop()
 	e.start()
