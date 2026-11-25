@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,8 +30,10 @@ type Server struct {
 	mu       sync.Mutex
 	settings Settings
 	tails    map[string]*Tail
-	grouping chan string
-	subs     map[chan string]bool
+	// subagents holds the tails of the transcripts of agents' subagents, by path.
+	subagents map[string]*Tail
+	grouping  chan string
+	subs      map[chan string]bool
 	// asked counts, per conversation without a group, the user messages the last question about its group covered.
 	asked map[string]int
 	ticks int
@@ -57,6 +60,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// Usage covers every transcript of the conversation. It is nil for a harness that does not report usage.
+	Usage *Usage `json:"usage"`
 }
 
 type apiError struct {
@@ -128,7 +133,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/inbox/refresh", s.handleInboxRefresh)
 	api("POST /api/inbox/tick", func(*http.Request) (any, error) { s.inbox.tick(time.Now()); return s.inbox.view(), nil })
 	api("POST /api/inbox/status", s.handleInboxStatus)
-	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) { return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil })
+	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) {
+		return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil
+	})
 	api("PUT /api/inbox/linear-key", s.handleLinearKey)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
@@ -194,6 +201,10 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 
 func (s *Server) view(c Conversation, events bool) convView {
 	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	if usageParser[c.Harness] != nil {
+		u := c.TotalUsage()
+		v.Usage = &u
+	}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -789,6 +800,7 @@ func (s *Server) tick() {
 			continue
 		}
 		events := s.readTail(c)
+		usage := s.usage(c)
 		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
@@ -824,6 +836,16 @@ func (s *Server) tick() {
 				}
 				if t.Waiting && c.Status == statusIdle {
 					c.Status, changed = statusWorking, true
+				}
+			}
+			for path, u := range usage {
+				if !c.Usage[path].equal(u) {
+					// The stored conversation shares the map with this copy.
+					c.Usage = maps.Clone(c.Usage)
+					if c.Usage == nil {
+						c.Usage = map[string]Usage{}
+					}
+					c.Usage[path], changed = u, true
 				}
 			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
@@ -868,6 +890,29 @@ func (s *Server) readTail(c Conversation) *Tail {
 	}
 	cp := *t
 	return &cp
+}
+
+// usage returns what the models used in c's current transcript and in those of its subagents, by file, and whether
+// kk can tell. It counts the lines of the transcript that were read.
+func (s *Server) usage(c Conversation) map[string]Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tail(c)
+	list := subagents[c.Harness]
+	if t == nil || list == nil {
+		return nil
+	}
+	out := map[string]Usage{c.Transcript: t.Usage}
+	for _, p := range list(c) {
+		sub := s.subagents[p]
+		if sub == nil {
+			sub = newTail(p)
+			s.subagents[p] = sub
+		}
+		sub.read(usageParser[c.Harness])
+		out[p] = sub.Usage
+	}
+	return out
 }
 
 // tail returns the tail of c's transcript, or nil when kk cannot read it. The caller holds s.mu.

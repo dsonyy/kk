@@ -3,7 +3,7 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
+import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
@@ -339,7 +339,9 @@ function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => v
         </span>
       </div>
       <div class="meta">
-        <span>Created {when(c.created)}</span>
+        <span title={usageTitle(c.usage, c.harness)}>
+          {usageLabel(c.usage)}
+        </span>
         <span>Last {when(c.last_message)}</span>
       </div>
     </li>

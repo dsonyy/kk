@@ -38,6 +38,9 @@ type Conversation struct {
 	TurnEnded   time.Time `yaml:"turn_ended,omitempty" json:"turn_ended"`
 	Seen        time.Time `yaml:"seen,omitempty" json:"seen"`
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
+	// Usage is what the models used, by transcript file: a reset or a revert moves the conversation to a new one,
+	// and subagents write their own.
+	Usage map[string]Usage `yaml:"usage,omitempty" json:"-"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
 	ClosedAt    time.Time `yaml:"closed_at,omitempty" json:"closed_at,omitzero"`

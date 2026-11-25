@@ -63,11 +63,18 @@ type Tail struct {
 	tasks map[string]time.Time
 	// settled is when the last background task ended.
 	settled time.Time
-	stamp  time.Time
+	stamp   time.Time
+	// Usage is what the models used in this transcript.
+	Usage Usage
+	// metered holds the usage counted for each Claude Code message.
+	metered map[string]Usage
+	// codexTotal is the last running total of a Codex thread, and model the model of its current turn.
+	codexTotal codexCount
+	model      string
 }
 
 func newTail(path string) *Tail {
-	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}}
+	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}, metered: map[string]Usage{}}
 }
 
 func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
@@ -240,12 +247,10 @@ type claudeLine struct {
 		} `json:"origin"`
 	} `json:"attachment"`
 	Message struct {
+		ID      string          `json:"id"`
+		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
-		Usage   *struct {
-			Input       int `json:"input_tokens"`
-			CacheRead   int `json:"cache_read_input_tokens"`
-			CacheCreate int `json:"cache_creation_input_tokens"`
-		} `json:"usage"`
+		Usage   *claudeUsage    `json:"usage"`
 	} `json:"message"`
 }
 
@@ -360,6 +365,7 @@ func parseClaude(t *Tail, raw []byte) {
 			}
 		}
 	case "assistant":
+		meterClaude(t, &l)
 		if u := l.Message.Usage; u != nil {
 			t.Context = u.Input + u.CacheRead + u.CacheCreate
 		}
@@ -478,10 +484,10 @@ type codexLine struct {
 			Rollout string `json:"thread_id"`
 			End     int    `json:"end_byte_offset"`
 		} `json:"history_base"`
-		Info *struct {
-			Last struct {
-				Input int `json:"input_tokens"`
-			} `json:"last_token_usage"`
+		Model string `json:"model"`
+		Info  *struct {
+			Total *codexCount `json:"total_token_usage"`
+			Last  codexCount  `json:"last_token_usage"`
 		} `json:"info"`
 	} `json:"payload"`
 }
@@ -512,6 +518,7 @@ func parseCodex(t *Tail, raw []byte) {
 	if b := l.Payload.HistoryBase; l.Type == "session_meta" && b != nil {
 		codexBase(t, b.Rollout, b.End)
 	}
+	meterCodexLine(t, &l)
 	if l.Type != "event_msg" {
 		return
 	}
@@ -587,7 +594,8 @@ func codexBase(t *Tail, rollout string, end int) {
 		for _, line := range bytes.Split(data[:min(end, len(data))], []byte{'\n'}) {
 			parseCodex(base, line)
 		}
-		t.Events, t.Context, t.Last = base.Events, base.Context, base.Last
+		// The thread's running total goes on from where the kept part of the old rollout ends.
+		t.Events, t.Context, t.Last, t.codexTotal, t.model = base.Events, base.Context, base.Last, base.codexTotal, base.model
 		return
 	}
 }
