@@ -13,6 +13,7 @@ const states: Record<string, (c: Conversation) => boolean> = {
   Idle: (c) => !c.closed && c.status === "idle",
   Exited: (c) => !c.closed && c.status === "exited",
   Closed: (c) => !!c.closed,
+  "Closed < 48h": (c) => !!c.closed && !!c.closed_at && Date.now() - Date.parse(c.closed_at) < 48 * 3600e3,
 };
 
 export function matches(f: Filter, c: Conversation) {

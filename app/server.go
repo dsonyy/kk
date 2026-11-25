@@ -331,7 +331,7 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 		c.Status = statusIdle
 	}
 	c.Attention = ""
-	c.Closed = false
+	c.Closed, c.ClosedAt = false, time.Time{}
 	c.Launched = time.Now()
 	// Saved before the agent starts, because its first hook can arrive within milliseconds.
 	if err := s.store.put(*c); err != nil {
@@ -543,7 +543,7 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		killWindow(c.Window)
 	}
 	s.store.update(c.ID, func(c *Conversation) bool {
-		c.Closed, c.Status, c.Attention = true, statusExited, ""
+		c.Closed, c.ClosedAt, c.Status, c.Attention = true, time.Now(), statusExited, ""
 		return true
 	})
 	s.publish(c.ID)

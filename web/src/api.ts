@@ -34,6 +34,7 @@ export type Conversation = {
   // Why the conductor handed the agent to the user.
   escalation?: string;
   closed?: boolean;
+  closed_at?: string;
   context_tokens: number;
   unread: boolean;
   actions: string[];

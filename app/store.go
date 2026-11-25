@@ -40,6 +40,7 @@ type Conversation struct {
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
 	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
 	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
+	ClosedAt    time.Time `yaml:"closed_at,omitempty" json:"closed_at,omitzero"`
 	// ByAgent is set when an agent through the kk CLI, not the user, started the conversation or acted on it last.
 	// Conversations from before it existed count as the user's.
 	ByAgent bool `yaml:"by_agent,omitempty" json:"-"`

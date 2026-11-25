@@ -444,7 +444,7 @@ func TestClosedStaysReadable(t *testing.T) {
 		}
 		return found
 	}
-	if c := listed(); !c.Closed || c.Unread {
+	if c := listed(); !c.Closed || c.Unread || time.Since(c.ClosedAt) > time.Minute {
 		t.Fatalf("closed conversation in the full list: %+v", c)
 	}
 	if c := e.conv(id); !hasEvent(c, kindAssistant, "echo: first") {
@@ -452,7 +452,7 @@ func TestClosedStaysReadable(t *testing.T) {
 	}
 	e.mustKK("resume", id)
 	e.waitFor("reopened", id, func(c convView) bool { return c.Status == statusIdle && !c.Closed })
-	if ls := e.mustKK("ls"); !strings.Contains(ls, id) || listed().Closed {
+	if ls := e.mustKK("ls"); !strings.Contains(ls, id) || listed().Closed || !listed().ClosedAt.IsZero() {
 		t.Fatalf("reopened conversation not listed: %s", ls)
 	}
 	e.mustKK("send", id, "second")
