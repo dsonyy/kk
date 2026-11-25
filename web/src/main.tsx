@@ -110,6 +110,8 @@ function App() {
   for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
   const projects = [...groups.keys()];
 
+  const [conductor, setConductor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
+
   const show = (id: string) => {
     if (open.includes(id)) document.getElementById(`panel-${id}`)?.scrollIntoView({ behavior: "smooth", inline: "nearest" });
     else setOpen([...open, id]);
@@ -123,6 +125,15 @@ function App() {
             {t}
           </a>
         ))}
+        <Button
+          class="conductor-toggle"
+          label={conductor ? "Hide conductor" : "Show conductor"}
+          title={conductor ? "Hide the conductor panel" : "Show the conductor panel"}
+          onClick={() => {
+            localStorage.setItem("kk.conductor", conductor ? "hidden" : "");
+            setConductor(!conductor);
+          }}
+        />
       </nav>
       {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
@@ -175,7 +186,7 @@ function App() {
             ),
           )}
         </div>
-        <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} />
+        <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!conductor} />
       </div>
       {creating && (
         <NewSession
@@ -730,7 +741,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   );
 }
 
-function CoordinatorPanel({ c, reload }: { c?: Conversation; reload: () => void }) {
+function CoordinatorPanel({ c, reload, hidden }: { c?: Conversation; reload: () => void; hidden: boolean }) {
   const [width, setWidth] = useState(() => Number(localStorage.getItem("kk.panel")) || 440);
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
@@ -746,7 +757,7 @@ function CoordinatorPanel({ c, reload }: { c?: Conversation; reload: () => void 
     };
   }, [dragging, width]);
   return (
-    <aside class="side-panel" style={{ "--panel-width": `${width}px` }}>
+    <aside class="side-panel" hidden={hidden} style={{ "--panel-width": `${width}px` }}>
       <div class={dragging ? "panel-resize dragging" : "panel-resize"} onPointerDown={() => setDragging(true)} />
       {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">The conductor is not running.</div>}
     </aside>
