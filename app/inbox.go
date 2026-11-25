@@ -138,20 +138,35 @@ func (in *Inbox) source(name string) inboxSource {
 	return nil
 }
 
-// loop refreshes every enabled source when its interval has passed since its last check, also across restarts.
+// Working hours are local server time, every day of the week.
+const workFrom, workTo = 8, 20
+
+// interval is the source's interval at the time of the tick, so crossing 08:00 or 20:00 applies on the next tick.
+func (c InboxSettings) interval(now time.Time) time.Duration {
+	if h := now.Hour(); h >= workFrom && h < workTo {
+		return time.Duration(c.WorkMinutes) * time.Minute
+	}
+	return time.Duration(c.OffMinutes) * time.Minute
+}
+
 func (in *Inbox) loop() {
 	for {
-		cfg := in.settings()
-		for _, s := range in.sources {
-			c := cfg[s.name()]
-			in.mu.Lock()
-			due := time.Since(in.state.Sources[s.name()].Checked) >= time.Duration(c.IntervalMinutes)*time.Minute
-			in.mu.Unlock()
-			if c.Enabled && due && s.ready() == nil {
-				in.refresh(s)
-			}
-		}
+		in.tick(time.Now())
 		time.Sleep(inboxTick)
+	}
+}
+
+// tick refreshes every enabled source whose interval has passed since its last check, also across restarts.
+func (in *Inbox) tick(now time.Time) {
+	cfg := in.settings()
+	for _, s := range in.sources {
+		c := cfg[s.name()]
+		in.mu.Lock()
+		due := now.Sub(in.state.Sources[s.name()].Checked) >= c.interval(now)
+		in.mu.Unlock()
+		if c.Enabled && due && s.ready() == nil {
+			in.refresh(s)
+		}
 	}
 }
 
@@ -215,13 +230,14 @@ func excerpt(s string, max int) string {
 }
 
 type sourceView struct {
-	Name     string    `json:"name"`
-	Enabled  bool      `json:"enabled"`
-	Setup    string    `json:"setup"`
-	Checked  time.Time `json:"checked,omitzero"`
-	Error    string    `json:"error"`
-	Running  bool      `json:"running"`
-	Interval int       `json:"interval_minutes"`
+	Name    string    `json:"name"`
+	Enabled bool      `json:"enabled"`
+	Setup   string    `json:"setup"`
+	Checked time.Time `json:"checked,omitzero"`
+	Error   string    `json:"error"`
+	Running bool      `json:"running"`
+	Work    int       `json:"work_minutes"`
+	Off     int       `json:"off_minutes"`
 }
 
 type itemView struct {
@@ -233,17 +249,20 @@ type itemView struct {
 type inboxView struct {
 	Items   []itemView   `json:"items"`
 	Sources []sourceView `json:"sources"`
+	// WorkHours is [from, to) in whole local hours.
+	WorkHours [2]int `json:"work_hours"`
 }
 
 func (in *Inbox) view() inboxView {
 	cfg := in.settings()
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	v := inboxView{Items: []itemView{}}
+	v := inboxView{Items: []itemView{}, WorkHours: [2]int{workFrom, workTo}}
 	setUp := map[string]bool{}
 	for _, s := range in.sources {
 		st := in.state.Sources[s.name()]
-		sv := sourceView{Name: s.name(), Enabled: cfg[s.name()].Enabled, Checked: st.Checked, Error: st.Error, Running: in.running[s.name()], Interval: cfg[s.name()].IntervalMinutes}
+		c := cfg[s.name()]
+		sv := sourceView{Name: s.name(), Enabled: c.Enabled, Checked: st.Checked, Error: st.Error, Running: in.running[s.name()], Work: c.WorkMinutes, Off: c.OffMinutes}
 		if err := s.ready(); err != nil {
 			sv.Setup = err.Error()
 		} else if !sv.Running {
