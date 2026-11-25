@@ -31,6 +31,60 @@ export function useFilter(): [Filter, (f: Filter) => void] {
   ];
 }
 
+export type Sort = "active" | "created" | "title" | "state";
+
+const sorts: Record<Sort, string> = { active: "Last active", created: "Created", title: "Title", state: "State" };
+
+export function useSort(): [Sort, (s: Sort) => void] {
+  const [sort, setSort] = useState<Sort>(() => {
+    const saved = localStorage.getItem("kk.sort") as Sort;
+    return saved in sorts ? saved : "active";
+  });
+  return [
+    sort,
+    (s) => {
+      localStorage.setItem("kk.sort", s);
+      setSort(s);
+    },
+  ];
+}
+
+export const time = (iso: string) => Date.parse(iso) || 0;
+
+// The same signal the server orders its list by.
+export const lastActive = (c: Conversation) => Math.max(time(c.created), time(c.last_message), time(c.activity));
+
+const inProgress = (list: Conversation[]) => list.some((c) => !c.closed && c.status !== "exited");
+const finished = (c: Conversation) => Math.max(lastActive(c), time(c.closed_at ?? ""));
+
+// When a group was last active, or, once none of its sessions is in progress, when it finished.
+export const groupTime = (list: Conversation[]) => Math.max(...list.map(inProgress(list) ? lastActive : finished));
+
+// The default order of groups: those with a session in progress first, then the finished ones, each the most recent first.
+export const byActivity = (a: Conversation[], b: Conversation[]) => Number(inProgress(b)) - Number(inProgress(a)) || groupTime(b) - groupTime(a);
+
+const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+export const byName = (a: string, b: string) => collator.compare(a, b);
+
+// Needs action first, then the user's turn, at work, the conductor's turn, exited and closed.
+function stateRank(c: Conversation) {
+  if (c.closed) return 5;
+  if (c.attention) return 0;
+  if (c.status === "exited") return 4;
+  if (c.status === "working" || c.status === "starting") return 2;
+  return c.waiting_for === "conductor" ? 3 : 1;
+}
+
+export function compare(sort: Sort): (a: Conversation, b: Conversation) => number {
+  const recent = (a: Conversation, b: Conversation) => lastActive(b) - lastActive(a);
+  return {
+    active: recent,
+    created: (a: Conversation, b: Conversation) => time(b.created) - time(a.created),
+    title: (a: Conversation, b: Conversation) => byName(a.title || "Untitled", b.title || "Untitled") || recent(a, b),
+    state: (a: Conversation, b: Conversation) => stateRank(a) - stateRank(b) || recent(a, b),
+  }[sort];
+}
+
 // A directory goes by its last segment, and by its last two when another group ends the same way.
 export function shortName(project: string, all: string[]) {
   const parts = project.split("/").filter(Boolean);
@@ -38,9 +92,9 @@ export function shortName(project: string, all: string[]) {
   return all.filter((p) => p.endsWith(`/${last}`)).length > 1 ? parts.slice(-2).join("/") : last;
 }
 
-type MenuProps = { label: string; options: [string, string][]; selected: string[]; mono?: boolean; onChange: (selected: string[]) => void };
+type MenuProps = { label: string; options: [string, string][]; selected: string[]; mono?: boolean; single?: boolean; onChange: (selected: string[]) => void };
 
-function Menu({ label, options, selected, mono, onChange }: MenuProps) {
+function Menu({ label, options, selected, mono, single, onChange }: MenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -56,14 +110,23 @@ function Menu({ label, options, selected, mono, onChange }: MenuProps) {
     };
   }, [open]);
   const toggle = (value: string, on: boolean) => onChange(options.map(([v]) => v).filter((v) => (v === value ? on : selected.includes(v))));
+  const pick = (value: string) => {
+    setOpen(false);
+    onChange([value]);
+  };
+  const text = single ? `${label}: ${options.find(([v]) => v === selected[0])?.[1]}` : selected.length ? `${label} (${selected.length})` : label;
   return (
     <div class="menu" ref={ref}>
-      <Button label={selected.length ? `${label} (${selected.length})` : label} class={selected.length ? "small on" : "small"} aria-expanded={open} onClick={() => setOpen(!open)} />
+      <Button label={text} class={selected.length && !single ? "small on" : "small"} aria-expanded={open} onClick={() => setOpen(!open)} />
       {open && (
         <div class={mono ? "menu-list mono" : "menu-list"}>
           {options.map(([value, text]) => (
             <div key={value} title={mono ? value : undefined}>
-              <Check label={text} checked={selected.includes(value)} onChange={(e) => toggle(value, e.currentTarget.checked)} />
+              {single ? (
+                <Check label={text} type="radio" checked={selected.includes(value)} onClick={() => pick(value)} />
+              ) : (
+                <Check label={text} checked={selected.includes(value)} onChange={(e) => toggle(value, e.currentTarget.checked)} />
+              )}
             </div>
           ))}
         </div>
@@ -72,13 +135,16 @@ function Menu({ label, options, selected, mono, onChange }: MenuProps) {
   );
 }
 
-export function Filters({ sessions, shown, filter, onChange }: { sessions: Conversation[]; shown: number; filter: Filter; onChange: (f: Filter) => void }) {
+type FiltersProps = { sessions: Conversation[]; shown: number; filter: Filter; onChange: (f: Filter) => void; sort: Sort; onSort: (s: Sort) => void };
+
+export function Filters({ sessions, shown, filter, onChange, sort, onSort }: FiltersProps) {
   const projects = [...new Set([...sessions.map((c) => c.project), ...filter.dirs])].sort();
   const active = filter.dirs.length + filter.states.length > 0;
   return (
     <div class="filters">
       <Menu label="Directory" mono options={projects.map((p) => [p, shortName(p, projects)])} selected={filter.dirs} onChange={(dirs) => onChange({ ...filter, dirs })} />
       <Menu label="State" options={Object.keys(states).map((s) => [s, s])} selected={filter.states} onChange={(s) => onChange({ ...filter, states: s })} />
+      <Menu label="Sort" single options={Object.entries(sorts)} selected={[sort]} onChange={([s]) => onSort(s as Sort)} />
       {active && <Button label="Clear" class="small" title="Show all sessions" onClick={() => onChange({ dirs: [], states: [] })} />}
       {active && (
         <span class="muted">

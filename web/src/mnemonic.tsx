@@ -57,11 +57,20 @@ export function Field(props: { label: string; children: ComponentChildren }) {
   );
 }
 
-export function Check({ label, ...rest }: { label: string; checked: boolean; disabled?: boolean; onChange: (e: TargetedEvent<HTMLInputElement>) => void }) {
+type CheckProps = {
+  label: string;
+  type?: "checkbox" | "radio";
+  checked: boolean;
+  disabled?: boolean;
+  onChange?: (e: TargetedEvent<HTMLInputElement>) => void;
+  onClick?: () => void;
+};
+
+export function Check({ label, type = "checkbox", ...rest }: CheckProps) {
   const [index, key] = useMnemonic(label);
   return (
     <label class="check" data-key={key}>
-      <input type="checkbox" {...rest} />
+      <input type={type} {...rest} />
       <Underlined label={label} index={index} />
     </label>
   );
