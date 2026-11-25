@@ -59,11 +59,15 @@ type Tail struct {
 	Waiting bool
 	// Failed is the API error the transcript ends on: Claude Code gave the turn up and waits at its prompt.
 	Failed string
+	// tasks holds when each background task that has not ended yet started, by task id.
+	tasks map[string]time.Time
+	// settled is when the last background task ended.
+	settled time.Time
 	stamp  time.Time
 }
 
 func newTail(path string) *Tail {
-	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}}
+	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}}
 }
 
 func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
@@ -162,6 +166,26 @@ func (t *Tail) carryOn() {
 	}
 }
 
+// background counts the background tasks started after since that have not ended.
+func (t *Tail) background(since time.Time) int {
+	n := 0
+	for _, at := range t.tasks {
+		if at.After(since) {
+			n++
+		}
+	}
+	return n
+}
+
+func (t *Tail) endTasks(text string, at time.Time) {
+	for _, m := range taskID.FindAllStringSubmatch(text, -1) {
+		if _, ok := t.tasks[m[1]]; ok {
+			delete(t.tasks, m[1])
+			t.settled = at
+		}
+	}
+}
+
 func (t *Tail) addTool(ref string, e Event) {
 	e.Kind = kindTool
 	t.add(e)
@@ -205,7 +229,9 @@ type claudeLine struct {
 	Subtype           string    `json:"subtype"`
 	Operation         string    `json:"operation"`
 	Content           string    `json:"content"`
-	Attachment        struct {
+	// ToolUseResult is what Claude Code keeps of a tool result besides what the model reads. Its shape differs by tool.
+	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Attachment    struct {
 		Type        string          `json:"type"`
 		Prompt      json.RawMessage `json:"prompt"`
 		CommandMode string          `json:"commandMode"`
@@ -227,7 +253,36 @@ var (
 	commandName = regexp.MustCompile(`<command-name>(.*?)</command-name>`)
 	// Claude Code tells the model that a background command or agent ended in a prompt of its own.
 	taskSummary = regexp.MustCompile(`(?s)^<task-notification>.*?<summary>(.*?)</summary>`)
+	taskID      = regexp.MustCompile(`<task-notification>\s*<task-id>([^<]+)</task-id>`)
 )
+
+// claudeTask reads the start or the stop of a background task from a tool result. A command or an agent run in the
+// background, or a command moved there after its timeout, starts one; TaskStop stops one, and Claude Code then tells
+// nothing more about it. Every other task ends with a task notification.
+func claudeTask(t *Tail, raw json.RawMessage, at time.Time) {
+	var r struct {
+		BackgroundTaskID string `json:"backgroundTaskId"`
+		AgentID          string `json:"agentId"`
+		Status           string `json:"status"`
+		Background       bool   `json:"background"`
+		TaskID           string `json:"task_id"`
+		TaskType         string `json:"task_type"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &r) != nil {
+		return
+	}
+	switch {
+	case r.BackgroundTaskID != "":
+		t.tasks[r.BackgroundTaskID] = at
+	case r.AgentID != "" && (r.Status == "async_launched" || r.Status == "forked" && r.Background):
+		t.tasks[r.AgentID] = at
+	case r.TaskID != "" && r.TaskType != "":
+		if _, ok := t.tasks[r.TaskID]; ok {
+			delete(t.tasks, r.TaskID)
+			t.settled = at
+		}
+	}
+}
 
 func parseClaude(t *Tail, raw []byte) {
 	var l claudeLine
@@ -251,6 +306,7 @@ func parseClaude(t *Tail, raw []byte) {
 	case "queue-operation":
 		switch l.Operation {
 		case "enqueue":
+			t.endTasks(l.Content, l.Timestamp)
 			t.Queue = append(t.Queue, Event{Kind: kindUser, Text: l.Content, Time: l.Timestamp})
 		case "remove":
 			t.unqueue(l.Content)
@@ -262,6 +318,7 @@ func parseClaude(t *Tail, raw []byte) {
 		// instead of a prompt. Task notifications arrive the same way.
 		if a := l.Attachment; a.Type == "queued_command" {
 			text := blockText(a.Prompt)
+			t.endTasks(text, l.Timestamp)
 			switch {
 			case a.CommandMode == "prompt" && a.Origin.Kind == "human":
 				addClaudeUserText(t, claudeLine{Timestamp: l.Timestamp}, text)
@@ -280,8 +337,10 @@ func parseClaude(t *Tail, raw []byte) {
 			return
 		}
 		t.carryOn()
+		claudeTask(t, l.ToolUseResult, l.Timestamp)
 		var text string
 		if json.Unmarshal(l.Message.Content, &text) == nil {
+			t.endTasks(text, l.Timestamp)
 			t.unqueue(text)
 			t.fork(l)
 			addClaudeUserText(t, l, text)

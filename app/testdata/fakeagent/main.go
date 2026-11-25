@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,10 @@ var (
 	reverted bool
 	// Codex reports a session cleared with /clear only when its first turn starts.
 	cleared bool
+	// turn keeps a turn the harness starts by itself, when a background task ends, apart from the user's turns.
+	turnMu sync.Mutex
+	// tasks are the background tasks of claude that are still running.
+	tasks []string
 )
 
 type turn struct {
@@ -85,7 +90,9 @@ func main() {
 	}
 	openSession(!resume, map[bool]string{false: "startup", true: "resume"}[resume])
 	if prompt != "" {
+		turnMu.Lock()
 		handle(prompt)
+		turnMu.Unlock()
 	}
 	for {
 		fmt.Print("> ")
@@ -93,11 +100,13 @@ func main() {
 		if msg == "" {
 			continue
 		}
+		turnMu.Lock()
 		if msg == "/rewind" && mode != "codex" {
 			rewind()
-			continue
+		} else {
+			handle(msg)
 		}
-		handle(msg)
+		turnMu.Unlock()
 	}
 }
 
@@ -630,6 +639,18 @@ func handle(prompt string) {
 		}
 		return
 	}
+	if mode == "claude" && strings.Contains(prompt, "background") {
+		startTask()
+		answer("waiting for the background task", 1000)
+		hook("Stop", nil)
+		return
+	}
+	if mode == "claude" && strings.Contains(prompt, "stop task") && len(tasks) > 0 {
+		stopTask()
+		answer("stopped the task", 1000)
+		hook("Stop", nil)
+		return
+	}
 	asks := 0
 	if strings.Contains(prompt, "permission") {
 		asks = 1
@@ -666,6 +687,56 @@ func handle(prompt string) {
 	}
 	fmt.Printf("agent: echo: %s\n", prompt)
 	hook("Stop", map[string]any{"last_assistant_message": "echo: " + prompt})
+}
+
+// startTask runs a command in the background the way Claude Code 2.1 does: the tool result carries the task id, and the
+// task ends when FAKE_HOME/finish appears. Claude Code then queues a task notification and takes it as a prompt of a turn
+// of its own, with the same hooks as a user's turn.
+func startTask() {
+	id, ref := "b"+uuid()[:8], "toolu_"+uuid()[:8]
+	write(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "tool_use", "id": ref, "name": "Bash", "input": map[string]any{"command": "go test ./...", "run_in_background": true}},
+	}}})
+	write(map[string]any{"type": "user", "toolUseResult": map[string]any{"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": id},
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": ref, "content": "Command running in background with ID: " + id}}}})
+	hook("PostToolUse", map[string]any{"tool_name": "Bash"})
+	tasks = append(tasks, id)
+	go func() {
+		finish := filepath.Join(os.Getenv("FAKE_HOME"), "finish")
+		for {
+			time.Sleep(100 * time.Millisecond)
+			if os.Remove(finish) == nil {
+				break
+			}
+		}
+		turnMu.Lock()
+		defer turnMu.Unlock()
+		if !slices.Contains(tasks, id) {
+			return
+		}
+		tasks = slices.DeleteFunc(tasks, func(t string) bool { return t == id })
+		note := "<task-notification>\n<task-id>" + id + "</task-id>\n<tool-use-id>" + ref + "</tool-use-id>\n<status>completed</status>\n<summary>Background command \"go test\" completed (exit code 0)</summary>\n</task-notification>"
+		write(map[string]any{"type": "queue-operation", "operation": "enqueue", "content": note})
+		write(map[string]any{"type": "queue-operation", "operation": "dequeue"})
+		hook("UserPromptSubmit", map[string]any{"prompt": note})
+		write(map[string]any{"type": "user", "origin": map[string]any{"kind": "task-notification"}, "message": map[string]any{"role": "user", "content": note}})
+		answer("the background task finished", 1000)
+		fmt.Println("agent: the background task finished")
+		hook("Stop", nil)
+	}()
+}
+
+// stopTask stops the last background task with TaskStop. Claude Code 2.1 writes no task notification for it.
+func stopTask() {
+	id, ref := tasks[len(tasks)-1], "toolu_"+uuid()[:8]
+	tasks = tasks[:len(tasks)-1]
+	hook("PreToolUse", map[string]any{"tool_name": "TaskStop"})
+	write(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "tool_use", "id": ref, "name": "TaskStop", "input": map[string]any{"task_id": id}},
+	}}})
+	write(map[string]any{"type": "user", "toolUseResult": map[string]any{"message": "Successfully stopped task: " + id, "task_id": id, "task_type": "local_bash", "command": "go test ./..."},
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": ref, "content": `{"message":"Successfully stopped task"}`}}}})
+	hook("PostToolUse", map[string]any{"tool_name": "TaskStop"})
 }
 
 func cursorLine(v map[string]any) {

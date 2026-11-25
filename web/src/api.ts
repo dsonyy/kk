@@ -27,7 +27,7 @@ export type Conversation = {
   created: string;
   last_message: string;
   activity: string;
-  status: "starting" | "working" | "idle" | "exited";
+  status: "starting" | "working" | "background" | "idle" | "exited";
   attention?: string;
   // Who has to act on an agent that stopped; empty while it works.
   waiting_for: "" | "user" | "conductor";

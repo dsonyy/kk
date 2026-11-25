@@ -7,6 +7,7 @@ export type Filter = { dirs: string[]; states: string[] };
 // The states overlap: an exited session also waits for someone, and a session that needs action is its own and someone's turn.
 const states: Record<string, (c: Conversation) => boolean> = {
   Working: (c) => !c.closed && (c.status === "working" || c.status === "starting"),
+  "Background working": (c) => !c.closed && c.status === "background",
   "Your turn": (c) => !c.closed && c.waiting_for === "user",
   "Conductor's turn": (c) => !c.closed && c.waiting_for === "conductor",
   "Action required": (c) => !c.closed && !!c.attention,
@@ -66,13 +67,14 @@ export const byActivity = (a: Conversation[], b: Conversation[]) => Number(inPro
 const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
 export const byName = (a: string, b: string) => collator.compare(a, b);
 
-// Needs action first, then the user's turn, at work, the conductor's turn, exited and closed.
+// Needs action first, then the user's turn, at work, at work in the background, the conductor's turn, exited and closed.
 function stateRank(c: Conversation) {
-  if (c.closed) return 5;
+  if (c.closed) return 6;
   if (c.attention) return 0;
-  if (c.status === "exited") return 4;
+  if (c.status === "exited") return 5;
   if (c.status === "working" || c.status === "starting") return 2;
-  return c.waiting_for === "conductor" ? 3 : 1;
+  if (c.status === "background") return 3;
+  return c.waiting_for === "conductor" ? 4 : 1;
 }
 
 export function compare(sort: Sort): (a: Conversation, b: Conversation) => number {

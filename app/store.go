@@ -54,6 +54,9 @@ const (
 	statusStarting = "starting"
 	statusWorking  = "working"
 	statusIdle     = "idle"
+	// statusBackground is an agent whose turn ended while a background task it started still runs. The harness starts
+	// the next turn by itself when the task ends, so nobody has to act.
+	statusBackground = "background"
 	statusExited   = "exited"
 )
 

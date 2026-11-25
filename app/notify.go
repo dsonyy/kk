@@ -144,7 +144,7 @@ func (s *Server) flushNotices(now time.Time) {
 		}
 	}
 	co, ok := s.store.get(coordinatorID)
-	if !ok || co.Attention != "" || (co.Status != statusIdle && co.Status != statusWorking) || !s.alive(co) || midRewind(co.ID) != nil {
+	if !ok || co.Attention != "" || !slices.Contains([]string{statusIdle, statusWorking, statusBackground}, co.Status) || !s.alive(co) || midRewind(co.ID) != nil {
 		return
 	}
 	ids := make([]string, 0, len(s.notices))

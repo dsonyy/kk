@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func readFixture(t *testing.T, path string, parse func(*Tail, []byte)) *Tail {
@@ -197,5 +198,32 @@ func TestParseClaudeQueue(t *testing.T) {
 	want := []string{"Run /tmp/scratch/build.sh with the Bash…", "test one", "are u here?", "third with image", "reply only ok Areply only ok Breply onl…", "Without using any tools, write a 900 wo…", "q-one", "q-two, reply ok", "q-three"}
 	if !slices.Equal(users, want) {
 		t.Fatalf("messages: %q", users)
+	}
+}
+
+// The lines follow Claude Code 2.1.332 transcripts with made-up text: every way a background task starts and ends.
+func TestClaudeBackgroundTasks(t *testing.T) {
+	lines, _ := os.ReadFile("testdata/claude-background.jsonl")
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	tail := newTail(path)
+	f, _ := os.Create(path)
+	defer f.Close()
+	open := []int{0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 2, 2, 1, 1, 1, 0}
+	n := 0
+	for line := range bytes.Lines(lines) {
+		f.Write(line)
+		tail.read(parseClaude)
+		if got := tail.background(time.Time{}); got != open[n] {
+			t.Fatalf("after line %d: %d open tasks, want %d", n+1, got, open[n])
+		}
+		if n == 2 {
+			if got := tail.background(tail.tasks["bash1"]); got != 0 {
+				t.Fatalf("a task from before the launch counts: %d", got)
+			}
+		}
+		n++
+	}
+	if n != len(open) || !tail.settled.Equal(time.Date(2026, 11, 25, 10, 0, 18, 0, time.UTC)) {
+		t.Fatalf("%d lines, settled %v", n, tail.settled)
 	}
 }

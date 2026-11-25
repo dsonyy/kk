@@ -89,6 +89,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .dot.attention.conductor { box-shadow: inset 0 0 0 1px var(--warn-text); }
 .dot.exited.conductor { box-shadow: inset 0 0 0 1px var(--text-dim); }
 .dot.working, .dot.starting { background: var(--text-strong); animation: blink 1s steps(2, jump-none) infinite; }
+.dot.background { background: var(--text-strong); animation: blink 2.4s steps(2, jump-none) infinite; }
 @keyframes blink { to { opacity: .2; } }
 .spinner { flex: none; width: 7px; height: 7px; background: var(--text-strong); animation: blink .6s steps(2, jump-none) infinite; }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
@@ -159,6 +160,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
   animation: march .8s linear infinite;
 }
 .tile.working.on { background-color: var(--surface-2); }
+.tile.background { border-style: dashed; border-color: var(--text-dim); }
 @keyframes march { to { background-position: 12px 0, -12px 100%, 0 -12px, 100% 12px, 0 0; } }
 .tile.attention { border-color: var(--warn-line); animation: attention 1s ease-in-out infinite alternate; }
 .tile.attention .state { color: var(--warn-text); }

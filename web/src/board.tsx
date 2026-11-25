@@ -7,7 +7,7 @@ type Column = { project: string; group: string; sessions: Conversation[] };
 function state(c: Conversation): [string, string] {
   if (c.closed) return ["closed", "Closed"];
   if (c.attention) return ["attention", "Action required"];
-  return [c.status, { starting: "Starting", working: "Working", idle: "Idle", exited: "Exited" }[c.status]];
+  return [c.status, { starting: "Starting", working: "Working", background: "Background working", idle: "Idle", exited: "Exited" }[c.status]];
 }
 
 // A column follows its first session in the chosen order. By title it follows its group name, the sessions without a group

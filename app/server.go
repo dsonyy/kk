@@ -34,6 +34,8 @@ type Server struct {
 	// asked counts, per conversation without a group, the user messages the last question about its group covered.
 	asked map[string]int
 	ticks int
+	// ticking runs one tick at a time: the Stop hook runs one of its own.
+	ticking sync.Mutex
 	// controls holds when a conversation was last stopped, closed or interrupted.
 	controls map[string]time.Time
 	// raises counts per conversation how often a hook raised attention, which may clear and come back between two ticks.
@@ -657,6 +659,14 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	json.Unmarshal(body, &p)
 	now := time.Now()
+	open := 0
+	if event == "Stop" {
+		// The tasks the turn leaves running are in the transcript lines the last tick may not have read yet.
+		s.tick()
+		if cur, ok := s.store.get(id); ok && (p.TranscriptPath == "" || p.TranscriptPath == cur.Transcript) {
+			open, _ = s.background(cur)
+		}
+	}
 	raised := false
 	_, changed := s.store.update(id, func(c *Conversation) bool {
 		defer func(was string) { raised = was == "" && c.Attention != "" }(c.Attention)
@@ -689,7 +699,12 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		case "PreToolUse", "PostToolUse":
 			c.Status, c.Attention = statusWorking, ""
 		case "Stop":
-			c.Status, c.Attention, c.TurnEnded = statusIdle, "", now
+			c.Status, c.Attention = statusIdle, ""
+			if open > 0 {
+				c.Status = statusBackground
+			} else {
+				c.TurnEnded = now
+			}
 		case "Notification":
 			if p.NotificationType == "idle_prompt" {
 				return true
@@ -757,6 +772,8 @@ func (s *Server) publish(id string) {
 
 // tick reconciles conversations with tmux and their transcripts.
 func (s *Server) tick() {
+	s.ticking.Lock()
+	defer s.ticking.Unlock()
 	alive, err := windows()
 	if err != nil {
 		log.Print(err)
@@ -771,11 +788,17 @@ func (s *Server) tick() {
 			continue
 		}
 		events := s.readTail(c)
+		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
 			// The list of windows may predate a launch that has just revived this one.
 			if c.Status != statusExited && c.Window != "" && !alive[c.Window] && now.Sub(c.Launched) > time.Second {
 				c.Status, c.Attention, changed = statusExited, "", true
+			}
+			// When the last task ends, the harness starts a turn of its own, which its hooks report. The wait ends without
+			// that turn too, and after a timeout from the last hook when the transcript never records the end of a task.
+			if c.Status == statusBackground && (open == 0 && now.Sub(settled) > backgroundGrace || now.Sub(c.Activity) > backgroundTimeout()) {
+				c.Status, c.TurnEnded, changed = statusIdle, now, true
 			}
 			if c.Status == statusStarting && c.Attention == "" && now.Sub(c.Launched) > startTimeout {
 				c.Attention, changed = fmt.Sprintf("The agent has not started its session after %s and may be waiting for input", startTimeout), true
@@ -833,25 +856,50 @@ func (s *Server) tick() {
 
 // readTail returns the tail of c's transcript when it has new lines.
 func (s *Server) readTail(c Conversation) *Tail {
-	parse := parserFor(c.Harness)
-	if c.Transcript == "" || parse == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tail(c)
+	if t == nil {
 		return nil
 	}
-	s.mu.Lock()
+	if changed, _ := t.read(parserFor(c.Harness)); !changed {
+		return nil
+	}
+	cp := *t
+	return &cp
+}
+
+// tail returns the tail of c's transcript, or nil when kk cannot read it. The caller holds s.mu.
+func (s *Server) tail(c Conversation) *Tail {
+	if c.Transcript == "" || parserFor(c.Harness) == nil {
+		return nil
+	}
 	t := s.tails[c.ID]
 	if t == nil || t.path != c.Transcript {
 		t = newTail(c.Transcript)
 		s.tails[c.ID] = t
 	}
-	s.mu.Unlock()
+	return t
+}
+
+const (
+	// backgroundGrace is how long after the end of its last background task an agent may take to start the turn its harness gives it.
+	backgroundGrace = 5 * time.Second
+)
+
+// backgroundTimeout is how long an agent may wait for background tasks without a hook.
+func backgroundTimeout() time.Duration { return envDuration("KK_BACKGROUND_TIMEOUT", 30*time.Minute) }
+
+// background counts the background tasks the agent of c started since its launch that have not ended, as far as the
+// transcript was read, and tells when the last one ended. Tasks of an earlier launch died with its process.
+func (s *Server) background(c Conversation) (int, time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	changed, _ := t.read(parse)
-	if !changed {
-		return nil
+	t := s.tail(c)
+	if t == nil {
+		return 0, time.Time{}
 	}
-	cp := *t
-	return &cp
+	return t.background(c.Launched), t.settled
 }
 
 func (s *Server) maybeCompact(c Conversation, now time.Time) {

@@ -257,7 +257,7 @@ function stateLabel(c: Conversation) {
   if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
   if (c.attention) return "Action required";
   if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
-  return { starting: "Starting", working: "Working", idle: "Your turn", exited: "Exited" }[c.status];
+  return { starting: "Starting", working: "Working", background: "Background working", idle: "Your turn", exited: "Exited" }[c.status];
 }
 
 function Dot({ c }: { c: Conversation }) {
@@ -271,7 +271,7 @@ function attention(c: Conversation) {
 // A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work, then one the conductor holds.
 function loudness(c: Conversation) {
   if (c.waiting_for === "user") return c.attention ? 0 : 1;
-  if (c.status === "working" || c.status === "starting") return 2;
+  if (c.status === "working" || c.status === "starting" || c.status === "background") return 2;
   return c.waiting_for === "conductor" ? 3 : 4;
 }
 
@@ -312,7 +312,7 @@ function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: Gro
 }
 
 function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", attention(c) || (c.status === "working" && "working"), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
+  const cls = ["tile", on && "on", attention(c) || ((c.status === "working" || c.status === "background") && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <div class="title">{c.title || "Untitled"}</div>
@@ -681,7 +681,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
             {busy && (
               <div class="busy">
                 <i class="pulse" />
-                <span>{c.status === "starting" ? "Starting the agent" : last?.kind === "tool" && !last.output ? `Running ${last.tool}` : "Working"}</span>
+                <span>{c.status === "starting" ? "Starting the agent" : c.status === "background" ? "Background working" : last?.kind === "tool" && !last.output ? `Running ${last.tool}` : "Working"}</span>
               </div>
             )}
             {c.escalation && (
