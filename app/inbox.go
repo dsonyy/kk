@@ -167,7 +167,7 @@ func (in *Inbox) setItems(source string, items []InboxItem) {
 	seen := map[string]bool{}
 	for _, it := range items {
 		it.Source = source
-		it.Description = shorten(it.Description, descriptionMax)
+		it.Description = excerpt(it.Description, descriptionMax)
 		if it.ID == "" || seen[it.ID] || !safeURL(it.URL) {
 			continue
 		}
@@ -181,7 +181,7 @@ func safeURL(u string) bool { return strings.HasPrefix(u, "https://") }
 
 var blankLines = regexp.MustCompile(`\n\s*\n\s*`)
 
-func shorten(s string, max int) string {
+func excerpt(s string, max int) string {
 	s = strings.ReplaceAll(strings.TrimSpace(s), "\r\n", "\n")
 	return clip(blankLines.ReplaceAllString(s, "\n\n"), max)
 }
