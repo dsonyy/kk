@@ -59,6 +59,7 @@ function App() {
   const [creating, setCreating] = useState<string>();
   const openRef = useRef(panels);
   openRef.current = panels;
+  const loaded = useRef(new Set<string>());
   const isOpen = (id: string) => openRef.current.some((p) => p.id === id);
 
   const setOpen = (next: Panel[]) => {
@@ -75,12 +76,14 @@ function App() {
     try {
       const c = await api<Conversation>("GET", `/api/conversations/${id}`);
       setDetails((d) => ({ ...d, [id]: c }));
+      loaded.current.add(id);
       if (c.unread && (isOpen(id) || id === COORDINATOR) && document.hasFocus()) {
         await api("POST", `/api/conversations/${id}/seen`, {});
       }
     } catch (e) {
       if (id === COORDINATOR) return setDetails(({ [COORDINATOR]: _, ...d }) => d);
-      hide(id);
+      // A failed load, such as during a server restart, leaves a pinned panel that has something to show.
+      if (!(openRef.current.find((p) => p.id === id)?.pinned && loaded.current.has(id))) hide(id);
       flash((e as Error).message);
     }
   }, []);
@@ -706,7 +709,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
             ))}
           </div>
         )}
-        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} onDraft={onPin && !pinned ? () => onPin(true) : undefined} />}
+        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} />}
       </Scope>
     </Tag>
   );
@@ -718,15 +721,10 @@ type ComposerProps = {
   onResume: () => void;
   onSend: (text: string, files: Attachment[]) => Promise<boolean>;
   insert: preact.RefObject<((text: string) => void) | undefined>;
-  // Called when the user starts a draft, so that opening another session does not drop it.
-  onDraft?: () => void;
 };
 
-function Composer({ c, exited, onResume, onSend, insert, onDraft }: ComposerProps) {
+function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   const [text, setText] = useState("");
-  useEffect(() => {
-    if (text.trim()) onDraft?.();
-  }, [text]);
   const area = useRef<HTMLTextAreaElement>(null);
   const skills = useSkills(c.harness, c.dir);
   const attachments = useAttachments();
