@@ -51,7 +51,7 @@ func main() {
 	}
 	if mode == "claude" && len(args) > 0 && args[0] == "-p" {
 		if slices.Contains(args, "dontAsk") {
-			printSlack(args)
+			printConnector(args)
 			return
 		}
 		printGroup(args[len(args)-1])
@@ -239,16 +239,21 @@ func fakeGH(args []string) {
 	os.Stdout.Write(data)
 }
 
-// printSlack answers the Slack run in stream-json, keeps its arguments in slack-args.json and prints FAKE_HOME/slack.out as the answer.
-// FAKE_HOME/slack-connector holds the connector's status, "none" when it is not linked, "not loaded" when no connector loaded in time.
-// FAKE_HOME/slack-error makes the run fail. Like the real claude -p, the init event lists no connector unless
+// printConnector answers a connector run in stream-json. The run's source, slack or gmail, comes from its allowed tools.
+// It keeps the arguments in FAKE_HOME/<source>-args.json and prints FAKE_HOME/<source>.out as the answer.
+// FAKE_HOME/<source>-connector holds the connector's status, "none" when it is not linked, "not loaded" when no connector loaded in time.
+// FAKE_HOME/<source>-error makes the run fail. Like the real claude -p, the init event lists no connector unless
 // MCP_CONNECTION_NONBLOCKING=false makes the run wait for them.
-func printSlack(args []string) {
+func printConnector(args []string) {
+	source, server := "slack", "claude.ai Slack"
+	if i := slices.Index(args, "--allowedTools"); i >= 0 && strings.HasPrefix(args[i+1], "mcp__claude_ai_Gmail__") {
+		source, server = "gmail", "claude.ai Gmail"
+	}
 	home := os.Getenv("FAKE_HOME")
 	data, _ := json.Marshal(args)
-	os.WriteFile(filepath.Join(home, "slack-args.json"), data, 0o644)
+	os.WriteFile(filepath.Join(home, source+"-args.json"), data, 0o644)
 	status := "connected"
-	if b, err := os.ReadFile(filepath.Join(home, "slack-connector")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(home, source+"-connector")); err == nil {
 		status = strings.TrimSpace(string(b))
 	}
 	servers := []map[string]string{}
@@ -258,17 +263,17 @@ func printSlack(args []string) {
 		servers = append(servers, map[string]string{"name": "claude.ai Linear", "status": "connected", "source": "claudeai"})
 	}
 	if status != "none" {
-		servers = append(servers, map[string]string{"name": "claude.ai Slack", "status": status, "source": "claudeai"})
+		servers = append(servers, map[string]string{"name": server, "status": status, "source": "claudeai"})
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.Encode(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers})
-	if b, err := os.ReadFile(filepath.Join(home, "slack-error")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(home, source+"-error")); err == nil {
 		enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": string(b)})
 		os.Exit(1)
 	}
-	answer := "I have no Slack tools available."
+	answer := "I have no tools for this connector."
 	if status == "connected" {
-		out, err := os.ReadFile(filepath.Join(home, "slack.out"))
+		out, err := os.ReadFile(filepath.Join(home, source+".out"))
 		if err != nil {
 			out = []byte(`{"items":[]}`)
 		}

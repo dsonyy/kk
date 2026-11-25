@@ -192,10 +192,14 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("the Slack run must be read-only: %s", line)
 	}
 	for _, tool := range strings.Split(args[i+1], ",") {
-		name := strings.TrimPrefix(tool, slackTool)
+		name := strings.TrimPrefix(tool, slackRun.prefix)
 		if !strings.HasPrefix(name, "slack_search_") && !strings.HasPrefix(name, "slack_read_") {
 			t.Fatalf("the Slack run may use %s", tool)
 		}
+	}
+
+	if denied := slices.Index(args, "--disallowedTools"); denied < 0 || !strings.Contains(args[denied+1], slackRun.prefix+"slack_send_message,") {
+		t.Fatalf("the Slack run must deny the write tools: %s", line)
 	}
 
 	if code, _ := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": "done"}); code != 400 {
@@ -267,6 +271,63 @@ func TestInbox(t *testing.T) {
 	}
 }
 
+const gmailAnswer = `{"items":[
+{"id":"19a1b2c3d4e5f601","kind":"request","title":"Contract review","text":"Please review the attached contract by Friday.","author":"Gus","time":"2026-11-23T09:00:00Z"},
+{"id":"19a1b2c3d4e5f602","kind":"awaiting reply","title":"Lunch next week?","text":"Asks which day works for you.","author":"Hana","time":"2026-11-24T09:00:00Z","url":"https://evil.example/x"},
+{"id":"../evil","kind":"question","title":"Bad id","text":"x","author":"Ivo","time":"2026-11-24T10:00:00Z"},
+{"id":"19a1b2c3d4e5f603","kind":"newsletter","title":"Weekly digest","text":"x","author":"News","time":"2026-11-24T11:00:00Z"}]}`
+
+func TestInboxGmail(t *testing.T) {
+	e := newEnv(t)
+	writeFile(t, filepath.Join(e.fake, "gmail.out"), gmailAnswer)
+	v := e.refreshInbox("gmail")
+	var got []string
+	for _, it := range v.Items {
+		if it.Source == "gmail" {
+			got = append(got, it.Kind+" "+it.Title+" "+it.Author+" "+it.URL)
+		}
+	}
+	want := []string{
+		"awaiting reply Lunch next week? Hana https://mail.google.com/mail/u/0/#inbox/19a1b2c3d4e5f602",
+		"request Contract review Gus https://mail.google.com/mail/u/0/#inbox/19a1b2c3d4e5f601",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("gmail items:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	var args []string
+	data, _ := os.ReadFile(filepath.Join(e.fake, "gmail-args.json"))
+	json.Unmarshal(data, &args)
+	line := strings.Join(args, " ")
+	allowed, denied := slices.Index(args, "--allowedTools"), slices.Index(args, "--disallowedTools")
+	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools  ") || allowed < 0 || denied < 0 {
+		t.Fatalf("the Gmail run must be read-only: %s", line)
+	}
+	read := []string{"mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Gmail__list_labels"}
+	if !slices.Equal(strings.Split(args[allowed+1], ","), read) {
+		t.Fatalf("the Gmail run may use only the read tools: %s", args[allowed+1])
+	}
+	for _, tool := range []string{"send_message", "reply", "forward", "create_draft", "trash_thread", "label_thread", "mark_thread_spam", "update_message_labels"} {
+		if !slices.Contains(strings.Split(args[denied+1], ","), "mcp__claude_ai_Gmail__"+tool) {
+			t.Fatalf("the Gmail run must deny %s: %s", tool, args[denied+1])
+		}
+	}
+
+	writeFile(t, filepath.Join(e.fake, "gmail-error"), "API Error: 500 overloaded")
+	v = e.refreshInbox("gmail")
+	if s := sourceOf(v, "gmail"); !strings.Contains(s.Error, "Gmail run failed") || s.Setup != "" || len(v.Items) != 2 {
+		t.Fatalf("a failed Gmail run is an error and keeps the items: %+v", s)
+	}
+	os.Remove(filepath.Join(e.fake, "gmail-error"))
+	for _, status := range []string{"none", "needs-auth"} {
+		writeFile(t, filepath.Join(e.fake, "gmail-connector"), status)
+		v = e.refreshInbox("gmail")
+		if s := sourceOf(v, "gmail"); !strings.Contains(s.Setup, "Connect Gmail") || s.Error != "" || len(v.Items) != 0 {
+			t.Fatalf("gmail with connector %s: %+v %d", status, s, len(v.Items))
+		}
+	}
+}
+
 func TestInboxMigratesDismissed(t *testing.T) {
 	e := newEnv(t)
 	e.stop()
@@ -299,6 +360,9 @@ func TestInboxSettings(t *testing.T) {
 	if view.Settings.Inbox["slack"] != (InboxSettings{true, 60}) || view.Settings.Inbox["github"] != (InboxSettings{true, 15}) {
 		t.Fatalf("defaults: %+v", view.Settings.Inbox)
 	}
+	if view.Settings.Inbox["gmail"] != (InboxSettings{true, 60}) {
+		t.Fatalf("gmail default: %+v", view.Settings.Inbox)
+	}
 	view.Settings.Inbox["slack"] = InboxSettings{false, 120}
 	data, _ := json.Marshal(view.Settings)
 	if resp, out := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 200 {
@@ -314,5 +378,14 @@ func TestInboxSettings(t *testing.T) {
 	}
 	if s := sourceOf(e.inbox(), "github"); s.Interval != 15 {
 		t.Fatalf("a refused save changed the settings: %+v", s)
+	}
+}
+
+func TestInboxSettingsAddGmail(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, settingsPath(dir), "inbox:\n  slack: {enabled: false, interval_minutes: 30}\n")
+	in := loadSettings(dir).Inbox
+	if in["slack"] != (InboxSettings{false, 30}) || in["gmail"] != (InboxSettings{true, 60}) {
+		t.Fatalf("settings saved before Gmail should get its default: %+v", in)
 	}
 }

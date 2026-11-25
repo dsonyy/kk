@@ -89,7 +89,7 @@ const (
 
 func openInbox(dir string, settings func() map[string]InboxSettings) *Inbox {
 	in := &Inbox{dir: dir, settings: settings, running: map[string]bool{}, state: inboxState{Sources: map[string]*sourceState{}}}
-	in.sources = []inboxSource{githubSource{}, linearSource{dir: dir}, slackSource{dir: dir}}
+	in.sources = []inboxSource{githubSource{}, linearSource{dir: dir}, slackSource{dir: dir}, gmailSource{dir: dir}}
 	if data, err := os.ReadFile(in.path()); err == nil {
 		yaml.Unmarshal(data, &in.state)
 	}

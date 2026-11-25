@@ -13,7 +13,7 @@ type Item = InboxItem & { status: Status; changed?: string };
 
 type View = { items: Item[]; sources: Source[] };
 
-const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack" };
+const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack", gmail: "Gmail" };
 
 const marks: Record<string, JSX.Element> = {
   github: (
@@ -30,6 +30,7 @@ const marks: Record<string, JSX.Element> = {
     </>
   ),
   slack: <path d="M6 2.5v11M10 2.5v11M2.5 6h11M2.5 10h11" />,
+  gmail: <path d="M2 3.5h12v9H2zM2 3.5l6 5 6-5" />,
 };
 
 export function SourceIcon({ name }: { name: string }) {
@@ -236,7 +237,7 @@ export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: D
 
   return (
     <>
-      <span class="hint">kk checks each source on its own and shows what it finds in the Inbox tab. The Slack check is a model run and costs tokens.</span>
+      <span class="hint">kk checks each source on its own and shows what it finds in the Inbox tab. The Slack and Gmail checks are model runs and cost tokens.</span>
       <table class="inbox-settings">
         {Object.keys(labels).map((name) => {
           const s = value[name] ?? { enabled: false, interval_minutes: 15 };

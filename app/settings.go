@@ -42,9 +42,9 @@ var settingsEnv = map[string]string{
 
 func settingsPath(dir string) string { return filepath.Join(dir, "settings.yaml") }
 
-// inboxDefaults checks Slack less often, since every check is a model run.
+// inboxDefaults checks Slack and Gmail less often, since every check is a model run.
 func inboxDefaults() map[string]InboxSettings {
-	return map[string]InboxSettings{"github": {true, 15}, "linear": {true, 15}, "slack": {true, 60}}
+	return map[string]InboxSettings{"github": {true, 15}, "linear": {true, 15}, "slack": {true, 60}, "gmail": {true, 60}}
 }
 
 func loadSettings(dir string) Settings {
