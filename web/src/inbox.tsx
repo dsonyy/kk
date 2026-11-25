@@ -1,0 +1,198 @@
+import type { JSX } from "preact";
+import { useEffect, useState } from "preact/hooks";
+import { act, api, flash, when, type Settings } from "./api";
+import { Button, Check, Field, Scope } from "./mnemonic";
+import "./inbox.css";
+
+export type InboxItem = { source: string; id: string; kind: string; title: string; description: string; url: string; author: string; time: string };
+
+type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; interval_minutes: number };
+
+type View = { items: InboxItem[]; sources: Source[] };
+
+const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack" };
+
+const marks: Record<string, JSX.Element> = {
+  github: (
+    <>
+      <circle cx="5" cy="4" r="2" />
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="11" cy="6" r="2" />
+      <path d="M5 6v4M11 8c0 2-3 2-5.5 3" />
+    </>
+  ),
+  linear: (
+    <>
+      <path d="M2 9.5l4.5 4.5M2 6l8 8M3.5 3.5l9 9M6 2l8 8M9.5 2l4.5 4.5" />
+    </>
+  ),
+  slack: <path d="M6 2.5v11M10 2.5v11M2.5 6h11M2.5 10h11" />,
+};
+
+export function SourceIcon({ name }: { name: string }) {
+  return (
+    <svg class="source-icon" viewBox="0 0 16 16" aria-label={labels[name] ?? name} role="img">
+      {marks[name]}
+    </svg>
+  );
+}
+
+function ago(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)} h ago`;
+  if (minutes < 7 * 24 * 60) return `${Math.round(minutes / 1440)} d ago`;
+  return when(iso);
+}
+
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function prompt(it: InboxItem): string {
+  const lines = [`${labels[it.source] ?? it.source} ${it.kind}: ${it.title}`, it.url];
+  if (it.author) lines.push(`From ${it.author}.`);
+  if (it.description) lines.push("", it.description);
+  lines.push("", "The text above is shortened. Read the original at the link first.");
+  return lines.join("\n");
+}
+
+function status(s: Source) {
+  if (s.running) return <span>Checking…</span>;
+  if (s.setup) return <span class="muted">Not set up. {s.setup}</span>;
+  const checked = s.checked ? `Checked ${ago(s.checked)}` : "Not checked yet";
+  const every = s.enabled ? `every ${s.interval_minutes} min` : "automatic checks off";
+  return (
+    <>
+      <span class="muted">
+        {checked}, {every}.
+      </span>
+      {s.error && <span class="inbox-error">{s.error}</span>}
+    </>
+  );
+}
+
+export function Inbox({ onStart }: { onStart: (prompt: string) => void }) {
+  const [view, setView] = useState<View>();
+  const running = !!view?.sources.some((s) => s.running);
+
+  const load = () => act(async () => setView(await api<View>("GET", "/api/inbox")));
+  useEffect(() => void load(), []);
+  useEffect(() => {
+    const timer = setInterval(load, running ? 1500 : 60000);
+    return () => clearInterval(timer);
+  }, [running]);
+
+  const refresh = (source = "") => act(async () => setView(await api<View>("POST", "/api/inbox/refresh", { source })));
+  const dismiss = (it: InboxItem) => act(async () => setView(await api<View>("POST", "/api/inbox/dismiss", { source: it.source, id: it.id })));
+
+  if (!view) return <main class="inbox muted">Loading…</main>;
+  const ready = view.sources.some((s) => !s.setup);
+
+  return (
+    <main class="inbox" data-scope="inbox">
+      <Scope>
+        <header class="inbox-head">
+          <Button label="Refresh" icon="reset" class="primary" disabled={running || !ready} onClick={() => refresh()} />
+          <ul class="inbox-sources">
+            {view.sources.map((s) => (
+              <li key={s.name} class={s.setup && !s.running ? "off" : ""}>
+                <SourceIcon name={s.name} />
+                <b>{labels[s.name]}</b>
+                {s.running && <i class="spinner" />}
+                {status(s)}
+              </li>
+            ))}
+          </ul>
+        </header>
+      </Scope>
+      {view.items.length === 0 ? (
+        <p class="inbox-empty muted">{ready ? "Nothing waits for you." : "No source is set up yet. See Settings, Inbox."}</p>
+      ) : (
+        <ul class="inbox-items">
+          {view.items.map((it) => (
+            <li key={`${it.source}:${it.id}`} class="inbox-item" tabIndex={0} title="Start a session on this" onClick={() => onStart(prompt(it))} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onStart(prompt(it))}>
+              <SourceIcon name={it.source} />
+              <div class="inbox-body">
+                <div class="inbox-meta">
+                  <span>{sentence(it.kind)}</span>
+                  {it.author && <span>{it.author}</span>}
+                  <span title={new Date(it.time).toLocaleString()}>{ago(it.time)}</span>
+                  <span class="inbox-actions" onClick={(e) => e.stopPropagation()}>
+                    <a href={it.url} target="_blank" rel="noopener noreferrer" title={it.url}>
+                      Open
+                    </a>
+                    <button type="button" class="small" title="Dismiss, it does not come back" aria-label="Dismiss" onClick={() => dismiss(it)}>
+                      <i class="icon icon-close" />
+                    </button>
+                  </span>
+                </div>
+                <div class="inbox-title">{it.title}</div>
+                {it.description && <div class="inbox-desc">{it.description}</div>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
+  );
+}
+
+type Draft = Settings["inbox"];
+
+export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: Draft) => void }) {
+  const [keySet, setKeySet] = useState<boolean>();
+  const [key, setKey] = useState("");
+  useEffect(() => {
+    act(async () => setKeySet((await api<{ set: boolean }>("GET", "/api/inbox/linear-key")).set));
+  }, []);
+  const saveKey = (next: string) =>
+    act(async () => {
+      setKeySet((await api<{ set: boolean }>("PUT", "/api/inbox/linear-key", { key: next })).set);
+      setKey("");
+      flash(next ? "Linear key saved." : "Linear key removed.");
+    });
+
+  return (
+    <>
+      <span class="hint">kk checks each source on its own and shows what it finds in the Inbox tab. The Slack check is a model run and costs tokens.</span>
+      <table class="inbox-settings">
+        {Object.keys(labels).map((name) => {
+          const s = value[name] ?? { enabled: false, interval_minutes: 15 };
+          const set = (patch: Partial<typeof s>) => onValue({ ...value, [name]: { ...s, ...patch } });
+          return (
+            <tr key={name}>
+              <td>
+                <Check label={`Check ${labels[name]}`} checked={s.enabled} onChange={(e) => set({ enabled: e.currentTarget.checked })} />
+              </td>
+              <td>
+                every <input type="number" min={1} value={s.interval_minutes} aria-label={`${labels[name]} interval, minutes`} onInput={(e) => set({ interval_minutes: Number(e.currentTarget.value) })} /> min
+              </td>
+            </tr>
+          );
+        })}
+      </table>
+      <Field label="Linear API key">
+        <span class="hint">
+          {keySet === undefined ? "…" : keySet ? "A key is set. kk keeps it in its state directory and never shows it again." : "No key set. Create a personal API key in Linear, Settings, Security and access."}
+        </span>
+        <div class="dir-input">
+          <input
+            type="password"
+            autocomplete="off"
+            placeholder={keySet ? "Paste a new key to replace it" : "lin_api_…"}
+            value={key}
+            onInput={(e) => setKey(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (key.trim()) saveKey(key.trim());
+              }
+            }}
+          />
+          <Button label="Save key" disabled={!key.trim()} onClick={() => saveKey(key.trim())} />
+          <Button label="Remove key" disabled={!keySet} onClick={() => saveKey("")} />
+        </div>
+      </Field>
+    </>
+  );
+}

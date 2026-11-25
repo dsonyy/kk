@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { act, api, flash, harnessLabel, type Harness, type Settings, type Skill } from "./api";
 import { DirField } from "./dirpicker";
+import { InboxSettings } from "./inbox";
 import { Button, Field, Scope } from "./mnemonic";
 
 type View = { settings: Settings; env: Record<string, string> };
@@ -110,6 +111,9 @@ export function SettingsView() {
             {number("compact_tokens")}
           </Field>
           <DirField label="Source directory" hint={noteText("source", "Where the kk source is. The conductor is told to change kk there.")} value={draft.source} onValue={(dir) => set("source", dir)} />
+
+          <h1>Inbox</h1>
+          <InboxSettings value={draft.inbox} onValue={(v) => set("inbox", v)} />
 
           <h1>Server</h1>
           <Field label="Address">

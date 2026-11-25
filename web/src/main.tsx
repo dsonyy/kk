@@ -8,6 +8,7 @@ import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
 import { Board } from "./board";
+import { Inbox } from "./inbox";
 import { Filters, matches, shortName, useFilter } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
@@ -42,8 +43,9 @@ function App() {
   const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} />;
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
-  const [tab, setTab] = useState<"Agents" | "Sessions" | "Settings">("Agents");
-  const [creating, setCreating] = useState(false);
+  const [tab, setTab] = useState<"Agents" | "Sessions" | "Inbox" | "Settings">("Agents");
+  // The prompt a new session starts with; undefined while the dialog is closed.
+  const [creating, setCreating] = useState<string>();
   const openRef = useRef(open);
   openRef.current = open;
 
@@ -120,7 +122,7 @@ function App() {
   return (
     <>
       <nav class="tabs">
-        {(["Agents", "Sessions", "Settings"] as const).map((t) => (
+        {(["Agents", "Sessions", "Inbox", "Settings"] as const).map((t) => (
           <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
             {t}
           </a>
@@ -138,6 +140,7 @@ function App() {
       {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
+        {tab === "Inbox" && <Inbox onStart={setCreating} />}
         {tab === "Sessions" && (
           <div class="sessions">
             <Scope>{filters()}</Scope>
@@ -155,7 +158,7 @@ function App() {
         <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">
-              <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
+              <Button label="New session" icon="plus" class="primary" onClick={() => setCreating("")} />
               {filters()}
             </div>
           </Scope>
@@ -188,12 +191,13 @@ function App() {
         </div>
         <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!conductor} />
       </div>
-      {creating && (
+      {creating !== undefined && (
         <NewSession
-          onClose={() => setCreating(false)}
+          initial={creating}
+          onClose={() => setCreating(undefined)}
           onCreated={() => {
             loadList();
-            setCreating(false);
+            setCreating(undefined);
           }}
         />
       )}
@@ -774,10 +778,10 @@ function span(from: string, to: string): string {
   return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
-function NewSession({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function NewSession({ initial, onClose, onCreated }: { initial: string; onClose: () => void; onCreated: () => void }) {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [dirs, setDirs] = useState<string[]>([]);
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initial);
   const [harness, setHarness] = useState(localStorage.getItem("kk.harness") || "claude");
   const [models, setModels] = useState<Record<string, string>>(() => JSON.parse(localStorage.getItem("kk.models") || "{}"));
   const [dir, setDir] = useState(localStorage.getItem("kk.dir") || "");

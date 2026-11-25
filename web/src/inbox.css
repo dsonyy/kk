@@ -1,0 +1,26 @@
+.inbox { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.inbox-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start; gap: var(--gap); padding: var(--gap); border-bottom: 1px solid var(--line); background: var(--bg); }
+.inbox-head > button { flex: none; }
+.inbox-sources { flex: 1; min-width: 0; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.inbox-sources li { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; }
+.inbox-sources b { font-weight: normal; color: var(--text-strong); }
+.inbox-sources li.off, .inbox-sources li.off b { color: var(--text-dim); }
+.inbox-error { color: var(--err-text); overflow-wrap: anywhere; }
+.source-icon { flex: none; width: 14px; height: 14px; fill: none; stroke: var(--text); stroke-width: 1.4; stroke-linecap: square; }
+.inbox-empty { padding: var(--gap); margin: 0; }
+.inbox-items { margin: 0; padding: var(--gap); list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.inbox-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line-strong); background: var(--surface); cursor: pointer; }
+.inbox-item:hover, .inbox-item:focus-visible { border-color: var(--text); }
+.inbox-item > .source-icon { margin-top: 2px; }
+.inbox-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.inbox-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; color: var(--text-dim); font-size: 12px; }
+.inbox-title { color: var(--text-strong); overflow-wrap: anywhere; }
+.inbox-desc { color: var(--text); font-size: 13px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.inbox-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.inbox-actions a { padding: 1px 8px; border: 1px solid var(--line-strong); color: var(--text); }
+.inbox-actions a:hover { border-color: var(--text); color: var(--text-strong); }
+.inbox-actions button { display: inline-flex; align-items: center; padding: 3px 6px; }
+.inbox-actions .icon { width: 10px; height: 10px; }
+.inbox-settings { align-self: flex-start; }
+.inbox-settings td { vertical-align: middle; }
+.settings .inbox-settings input[type="number"] { width: 80px; margin: 0 6px; }
