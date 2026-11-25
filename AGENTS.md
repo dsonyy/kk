@@ -31,4 +31,4 @@ Design and plan: `~/brain/projects/kk/`.
 - Buttons are dark, never filled white. The main action gets `.primary`. A box that asks for a decision uses `.box-warn`.
 - `--font-ui` for interface text, `--font-mono` only for paths, code, commands and ids.
 - Buttons and field labels use `Button` and `Field` from `web/src/mnemonic.tsx`, which assign keyboard mnemonics. Do not hard-code mnemonics.
-- Sentence case.
+- Sentence case. The brand name konduktor stays lowercase; in the logo every k is bold and the other letters are not.

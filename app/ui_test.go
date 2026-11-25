@@ -439,3 +439,44 @@ func TestWorktreeIcon(t *testing.T) {
 		}
 	}
 }
+
+func TestLogo(t *testing.T) {
+	e := newEnv(t)
+	p := e.openPage(1600, 900)
+	for _, width := range []int{1600, 800, 420} {
+		p.resize(width, 900)
+		var got struct {
+			Text, Bold, Rest, Transform, Line, TabLine string
+			// Distances in pixels: of the logo from the left end of the bar and from the first tab, between their bottom edges
+			// and between the baselines of their texts. Hidden is how much of the logo does not fit in its box.
+			Left, ToTabs, Bottom, Baseline, Hidden float64
+		}
+		p.eval(`(() => {
+			const bar = document.querySelector("nav.tabs"), logo = bar.querySelector(".logo"), tab = bar.querySelector(".tab")
+			const weights = { bold: "", rest: "" }
+			for (const walk = document.createTreeWalker(logo, NodeFilter.SHOW_TEXT); walk.nextNode(); ) {
+				const weight = Number(getComputedStyle(walk.currentNode.parentElement).fontWeight)
+				weights[weight >= 700 ? "bold" : weight <= 400 ? "rest" : "between"] += walk.currentNode.data
+			}
+			// An empty inline block sits on the baseline.
+			const baseline = (text) => {
+				const mark = text.appendChild(document.createElement("i"))
+				mark.style.display = "inline-block"
+				const y = mark.getBoundingClientRect().bottom
+				mark.remove()
+				return y
+			}
+			const line = (el) => { const s = getComputedStyle(el); return s.borderBottomWidth + " " + s.borderBottomColor }
+			const l = logo.getBoundingClientRect(), t = tab.getBoundingClientRect()
+			return { text: logo.textContent, ...weights, transform: getComputedStyle(logo).textTransform, line: line(logo), tabLine: line(bar.querySelector(".tab:not(.on)")),
+				left: l.left - bar.getBoundingClientRect().left, toTabs: t.left - l.right, bottom: l.bottom - t.bottom,
+				baseline: baseline(logo) - baseline(tab), hidden: logo.scrollWidth - logo.clientWidth }
+		})()`, &got)
+		if got.Text != "konduktor" || got.Bold != "kk" || got.Rest != "ondutor" || got.Transform != "none" {
+			t.Errorf("%d wide: the logo reads wrong: %+v", width, got)
+		}
+		if got.Left != 0 || got.ToTabs != 0 || math.Abs(got.Bottom) > 0.5 || math.Abs(got.Baseline) > 0.5 || got.Hidden > 0 || got.Line != got.TabLine {
+			t.Errorf("%d wide: the logo is out of place: %+v", width, got)
+		}
+	}
+}

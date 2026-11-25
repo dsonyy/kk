@@ -98,6 +98,9 @@ button .icon { flex: none; width: 12px; height: 12px; }
 /* Every tab carries the line under the bar; the active tab drops it and takes the page color, so it flows into what is below. */
 .tabs { flex: none; display: flex; overflow-x: auto; scrollbar-width: none; background: var(--surface); }
 .tabs::after { content: ""; flex: 1; border-bottom: 1px solid var(--line); }
+/* The top padding puts the larger text on the baseline of the tabs. */
+.tabs .logo { flex: none; padding: 7px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-strong); font-size: 16px; font-weight: 300; line-height: 20px; }
+.tabs .logo b { font-weight: 800; }
 .tabs .tab { flex: none; padding: 7px 14px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-dim); white-space: nowrap; }
 .tabs .conductor-toggle { order: 1; flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid var(--line); border-right: 0; background: var(--surface); color: var(--text-dim); }
 .tabs .conductor-toggle::before { content: ""; width: 8px; height: 8px; border: 1px solid var(--text-dim); }

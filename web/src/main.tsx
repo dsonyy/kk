@@ -174,6 +174,9 @@ function App() {
   return (
     <>
       <nav class="tabs">
+        <span class="logo">
+          <b>k</b>ondu<b>k</b>tor
+        </span>
         {(["Agents", "Sessions", "Inbox", "Settings"] as const).map((t) => (
           <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
             {t}
