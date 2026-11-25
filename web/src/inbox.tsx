@@ -1,4 +1,3 @@
-import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { act, api, flash, when, type Settings } from "./api";
 import { Button, Check, Field, Scope } from "./mnemonic";
@@ -15,29 +14,8 @@ type View = { items: Item[]; sources: Source[] };
 
 const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack" };
 
-const marks: Record<string, JSX.Element> = {
-  github: (
-    <>
-      <circle cx="5" cy="4" r="2" />
-      <circle cx="5" cy="12" r="2" />
-      <circle cx="11" cy="6" r="2" />
-      <path d="M5 6v4M11 8c0 2-3 2-5.5 3" />
-    </>
-  ),
-  linear: (
-    <>
-      <path d="M2 9.5l4.5 4.5M2 6l8 8M3.5 3.5l9 9M6 2l8 8M9.5 2l4.5 4.5" />
-    </>
-  ),
-  slack: <path d="M6 2.5v11M10 2.5v11M2.5 6h11M2.5 10h11" />,
-};
-
 export function SourceIcon({ name }: { name: string }) {
-  return (
-    <svg class="source-icon" viewBox="0 0 16 16" aria-label={labels[name] ?? name} role="img">
-      {marks[name]}
-    </svg>
-  );
+  return <i class={`source-icon source-${name}`} aria-label={labels[name] ?? name} role="img" />;
 }
 
 function ago(iso: string): string {
