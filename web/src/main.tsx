@@ -8,6 +8,7 @@ import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
 import { Board } from "./board";
+import { Filters, matches, shortName, useFilter } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
@@ -33,10 +34,12 @@ function openIds(): string[] {
 
 function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
-  const [showClosed, setShowClosed] = useState(localStorage.getItem("kk.closed") !== "hide");
+  const [filter, setFilter] = useFilter();
+  const shown = sessions.filter((c) => matches(filter, c));
   // Closed sessions come after the open ones; both keep the server's order by last activity.
-  const closed = sessions.filter((c) => c.closed);
-  const list = [...sessions.filter((c) => !c.closed), ...(showClosed ? closed : [])];
+  const list = [...shown.filter((c) => !c.closed), ...shown.filter((c) => c.closed)];
+  const empty = sessions.length ? "No sessions match the filters." : "No sessions yet.";
+  const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} />;
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
   const [tab, setTab] = useState<"Agents" | "Sessions" | "Settings">("Agents");
@@ -125,35 +128,28 @@ function App() {
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
         {tab === "Sessions" && (
-          <Board
-            list={sessions}
-            onOpen={(id) => {
-              setTab("Agents");
-              show(id);
-            }}
-          />
+          <div class="sessions">
+            <Scope>{filters()}</Scope>
+            <Board
+              key={JSON.stringify(filter)}
+              list={shown}
+              empty={empty}
+              onOpen={(id) => {
+                setTab("Agents");
+                show(id);
+              }}
+            />
+          </div>
         )}
         <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
           <Scope>
             <div class="sidebar-head">
               <Button label="New session" icon="plus" class="primary" onClick={() => setCreating(true)} />
-              {closed.length > 0 && (
-                <div class="filter">
-                  <Check
-                    label="Show closed"
-                    checked={showClosed}
-                    onChange={(e) => {
-                      localStorage.setItem("kk.closed", e.currentTarget.checked ? "show" : "hide");
-                      setShowClosed(e.currentTarget.checked);
-                    }}
-                  />
-                  <span class="muted">{closed.length}</span>
-                </div>
-              )}
+              {filters()}
             </div>
           </Scope>
           <div class="groups">
-            {list.length === 0 && <div class="empty">No sessions yet.</div>}
+            {list.length === 0 && <div class="empty">{empty}</div>}
             {projects.map((project) => (
               <Group
                 key={project}
@@ -215,13 +211,6 @@ function loudness(c: Conversation) {
   if (c.waiting_for === "user") return c.attention ? 0 : 1;
   if (c.status === "working" || c.status === "starting") return 2;
   return c.waiting_for === "conductor" ? 3 : 4;
-}
-
-// A directory goes by its last segment, and by its last two when another group ends the same way.
-function shortName(project: string, all: string[]) {
-  const parts = project.split("/").filter(Boolean);
-  const last = parts[parts.length - 1] ?? project;
-  return all.filter((p) => p.endsWith(`/${last}`)).length > 1 ? parts.slice(-2).join("/") : last;
 }
 
 type GroupProps = {

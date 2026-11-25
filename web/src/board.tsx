@@ -24,8 +24,8 @@ function columns(list: Conversation[]): Column[] {
   return cols;
 }
 
-export function Board({ list, onOpen }: { list: Conversation[]; onOpen: (id: string) => void }) {
-  if (list.length === 0) return <div class="board empty">No sessions yet.</div>;
+export function Board({ list, empty, onOpen }: { list: Conversation[]; empty: string; onOpen: (id: string) => void }) {
+  if (list.length === 0) return <div class="board empty">{empty}</div>;
   return (
     <div class="board">
       {columns(list).map((col) => (
