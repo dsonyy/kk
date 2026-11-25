@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -357,26 +359,27 @@ func TestInboxSettings(t *testing.T) {
 	_, out := e.request("GET", "/api/settings", nil)
 	var view settingsView
 	json.Unmarshal(out, &view)
-	if view.Settings.Inbox["slack"] != (InboxSettings{true, 60}) || view.Settings.Inbox["github"] != (InboxSettings{true, 15}) {
-		t.Fatalf("defaults: %+v", view.Settings.Inbox)
+	for _, name := range []string{"github", "linear", "slack", "gmail"} {
+		if view.Settings.Inbox[name] != (InboxSettings{true, 15, 60}) {
+			t.Fatalf("defaults: %+v", view.Settings.Inbox)
+		}
 	}
-	if view.Settings.Inbox["gmail"] != (InboxSettings{true, 60}) {
-		t.Fatalf("gmail default: %+v", view.Settings.Inbox)
-	}
-	view.Settings.Inbox["slack"] = InboxSettings{false, 120}
+	view.Settings.Inbox["slack"] = InboxSettings{false, 30, 120}
 	data, _ := json.Marshal(view.Settings)
 	if resp, out := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 200 {
 		t.Fatalf("save: %s", out)
 	}
-	if s := sourceOf(e.inbox(), "slack"); s.Enabled || s.Interval != 120 {
+	if s := sourceOf(e.inbox(), "slack"); s.Enabled || s.Work != 30 || s.Off != 120 {
 		t.Fatalf("slack settings: %+v", s)
 	}
-	view.Settings.Inbox["github"] = InboxSettings{true, 0}
-	data, _ = json.Marshal(view.Settings)
-	if resp, _ := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 400 {
-		t.Fatal("an interval of 0 should be refused")
+	for _, bad := range []InboxSettings{{true, 0, 60}, {true, 15, 0}} {
+		view.Settings.Inbox["github"] = bad
+		data, _ = json.Marshal(view.Settings)
+		if resp, _ := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 400 {
+			t.Fatalf("intervals %+v should be refused", bad)
+		}
 	}
-	if s := sourceOf(e.inbox(), "github"); s.Interval != 15 {
+	if s := sourceOf(e.inbox(), "github"); s.Work != 15 || s.Off != 60 {
 		t.Fatalf("a refused save changed the settings: %+v", s)
 	}
 }
@@ -385,7 +388,92 @@ func TestInboxSettingsAddGmail(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, settingsPath(dir), "inbox:\n  slack: {enabled: false, interval_minutes: 30}\n")
 	in := loadSettings(dir).Inbox
-	if in["slack"] != (InboxSettings{false, 30}) || in["gmail"] != (InboxSettings{true, 60}) {
-		t.Fatalf("settings saved before Gmail should get its default: %+v", in)
+	if in["slack"] != (InboxSettings{false, 15, 60}) || in["gmail"] != (InboxSettings{true, 15, 60}) {
+		t.Fatalf("settings saved before Gmail and working hours should keep enabled and get the default intervals: %+v", in)
+	}
+}
+
+func at(hour, minute int) time.Time { return time.Date(2026, 11, 25, hour, minute, 0, 0, time.Local) }
+
+func TestInboxInterval(t *testing.T) {
+	c := InboxSettings{true, 15, 60}
+	for _, tc := range []struct {
+		now  time.Time
+		want time.Duration
+	}{
+		{at(7, 59), time.Hour},
+		{at(8, 0), 15 * time.Minute},
+		{at(19, 59), 15 * time.Minute},
+		{at(20, 0), time.Hour},
+		{at(0, 0), time.Hour},
+	} {
+		if got := c.interval(tc.now); got != tc.want {
+			t.Errorf("interval at %s = %s, want %s", tc.now.Format("15:04"), got, tc.want)
+		}
+	}
+}
+
+// blockingSource counts its fetches and holds each one until release is closed.
+type blockingSource struct {
+	fetches *atomic.Int32
+	release chan struct{}
+}
+
+func (blockingSource) name() string { return "github" }
+func (blockingSource) ready() error { return nil }
+func (s blockingSource) fetch(context.Context) ([]InboxItem, error) {
+	s.fetches.Add(1)
+	<-s.release
+	return nil, nil
+}
+
+func testInbox(t *testing.T, checked time.Time) (*Inbox, blockingSource) {
+	src := blockingSource{&atomic.Int32{}, make(chan struct{})}
+	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{},
+		settings: func() map[string]InboxSettings { return map[string]InboxSettings{"github": {true, 15, 60}} },
+		state:    inboxState{Sources: map[string]*sourceState{"github": {Checked: checked}}, Status: map[string]itemStatus{}}}
+	return in, src
+}
+
+func TestInboxCrossesWorkingHours(t *testing.T) {
+	for _, tc := range []struct {
+		checked     time.Time
+		early, late time.Time
+	}{
+		{at(7, 30), at(7, 59), at(8, 0)},
+		{at(7, 59), at(8, 13), at(8, 14)},
+		{at(19, 50), at(20, 49), at(20, 50)},
+		{at(23, 30), at(0, 29).AddDate(0, 0, 1), at(0, 30).AddDate(0, 0, 1)},
+	} {
+		in, src := testInbox(t, tc.checked)
+		in.tick(tc.early)
+		if n := src.fetches.Load(); n != 0 {
+			t.Fatalf("checked at %s: a check started at %s", tc.checked.Format("15:04"), tc.early.Format("15:04"))
+		}
+		in.tick(tc.late)
+		waitFor(t, func() bool { return src.fetches.Load() == 1 })
+		close(src.release)
+	}
+}
+
+func TestInboxOneRunPerSource(t *testing.T) {
+	in, src := testInbox(t, time.Time{})
+	in.tick(at(9, 0))
+	waitFor(t, func() bool { return src.fetches.Load() == 1 })
+	in.tick(at(9, 30))
+	in.refresh(src)
+	if n := src.fetches.Load(); n != 1 {
+		t.Fatalf("%d runs of one source at once", n)
+	}
+	close(src.release)
+	waitFor(t, func() bool { in.mu.Lock(); defer in.mu.Unlock(); return !in.running["github"] })
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
 	}
 }

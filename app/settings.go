@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"maps"
 	"net"
 	"net/http"
@@ -29,9 +30,11 @@ type Settings struct {
 	Inbox map[string]InboxSettings `yaml:"inbox" json:"inbox"`
 }
 
+// InboxSettings replaced interval_minutes with work_minutes and off_minutes; a saved interval_minutes is ignored.
 type InboxSettings struct {
-	Enabled         bool `yaml:"enabled" json:"enabled"`
-	IntervalMinutes int  `yaml:"interval_minutes" json:"interval_minutes"`
+	Enabled     bool `yaml:"enabled" json:"enabled"`
+	WorkMinutes int  `yaml:"work_minutes" json:"work_minutes"`
+	OffMinutes  int  `yaml:"off_minutes" json:"off_minutes"`
 }
 
 // settingsEnv maps a setting to the environment variable that overrides it.
@@ -42,9 +45,9 @@ var settingsEnv = map[string]string{
 
 func settingsPath(dir string) string { return filepath.Join(dir, "settings.yaml") }
 
-// inboxDefaults checks Slack and Gmail less often, since every check is a model run.
 func inboxDefaults() map[string]InboxSettings {
-	return map[string]InboxSettings{"github": {true, 15}, "linear": {true, 15}, "slack": {true, 60}, "gmail": {true, 60}}
+	d := InboxSettings{true, 15, 60}
+	return map[string]InboxSettings{"github": d, "linear": d, "slack": d, "gmail": d}
 }
 
 func loadSettings(dir string) Settings {
@@ -56,6 +59,14 @@ func loadSettings(dir string) Settings {
 	}
 	if data, err := os.ReadFile(settingsPath(dir)); err == nil {
 		yaml.Unmarshal(data, &st)
+	}
+	// A source saved before an interval existed loads with it at zero, which would check on every tick.
+	for name, in := range st.Inbox {
+		if d, ok := inboxDefaults()[name]; ok {
+			in.WorkMinutes = cmp.Or(max(in.WorkMinutes, 0), d.WorkMinutes)
+			in.OffMinutes = cmp.Or(max(in.OffMinutes, 0), d.OffMinutes)
+			st.Inbox[name] = in
+		}
 	}
 	return st
 }
@@ -128,8 +139,8 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 		return nil, fail(400, "timeouts and the token limit must be positive")
 	}
 	for name, in := range st.Inbox {
-		if _, ok := inboxDefaults()[name]; !ok || in.IntervalMinutes < 1 {
-			return nil, fail(400, "inbox source %q needs a known name and an interval of at least a minute", name)
+		if _, ok := inboxDefaults()[name]; !ok || in.WorkMinutes < 1 || in.OffMinutes < 1 {
+			return nil, fail(400, "inbox source %q needs a known name and intervals of at least a minute", name)
 		}
 	}
 	claude, _ := findHarness("claude")

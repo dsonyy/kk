@@ -6,11 +6,11 @@ import "./inbox.css";
 
 export type InboxItem = { source: string; id: string; kind: string; title: string; description: string; url: string; author: string; time: string };
 
-type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; interval_minutes: number };
+type Source = { name: string; enabled: boolean; setup: string; checked?: string; error: string; running: boolean; work_minutes: number; off_minutes: number };
 
 type Item = InboxItem & { status: Status; changed?: string };
 
-type View = { items: Item[]; sources: Source[] };
+type View = { items: Item[]; sources: Source[]; work_hours: [number, number] };
 
 const labels: Record<string, string> = { github: "GitHub", linear: "Linear", slack: "Slack", gmail: "Gmail" };
 
@@ -37,11 +37,13 @@ function prompt(it: InboxItem): string {
   return lines.join("\n");
 }
 
-function status(s: Source) {
+const hour = (h: number) => `${String(h).padStart(2, "0")}:00`;
+
+function status(s: Source, [from, to]: View["work_hours"]) {
   if (s.running) return <span>Checking…</span>;
   if (s.setup) return <span class="muted">Not set up. {s.setup}</span>;
   const checked = s.checked ? `Checked ${ago(s.checked)}` : "Not checked yet";
-  const every = s.enabled ? `every ${s.interval_minutes} min` : "automatic checks off";
+  const every = s.enabled ? `every ${s.work_minutes} min from ${hour(from)} to ${hour(to)}, every ${s.off_minutes} min outside` : "automatic checks off";
   return (
     <>
       <span class="muted">
@@ -174,7 +176,7 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
                 <SourceIcon name={s.name} />
                 <b>{labels[s.name]}</b>
                 {s.running && <i class="spinner" />}
-                {status(s)}
+                {status(s, view.work_hours)}
               </li>
             ))}
           </ul>
@@ -255,8 +257,10 @@ type Draft = Settings["inbox"];
 export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: Draft) => void }) {
   const [keySet, setKeySet] = useState<boolean>();
   const [key, setKey] = useState("");
+  const [hours, setHours] = useState<View["work_hours"]>();
   useEffect(() => {
     act(async () => setKeySet((await api<{ set: boolean }>("GET", "/api/inbox/linear-key")).set));
+    act(async () => setHours((await api<View>("GET", "/api/inbox")).work_hours));
   }, []);
   const saveKey = (next: string) =>
     act(async () => {
@@ -270,7 +274,7 @@ export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: D
       <span class="hint">kk checks each source on its own and shows what it finds in the Inbox tab. The Slack and Gmail checks are model runs and cost tokens.</span>
       <table class="inbox-settings">
         {Object.keys(labels).map((name) => {
-          const s = value[name] ?? { enabled: false, interval_minutes: 15 };
+          const s = value[name] ?? { enabled: false, work_minutes: 15, off_minutes: 60 };
           const set = (patch: Partial<typeof s>) => onValue({ ...value, [name]: { ...s, ...patch } });
           return (
             <tr key={name}>
@@ -278,7 +282,9 @@ export function InboxSettings({ value, onValue }: { value: Draft; onValue: (v: D
                 <Check label={`Check ${labels[name]}`} checked={s.enabled} onChange={(e) => set({ enabled: e.currentTarget.checked })} />
               </td>
               <td>
-                every <input type="number" min={1} value={s.interval_minutes} aria-label={`${labels[name]} interval, minutes`} onInput={(e) => set({ interval_minutes: Number(e.currentTarget.value) })} /> min
+                every <input type="number" min={1} value={s.work_minutes} aria-label={`${labels[name]} interval in working hours, minutes`} onInput={(e) => set({ work_minutes: Number(e.currentTarget.value) })} /> min
+                {hours && ` from ${hour(hours[0])} to ${hour(hours[1])}`}, every
+                <input type="number" min={1} value={s.off_minutes} aria-label={`${labels[name]} interval outside working hours, minutes`} onInput={(e) => set({ off_minutes: Number(e.currentTarget.value) })} /> min outside
               </td>
             </tr>
           );
