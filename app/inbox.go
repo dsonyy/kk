@@ -212,6 +212,7 @@ func (in *Inbox) refresh(s inboxSource) {
 			log.Printf("inbox %s: %v", s.name(), err)
 		default:
 			in.setItems(s.name(), items)
+			log.Printf("inbox %s checked: %d items", s.name(), len(items))
 		}
 		in.save()
 	}()

@@ -3,7 +3,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-export function Terminal({ id }: { id: string }) {
+export function Terminal({ path }: { path: string }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const css = getComputedStyle(document.documentElement);
@@ -11,12 +11,14 @@ export function Terminal({ id }: { id: string }) {
       fontFamily: css.getPropertyValue("--font-mono"),
       fontSize: 13,
       cursorBlink: true,
+      // tmux keeps the scrollback, so the terminal needs no scrollbar.
+      scrollback: 0,
       theme: { background: css.getPropertyValue("--bg"), foreground: css.getPropertyValue("--text") },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(box.current!);
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/conversations/${id}/terminal`);
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`);
     ws.binaryType = "arraybuffer";
     const encoder = new TextEncoder();
     const resize = () => {
@@ -38,6 +40,6 @@ export function Terminal({ id }: { id: string }) {
       ws.close();
       term.dispose();
     };
-  }, [id]);
+  }, [path]);
   return <div class="terminal" ref={box} />;
 }

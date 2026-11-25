@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +22,13 @@ func tmuxCmd(args ...string) *exec.Cmd {
 	return exec.Command("tmux", args...)
 }
 
+// tmuxReads are the commands that change nothing, which stay out of the log.
+var tmuxReads = map[string]bool{"has-session": true, "list-panes": true, "list-sessions": true, "list-windows": true, "capture-pane": true, "display-message": true}
+
 func tmux(stdin string, args ...string) (string, error) {
+	if !tmuxReads[args[0]] {
+		logTmux(args)
+	}
 	cmd := tmuxCmd(args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -30,6 +38,15 @@ func tmux(stdin string, args ...string) (string, error) {
 		return "", fmt.Errorf("tmux %s: %v: %s", args[0], err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimRight(string(out), "\n"), nil
+}
+
+// logTmux logs a command with its target only: the other arguments can hold a prompt, a title or keys typed for the user.
+func logTmux(args []string) {
+	line := "tmux " + args[0]
+	if i := slices.Index(args, "-t"); i >= 0 && i+1 < len(args) {
+		line += " " + args[i+1]
+	}
+	log.Print(line)
 }
 
 func ensureSession() error {

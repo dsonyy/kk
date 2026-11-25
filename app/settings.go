@@ -2,13 +2,16 @@ package main
 
 import (
 	"cmp"
+	"log"
 	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -126,7 +129,25 @@ func (s *Server) handleSettings(*http.Request) (any, error) {
 	return settingsView{s.cfg(), env}, nil
 }
 
+// changedSettings names the settings that differ between a and b, without their values.
+func changedSettings(a, b Settings) []string {
+	var ma, mb map[string]any
+	da, _ := yaml.Marshal(a)
+	db, _ := yaml.Marshal(b)
+	yaml.Unmarshal(da, &ma)
+	yaml.Unmarshal(db, &mb)
+	var keys []string
+	for k := range mb {
+		if !reflect.DeepEqual(ma[k], mb[k]) {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
+	old := s.cfg()
 	st := s.cfg()
 	st.Inbox = maps.Clone(st.Inbox)
 	if err := decode(r, &st); err != nil {
@@ -176,6 +197,9 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	s.mu.Lock()
 	s.settings = st
 	s.mu.Unlock()
+	if keys := changedSettings(old, st); len(keys) > 0 {
+		log.Printf("settings changed: %s", strings.Join(keys, ", "))
+	}
 	if st.coordinator() {
 		if err := s.ensureCoordinator(); err != nil {
 			return nil, err

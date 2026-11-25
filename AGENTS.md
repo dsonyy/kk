@@ -15,6 +15,7 @@ Design and plan: `~/brain/projects/kk/`.
 - Never edit `web/dist/` or `web/node_modules/`.
 - Never write to agent configuration (`~/.claude.json`, `~/.claude/settings.json`, `~/.codex/config.toml`). Hooks are passed per run with `--settings` and `-c`.
 - Never store kk state outside `~/.kk`. State files are YAML; the only JSON file is `~/.kk/hooks/claude.json`, because Claude Code requires it.
+- Never log message contents, prompts, titles, group names, mail or Slack texts, hook payloads, tokens or keys. Log events and metadata with `log.Printf`, one line each, only when something happens. The log is plain text in `~/.kk/kk.log`, which keeps its newer half past 1 MB.
 - Never copy agent messages into `~/.kk`. The agents' transcripts are the source.
 
 ## Layout
