@@ -9,7 +9,7 @@ import { DirField } from "./dirpicker";
 import { Load } from "./load";
 import { Board } from "./board";
 import { Inbox } from "./inbox";
-import { Filters, matches, shortName, useFilter } from "./filter";
+import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
@@ -36,11 +36,16 @@ function openIds(): string[] {
 function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
   const [filter, setFilter] = useFilter();
-  const shown = sessions.filter((c) => matches(filter, c));
-  // Closed sessions come after the open ones; both keep the server's order by last activity.
+  const [sort, setSort] = useSort();
+  const shown = sessions.filter((c) => matches(filter, c)).sort(compare(sort));
+  // Closed sessions come after the open ones in the sidebar; both keep the chosen order.
   const list = [...shown.filter((c) => !c.closed), ...shown.filter((c) => c.closed)];
   const empty = sessions.length ? "No sessions match the filters." : "No sessions yet.";
-  const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} />;
+  const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} sort={sort} onSort={setSort} />;
+  // Groups whose sessions are all closed start collapsed; opening one lasts until the page reloads.
+  const [unfolded, setUnfolded] = useState<string[]>([]);
+  const unfold = (key: string, on: boolean) => setUnfolded(on ? [...unfolded, key] : unfolded.filter((k) => k !== key));
+  const allClosed = (inGroup: (c: Conversation) => boolean) => sessions.filter(inGroup).every((c) => c.closed);
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [open, setOpenState] = useState(openIds);
   const [tab, setTab] = useState<"Agents" | "Sessions" | "Inbox" | "Settings">("Agents");
@@ -113,10 +118,13 @@ function App() {
     localStorage.setItem("kk.collapsed", JSON.stringify(next));
     setCollapsed(next);
   };
-  // The list comes sorted by last activity, so groups and the sessions in them keep that order.
+  // A group follows its first session, its name when sorting by title, and puts work in progress first when sorting by activity.
   const groups = new Map<string, Conversation[]>();
   for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
   const projects = [...groups.keys()];
+  const names = new Map(projects.map((p) => [p, shortName(p, projects)]));
+  if (sort === "title") projects.sort((a, b) => byName(names.get(a)!, names.get(b)!));
+  if (sort === "active") projects.sort((a, b) => byActivity(groups.get(a)!, groups.get(b)!));
 
   const [conductor, setConductor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
 
@@ -152,7 +160,10 @@ function App() {
             <Scope>{filters()}</Scope>
             <Board
               list={shown}
+              sort={sort}
               empty={empty}
+              folded={(project, group) => (allClosed((c) => c.project === project && c.group === group) ? !unfolded.includes(`${project}\n${group}`) : undefined)}
+              onFold={(project, group, on) => unfold(`${project}\n${group}`, !on)}
               onOpen={(id) => {
                 setTab("Agents");
                 show(id);
@@ -169,18 +180,21 @@ function App() {
           </Scope>
           <div class="groups">
             {list.length === 0 && <div class="empty">{empty}</div>}
-            {projects.map((project) => (
-              <Group
-                key={project}
-                project={project}
-                name={shortName(project, projects)}
-                list={groups.get(project)!}
-                open={open}
-                collapsed={collapsed.includes(project)}
-                onCollapse={(on) => collapse(project, on)}
-                onOpen={show}
-              />
-            ))}
+            {projects.map((project) => {
+              const closed = allClosed((c) => c.project === project);
+              return (
+                <Group
+                  key={project}
+                  project={project}
+                  name={names.get(project)!}
+                  list={groups.get(project)!}
+                  open={open}
+                  collapsed={closed ? !unfolded.includes(project) : collapsed.includes(project)}
+                  onCollapse={(on) => (closed ? unfold(project, !on) : collapse(project, on))}
+                  onOpen={show}
+                />
+              );
+            })}
           </div>
           <Load />
         </aside>
@@ -245,7 +259,7 @@ type GroupProps = {
 };
 
 function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
-  const loud = list.filter((c) => loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
+  const loud = list.filter((c) => !c.closed && loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
   const unread = list.some((c) => c.unread && !open.includes(c.id));
   const cls = ["group", collapsed && loud && attention(loud), collapsed && unread && "unread"];
   return (
