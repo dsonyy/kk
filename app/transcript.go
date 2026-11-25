@@ -64,17 +64,17 @@ type Tail struct {
 	// settled is when the last background task ended.
 	settled time.Time
 	stamp   time.Time
-	// Usage is what the models used in this transcript.
-	Usage Usage
+	// Activity counts what the models used, the turns and the tool calls in this transcript.
+	Activity Activity
 	// metered holds the usage counted for each Claude Code message.
-	metered map[string]Usage
+	metered map[string]metered
 	// codexTotal is the last running total of a Codex thread, and model the model of its current turn.
 	codexTotal codexCount
 	model      string
 }
 
 func newTail(path string) *Tail {
-	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}, metered: map[string]Usage{}}
+	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}, metered: map[string]metered{}}
 }
 
 func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
@@ -149,6 +149,12 @@ func (t *Tail) fork(l claudeLine) {
 
 func (t *Tail) add(e Event) {
 	t.Events = append(t.Events, e)
+	switch e.Kind {
+	case kindUser:
+		t.Activity.Turns++
+	case kindTool:
+		t.Activity.tool(e.Tool, 1)
+	}
 	if (e.Kind == kindUser || e.Kind == kindAssistant) && e.Time.After(t.Last) {
 		t.Last = e.Time
 	}

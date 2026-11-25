@@ -39,12 +39,12 @@ type Conversation struct {
 	TurnEnded   time.Time `yaml:"turn_ended,omitempty" json:"turn_ended"`
 	Seen        time.Time `yaml:"seen,omitempty" json:"seen"`
 	Context     int       `yaml:"context_tokens,omitempty" json:"context_tokens"`
-	// Usage is what the models used, by transcript file: a reset or a revert moves the conversation to a new one,
-	// and subagents write their own.
-	Usage map[string]Usage `yaml:"usage,omitempty" json:"-"`
-	Compacted   bool      `yaml:"compacted,omitempty" json:"compacted,omitempty"`
-	Closed      bool      `yaml:"closed,omitempty" json:"closed,omitempty"`
-	ClosedAt    time.Time `yaml:"closed_at,omitempty" json:"closed_at,omitzero"`
+	// Transcripts holds the activity of every transcript file of the conversation: a reset or a revert moves it to a
+	// new one, and subagents write their own.
+	Transcripts map[string]Activity `yaml:"transcripts,omitempty" json:"-"`
+	Compacted   bool                `yaml:"compacted,omitempty" json:"compacted,omitempty"`
+	Closed      bool                `yaml:"closed,omitempty" json:"closed,omitempty"`
+	ClosedAt    time.Time           `yaml:"closed_at,omitempty" json:"closed_at,omitzero"`
 	// ByAgent is set when an agent through the kk CLI, not the user, started the conversation or acted on it last.
 	// Conversations from before it existed count as the user's.
 	ByAgent bool `yaml:"by_agent,omitempty" json:"-"`
@@ -61,7 +61,7 @@ const (
 	// statusBackground is an agent whose turn ended while a background task it started still runs. The harness starts
 	// the next turn by itself when the task ends, so nobody has to act.
 	statusBackground = "background"
-	statusExited   = "exited"
+	statusExited     = "exited"
 )
 
 const (

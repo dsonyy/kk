@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // The fake agents answer with 1000 tokens of input, 990 of them from the cache, and 50 of output. A subagent adds
@@ -119,5 +123,56 @@ func TestCursorHasNoUsage(t *testing.T) {
 	c := e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hi cursor") })
 	if c.Usage != nil {
 		t.Fatalf("usage: %+v", *c.Usage)
+	}
+}
+
+func activity(e *env) []activityRow {
+	e.t.Helper()
+	out, err := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/activity").Output()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	var rows []activityRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		e.t.Fatalf("%v: %s", err, out)
+	}
+	return rows
+}
+
+func TestActivity(t *testing.T) {
+	e := newEnv(t)
+	claude := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "ask a subagent")
+	waitUsage(e, claude, answerTokens+1100, opusAnswer+haikuAgent)
+	e.mustKK("reset", claude)
+	e.waitFor("ready after reset", claude, func(c convView) bool { return c.Status == statusIdle })
+	e.mustKK("send", claude, "two")
+	waitUsage(e, claude, 2*answerTokens+1100, 2*opusAnswer+haikuAgent)
+	e.mustKK("close", claude)
+	cursor := e.mustKK("new", "cursor", "-C", e.work, "hi cursor")
+	e.waitFor("cursor answer", cursor, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hi cursor") && c.Status == statusIdle })
+
+	var rows map[string]activityRow
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows = map[string]activityRow{}
+		for _, r := range activity(e) {
+			rows[r.ID] = r
+		}
+		if rows[cursor].Turns == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	today := time.Now().Format(time.DateOnly)
+	c := rows[claude]
+	if !c.Closed || !c.Metered || c.Harness != "claude" || c.Project != e.work || c.Turns != 2 || c.Tools["Bash"] != 2 {
+		t.Fatalf("claude row: %+v", c)
+	}
+	if !near(c.Days[today].Cost, 2*opusAnswer+haikuAgent) || !near(c.Models["claude-opus-5-5"].Cost, 2*opusAnswer) || !near(c.Models["claude-haiku-5-5"].Cost, haikuAgent) {
+		t.Fatalf("claude usage by day and model: %+v %+v", c.Days, c.Models)
+	}
+	k := rows[cursor]
+	if k.Metered || k.Turns != 1 || k.Tools["Shell"] != 1 || len(k.Days) != 0 {
+		t.Fatalf("cursor row: %+v", k)
 	}
 }

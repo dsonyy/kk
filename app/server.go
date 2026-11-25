@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -122,6 +123,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/stats", s.handleStats)
+	api("GET /api/activity", s.handleActivity)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
 	api("POST /api/pick", handlePick)
@@ -226,7 +228,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 func (s *Server) view(c Conversation, events bool) convView {
 	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if usageParser[c.Harness] != nil {
-		u := c.TotalUsage()
+		u := c.TotalActivity().Usage
 		v.Usage = &u
 	}
 	if events {
@@ -825,7 +827,7 @@ func (s *Server) tick() {
 			continue
 		}
 		events := s.readTail(c)
-		usage := s.usage(c)
+		activity := s.activity(c)
 		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
@@ -863,14 +865,14 @@ func (s *Server) tick() {
 					c.Status, changed = statusWorking, true
 				}
 			}
-			for path, u := range usage {
-				if !c.Usage[path].equal(u) {
+			for path, a := range activity {
+				if !reflect.DeepEqual(c.Transcripts[path], a) {
 					// The stored conversation shares the map with this copy.
-					c.Usage = maps.Clone(c.Usage)
-					if c.Usage == nil {
-						c.Usage = map[string]Usage{}
+					c.Transcripts = maps.Clone(c.Transcripts)
+					if c.Transcripts == nil {
+						c.Transcripts = map[string]Activity{}
 					}
-					c.Usage[path], changed = u, true
+					c.Transcripts[path], changed = a, true
 				}
 			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
@@ -917,25 +919,26 @@ func (s *Server) readTail(c Conversation) *Tail {
 	return &cp
 }
 
-// usage returns what the models used in c's current transcript and in those of its subagents, by file, and whether
-// kk can tell. It counts the lines of the transcript that were read.
-func (s *Server) usage(c Conversation) map[string]Usage {
+// activity returns the activity of c's current transcript and of the transcripts of its subagents, by file. It counts
+// the lines of the transcript that were read.
+func (s *Server) activity(c Conversation) map[string]Activity {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tail(c)
-	list := subagents[c.Harness]
-	if t == nil || list == nil {
+	if t == nil {
 		return nil
 	}
-	out := map[string]Usage{c.Transcript: t.Usage}
-	for _, p := range list(c) {
-		sub := s.subagents[p]
-		if sub == nil {
-			sub = newTail(p)
-			s.subagents[p] = sub
+	out := map[string]Activity{c.Transcript: t.Activity.clone()}
+	if list := subagents[c.Harness]; list != nil {
+		for _, p := range list(c) {
+			sub := s.subagents[p]
+			if sub == nil {
+				sub = newTail(p)
+				s.subagents[p] = sub
+			}
+			sub.read(usageParser[c.Harness])
+			out[p] = sub.Activity.clone()
 		}
-		sub.read(usageParser[c.Harness])
-		out[p] = sub.Usage
 	}
 	return out
 }

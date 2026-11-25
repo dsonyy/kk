@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Usage is what an agent's models read and wrote, and what that costs at API list prices.
@@ -35,8 +37,62 @@ func (u *Usage) add(o Usage) {
 	}
 }
 
-func (u Usage) equal(o Usage) bool {
-	return u.Input == o.Input && u.CacheRead == o.CacheRead && u.CacheWrite == o.CacheWrite && u.Output == o.Output && u.Cost == o.Cost && slices.Equal(u.Unpriced, o.Unpriced)
+// Activity is what happened in one transcript file: what its models used, in all, per local day and per model, and
+// how many turns and tool calls it holds. A rewound branch stays counted; a harness that rewrites its transcript drops it.
+type Activity struct {
+	Usage  `yaml:",inline"`
+	Days   map[string]Usage `yaml:"days,omitempty" json:"days,omitempty"`
+	Models map[string]Usage `yaml:"models,omitempty" json:"models,omitempty"`
+	Turns  int              `yaml:"turns,omitempty" json:"turns"`
+	Tools  map[string]int   `yaml:"tools,omitempty" json:"tools,omitempty"`
+}
+
+// meter counts the usage of a request made at a time to a model. A request whose time is not recorded has no day.
+func (a *Activity) meter(at time.Time, model string, u Usage) {
+	a.Usage.add(u)
+	if !at.IsZero() {
+		a.Days = addUsage(a.Days, at.Local().Format(time.DateOnly), u)
+	}
+	a.Models = addUsage(a.Models, model, u)
+}
+
+func (a *Activity) add(o Activity) {
+	a.Usage.add(o.Usage)
+	a.Turns += o.Turns
+	for day, u := range o.Days {
+		a.Days = addUsage(a.Days, day, u)
+	}
+	for model, u := range o.Models {
+		a.Models = addUsage(a.Models, model, u)
+	}
+	for tool, n := range o.Tools {
+		a.tool(tool, n)
+	}
+}
+
+func (a *Activity) tool(name string, n int) {
+	if a.Tools == nil {
+		a.Tools = map[string]int{}
+	}
+	a.Tools[name] += n
+}
+
+func addUsage(m map[string]Usage, key string, u Usage) map[string]Usage {
+	if m == nil {
+		m = map[string]Usage{}
+	}
+	sum := m[key]
+	sum.add(u)
+	m[key] = sum
+	return m
+}
+
+// clone copies the activity, whose maps its tail keeps changing.
+func (a Activity) clone() Activity {
+	var c Activity
+	c.add(a)
+	slices.Sort(c.Unpriced)
+	return c
 }
 
 // price is in US dollars per million tokens.
@@ -139,11 +195,17 @@ func meterClaude(t *Tail, l *claudeLine) {
 	u := claudeRequest(m.Model, *m.Usage)
 	if m.ID != "" {
 		if before, ok := t.metered[m.ID]; ok {
-			t.Usage.add(negate(before))
+			t.Activity.meter(before.at, m.Model, negate(before.usage))
 		}
-		t.metered[m.ID] = u
+		t.metered[m.ID] = metered{l.Timestamp, u}
 	}
-	t.Usage.add(u)
+	t.Activity.meter(l.Timestamp, m.Model, u)
+}
+
+// metered is the usage counted for a Claude Code message, and when.
+type metered struct {
+	at    time.Time
+	usage Usage
 }
 
 func negate(u Usage) Usage {
@@ -188,7 +250,7 @@ type codexCount struct {
 
 // meterCodex counts a token_count event. Codex reports the running total of the thread, also across a resume, so
 // what a request used is the difference to the total before it. A total that falls starts the count again.
-func meterCodex(t *Tail, total, last codexCount) {
+func meterCodex(t *Tail, at time.Time, total, last codexCount) {
 	d := total
 	if prev := t.codexTotal; total.Total >= prev.Total {
 		d = codexCount{total.Input - prev.Input, total.Cached - prev.Cached, total.CacheWrite - prev.CacheWrite, total.Output - prev.Output, total.Total - prev.Total}
@@ -210,7 +272,7 @@ func meterCodex(t *Tail, total, last codexCount) {
 	} else {
 		u.Cost = (float64(u.Input)*p.input + float64(u.CacheRead)*p.cacheRead + float64(u.Output)*p.output) / 1e6
 	}
-	t.Usage.add(u)
+	t.Activity.meter(at, t.model, u)
 }
 
 // codexChildren maps the rollouts of Codex subagents to the thread that spawned them. A rollout's parent never
@@ -281,7 +343,7 @@ func meterCodexLine(t *Tail, l *codexLine) {
 	case l.Type == "turn_context" && l.Payload.Model != "":
 		t.model = l.Payload.Model
 	case l.Type == "event_msg" && l.Payload.Type == "token_count" && l.Payload.Info != nil && l.Payload.Info.Total != nil:
-		meterCodex(t, *l.Payload.Info.Total, l.Payload.Info.Last)
+		meterCodex(t, l.Timestamp, *l.Payload.Info.Total, l.Payload.Info.Last)
 	}
 }
 
@@ -308,12 +370,34 @@ var subagents = map[string]func(c Conversation) []string{
 // its transcript has none, and its only hook with usage, afterAgentResponse, runs for user and project hooks, not for a plugin.
 var usageParser = map[string]func(*Tail, []byte){"claude": parseClaudeUsage, "codex": parseCodexUsage}
 
-// TotalUsage adds up the usage of every transcript of the conversation.
-func (c *Conversation) TotalUsage() Usage {
-	var u Usage
-	for _, t := range c.Usage {
-		u.add(t)
+// TotalActivity adds up the activity of every transcript of the conversation.
+func (c *Conversation) TotalActivity() Activity {
+	var a Activity
+	for _, t := range c.Transcripts {
+		a.add(t)
 	}
-	slices.Sort(u.Unpriced)
-	return u
+	slices.Sort(a.Unpriced)
+	return a
+}
+
+// activityRow is a conversation as the Stats tab counts it.
+type activityRow struct {
+	ID      string `json:"id"`
+	Role    string `json:"role,omitempty"`
+	Harness string `json:"harness"`
+	Project string `json:"project"`
+	// Metered tells whether the harness reports usage. Without it the row's usage is unknown, not zero.
+	Metered     bool      `json:"metered"`
+	Created     time.Time `json:"created"`
+	LastMessage time.Time `json:"last_message"`
+	Closed      bool      `json:"closed"`
+	Activity
+}
+
+func (s *Server) handleActivity(*http.Request) (any, error) {
+	out := []activityRow{}
+	for _, c := range s.store.list() {
+		out = append(out, activityRow{c.ID, c.Role, c.Harness, c.Project(), usageParser[c.Harness] != nil, c.Created, c.LastMessage, c.Closed, c.TotalActivity()})
+	}
+	return out, nil
 }

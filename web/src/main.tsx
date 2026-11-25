@@ -16,10 +16,11 @@ import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import { Logs, reportErrors } from "./logs";
+import { Stats } from "./stats";
 import "./app.css";
 
 const COORDINATOR = "coordinator";
-const tabs = ["Agents", "Sessions", "Inbox", "Logs", "Tmux", "Settings"] as const;
+const tabs = ["Agents", "Sessions", "Inbox", "Stats", "Logs", "Tmux", "Settings"] as const;
 
 reportErrors();
 
@@ -197,6 +198,7 @@ function App() {
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
         {tab === "Inbox" && <Inbox onStart={create} />}
+        {tab === "Stats" && <Stats />}
         {tab === "Logs" && <Logs />}
         {tab === "Tmux" && (
           <main class="tmux">

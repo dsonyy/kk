@@ -839,6 +839,7 @@ func appendLines(path string, lines []map[string]any) {
 	f, _ := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	defer f.Close()
 	for _, l := range lines {
+		l["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
 		data, _ := json.Marshal(l)
 		f.Write(append(data, '\n'))
 	}
