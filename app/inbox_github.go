@@ -29,6 +29,7 @@ func (githubSource) ready() error {
 // gh runs a gh command that prints JSON lists; a paginated call prints one list per page, back to back.
 func gh[T any](ctx context.Context, args ...string) ([]T, error) {
 	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.WaitDelay = time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	data, err := cmd.Output()

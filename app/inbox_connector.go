@@ -56,6 +56,8 @@ func (c connectorRun) fetch(ctx context.Context, dir string) ([]connectorItem, e
 		"--output-format", "stream-json", "--verbose", "--system-prompt", c.system,
 		"--", fmt.Sprintf("%s Now is %s.", c.prompt, time.Now().Format(time.RFC3339)))
 	cmd.Dir = dir
+	// A child of claude that keeps the output open must not hold up the server stopping.
+	cmd.WaitDelay = time.Second
 	// claude -p asks the model before the claude.ai connectors have connected, unless told to wait for them.
 	cmd.Env = append(os.Environ(), "MCP_CONNECTION_NONBLOCKING=false", "MCP_CONNECT_TIMEOUT_MS=30000")
 	var stderr bytes.Buffer

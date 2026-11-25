@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -85,10 +86,31 @@ func newEnv(t *testing.T, extra ...string) *env {
 	}
 	t.Cleanup(func() {
 		e.stop()
-		exec.Command("tmux", "-L", sock, "kill-server").Run()
+		killTmux(t, sock)
 	})
 	e.start()
 	return e
+}
+
+// killTmux ends the tmux server and waits for the processes in its panes, which exit after it and still write into the test's
+// directories: zsh saves its history in HOME.
+func killTmux(t *testing.T, sock string) {
+	out, _ := exec.Command("tmux", "-L", sock, "list-panes", "-a", "-F", "#{pane_dead} #{pane_pid}").Output()
+	exec.Command("tmux", "-L", sock, "kill-server").Run()
+	deadline := time.Now().Add(10 * time.Second)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pid, err := strconv.Atoi(strings.TrimPrefix(line, "0 "))
+		if err != nil {
+			continue
+		}
+		for syscall.Kill(pid, 0) == nil {
+			if time.Now().After(deadline) {
+				t.Errorf("pane process %d outlived the tmux server", pid)
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }
 
 func hasVar(vars []string, name string) bool {
@@ -399,7 +421,7 @@ func TestWindowNamedLikeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	t.Cleanup(func() { killTmux(t, sock) })
 	client, pane, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
 	e := newEnv(t, "KK_TMUX="+sock, "TMUX="+client, "TMUX_PANE="+pane)
 	// The agents inherit the environment of the tmux server, which this test started instead of kk.
@@ -606,10 +628,10 @@ func TestCoordinatorCompacts(t *testing.T) {
 	}
 	e.mustKK("send", coordinatorID, "big context")
 	e.waitFor("big answer", coordinatorID, func(c convView) bool { return c.Context == 60000 })
-	c = e.waitFor("compaction", coordinatorID, func(c convView) bool { return hasEvent(c, kindNote, "Conversation compacted") })
-	if c.Context != 3000 {
-		t.Fatalf("context after compaction: %d", c.Context)
-	}
+	// The note shows from the transcript as soon as it is read, the context only once the server's tick has stored it.
+	e.waitFor("compaction to 3000 tokens", coordinatorID, func(c convView) bool {
+		return hasEvent(c, kindNote, "Conversation compacted") && c.Context == 3000
+	})
 
 	e.stop()
 	e.start()
