@@ -239,16 +239,39 @@ func fakeGH(args []string) {
 	os.Stdout.Write(data)
 }
 
-// printSlack prints FAKE_HOME/slack.out as the answer of the Slack run and keeps its arguments in slack-args.json.
+// printSlack answers the Slack run in stream-json, keeps its arguments in slack-args.json and prints FAKE_HOME/slack.out as the answer.
+// FAKE_HOME/slack-connector holds the connector's status, "none" when it is not linked; FAKE_HOME/slack-error makes the run fail.
+// Like the real claude -p, the connector is missing from the init event unless MCP_CONNECTION_NONBLOCKING=false makes the run wait for it.
 func printSlack(args []string) {
 	home := os.Getenv("FAKE_HOME")
 	data, _ := json.Marshal(args)
 	os.WriteFile(filepath.Join(home, "slack-args.json"), data, 0o644)
-	out, err := os.ReadFile(filepath.Join(home, "slack.out"))
-	if err != nil {
-		out = []byte(`{"items":[]}`)
+	status := "connected"
+	if b, err := os.ReadFile(filepath.Join(home, "slack-connector")); err == nil {
+		status = strings.TrimSpace(string(b))
 	}
-	os.Stdout.Write(out)
+	servers := []map[string]string{}
+	if os.Getenv("MCP_CONNECTION_NONBLOCKING") != "false" {
+		status = "none"
+	}
+	if status != "none" {
+		servers = append(servers, map[string]string{"name": "claude.ai Slack", "status": status})
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.Encode(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers})
+	if b, err := os.ReadFile(filepath.Join(home, "slack-error")); err == nil {
+		enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": string(b)})
+		os.Exit(1)
+	}
+	answer := "I have no Slack tools available."
+	if status == "connected" {
+		out, err := os.ReadFile(filepath.Join(home, "slack.out"))
+		if err != nil {
+			out = []byte(`{"items":[]}`)
+		}
+		answer = string(out)
+	}
+	enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": answer})
 }
 
 func logArgs(args []string) {

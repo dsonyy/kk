@@ -209,7 +209,19 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("the inbox did not survive a restart: %+v", v)
 	}
 
-	writeFile(t, filepath.Join(e.fake, "slack.out"), slackMissing)
+	writeFile(t, filepath.Join(e.fake, "slack-error"), "API Error: 401 authentication_error")
+	v = e.refreshInbox("slack")
+	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "401") || s.Setup != "" {
+		t.Fatalf("a failed Slack run is an error, not a missing connector: %+v", s)
+	}
+	os.Remove(filepath.Join(e.fake, "slack-error"))
+	writeFile(t, filepath.Join(e.fake, "slack-connector"), "failed")
+	v = e.refreshInbox("slack")
+	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "connector is failed") || s.Setup != "" {
+		t.Fatalf("a Slack connector that fails to connect is an error: %+v", s)
+	}
+
+	writeFile(t, filepath.Join(e.fake, "slack-connector"), "none")
 	writeFile(t, filepath.Join(gh, "logged-out"), "")
 	v = e.refreshInbox("")
 	if s := sourceOf(v, "slack"); !strings.Contains(s.Setup, "Connect Slack") {
