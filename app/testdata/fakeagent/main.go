@@ -240,8 +240,9 @@ func fakeGH(args []string) {
 }
 
 // printSlack answers the Slack run in stream-json, keeps its arguments in slack-args.json and prints FAKE_HOME/slack.out as the answer.
-// FAKE_HOME/slack-connector holds the connector's status, "none" when it is not linked; FAKE_HOME/slack-error makes the run fail.
-// Like the real claude -p, the connector is missing from the init event unless MCP_CONNECTION_NONBLOCKING=false makes the run wait for it.
+// FAKE_HOME/slack-connector holds the connector's status, "none" when it is not linked, "not loaded" when no connector loaded in time.
+// FAKE_HOME/slack-error makes the run fail. Like the real claude -p, the init event lists no connector unless
+// MCP_CONNECTION_NONBLOCKING=false makes the run wait for them.
 func printSlack(args []string) {
 	home := os.Getenv("FAKE_HOME")
 	data, _ := json.Marshal(args)
@@ -251,11 +252,13 @@ func printSlack(args []string) {
 		status = strings.TrimSpace(string(b))
 	}
 	servers := []map[string]string{}
-	if os.Getenv("MCP_CONNECTION_NONBLOCKING") != "false" {
+	if os.Getenv("MCP_CONNECTION_NONBLOCKING") != "false" || status == "not loaded" {
 		status = "none"
+	} else {
+		servers = append(servers, map[string]string{"name": "claude.ai Linear", "status": "connected", "source": "claudeai"})
 	}
 	if status != "none" {
-		servers = append(servers, map[string]string{"name": "claude.ai Slack", "status": status})
+		servers = append(servers, map[string]string{"name": "claude.ai Slack", "status": status, "source": "claudeai"})
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.Encode(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers})

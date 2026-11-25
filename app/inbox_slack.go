@@ -75,10 +75,10 @@ func (s slackSource) fetch(ctx context.Context) ([]InboxItem, error) {
 
 var errNoSlackRun = errors.New("the Slack run printed no result")
 
-// parseSlack reads the run's events: the init event says whether the Slack connector is there, the result holds the answer.
+// parseSlack reads the run's events: the init event lists the claude.ai connectors and their status, the result holds the answer.
 // The answer itself is never logged, since it holds message text.
 func parseSlack(out []byte) ([]InboxItem, error) {
-	status, text, failed, done := "", "", false, false
+	status, text, failed, done, connectors := "", "", false, false, false
 	for _, line := range bytes.Split(out, []byte("\n")) {
 		var ev struct {
 			Type       string `json:"type"`
@@ -88,6 +88,7 @@ func parseSlack(out []byte) ([]InboxItem, error) {
 			MCPServers []struct {
 				Name   string `json:"name"`
 				Status string `json:"status"`
+				Source string `json:"source"`
 			} `json:"mcp_servers"`
 		}
 		if json.Unmarshal(line, &ev) != nil {
@@ -96,6 +97,7 @@ func parseSlack(out []byte) ([]InboxItem, error) {
 		switch {
 		case ev.Type == "system" && ev.Subtype == "init":
 			for _, m := range ev.MCPServers {
+				connectors = connectors || m.Source == "claudeai"
 				if m.Name == slackServer {
 					status = m.Status
 				}
@@ -112,6 +114,9 @@ func parseSlack(out []byte) ([]InboxItem, error) {
 		return nil, errNoSlackRun
 	case failed:
 		return nil, fmt.Errorf("the Slack run failed: %s", firstLine(text, 200))
+	case !connectors:
+		// The run lists no claude.ai connector at all when it gave up waiting for them.
+		return nil, errors.New("the claude.ai connectors did not load in time")
 	case status == "" || status == "needs-auth":
 		return nil, notSetUp("Connect Slack to your Claude account at claude.ai, Settings, Connectors.")
 	case status != "connected":

@@ -221,6 +221,12 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("a Slack connector that fails to connect is an error: %+v", s)
 	}
 
+	writeFile(t, filepath.Join(e.fake, "slack-connector"), "not loaded")
+	v = e.refreshInbox("slack")
+	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "did not load") || s.Setup != "" {
+		t.Fatalf("connectors that did not load in time are an error: %+v", s)
+	}
+
 	writeFile(t, filepath.Join(e.fake, "slack-connector"), "none")
 	writeFile(t, filepath.Join(gh, "logged-out"), "")
 	v = e.refreshInbox("")
