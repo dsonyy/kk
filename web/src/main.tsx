@@ -142,7 +142,6 @@ function App() {
           <div class="sessions">
             <Scope>{filters()}</Scope>
             <Board
-              key={JSON.stringify(filter)}
               list={shown}
               empty={empty}
               onOpen={(id) => {
