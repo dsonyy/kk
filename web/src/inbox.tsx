@@ -123,7 +123,12 @@ export function Inbox({ onStart }: { onStart: (prompt: string, onCreated: () => 
   const running = !!view?.sources.some((s) => s.running);
 
   const load = () => act(async () => setView(await api<View>("GET", "/api/inbox")));
-  useEffect(() => void load(), []);
+  useEffect(() => {
+    load();
+    const onTick = (e: Event) => setView((e as CustomEvent<View>).detail);
+    window.addEventListener("kk:inbox", onTick);
+    return () => window.removeEventListener("kk:inbox", onTick);
+  }, []);
   useEffect(() => {
     const timer = setInterval(load, running ? 1500 : 60000);
     return () => clearInterval(timer);

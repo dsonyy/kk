@@ -129,6 +129,11 @@ const slackAnswer = "Here is your inbox:\n```json\n" + `{"items":[
 func TestInbox(t *testing.T) {
 	linear := linearServer(t)
 	e := newEnv(t, "KK_LINEAR_URL="+linear.URL)
+	time.Sleep(500 * time.Millisecond)
+	if v := e.inbox(); !sourceOf(v, "github").Checked.IsZero() || !idle(v) {
+		t.Fatalf("a source was checked before the page asked: %+v", v.Sources)
+	}
+	e.post("/api/inbox/tick", struct{}{})
 	e.waitInbox("first poll", func(v inboxView) bool { return idle(v) && !sourceOf(v, "github").Checked.IsZero() })
 
 	v := e.inbox()
@@ -497,6 +502,7 @@ func TestInboxStopsRunsWithServer(t *testing.T) {
 	bin := t.TempDir()
 	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\necho $$ > \"$FAKE_HOME/run.$$\"\nexec sleep 600\n"), 0o755)
 	e := newEnv(t, "PATH="+bin+":"+fakeBin+":"+os.Getenv("PATH"))
+	e.post("/api/inbox/tick", struct{}{})
 	var runs []string
 	for deadline := time.Now().Add(10 * time.Second); len(runs) < 2; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {

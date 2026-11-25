@@ -126,6 +126,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("PUT /api/settings", s.handleSaveSettings)
 	api("GET /api/inbox", s.handleInbox)
 	api("POST /api/inbox/refresh", s.handleInboxRefresh)
+	api("POST /api/inbox/tick", func(*http.Request) (any, error) { s.inbox.tick(time.Now()); return s.inbox.view(), nil })
 	api("POST /api/inbox/status", s.handleInboxStatus)
 	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) { return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil })
 	api("PUT /api/inbox/linear-key", s.handleLinearKey)

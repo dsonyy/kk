@@ -85,7 +85,6 @@ type Inbox struct {
 }
 
 const (
-	inboxTick       = 30 * time.Second
 	descriptionMax  = 600
 	statusMax       = 2000
 	inboxFetchLimit = 5 * time.Minute
@@ -154,14 +153,8 @@ func (c InboxSettings) interval(now time.Time) time.Duration {
 	return time.Duration(c.OffMinutes) * time.Minute
 }
 
-func (in *Inbox) loop() {
-	for {
-		in.tick(time.Now())
-		time.Sleep(inboxTick)
-	}
-}
-
 // tick refreshes every enabled source whose interval has passed since its last check, also across restarts.
+// The page calls it while it has focus, so sources are not checked while nobody looks.
 func (in *Inbox) tick(now time.Time) {
 	cfg := in.settings()
 	for _, s := range in.sources {

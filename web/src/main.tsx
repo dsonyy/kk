@@ -127,6 +127,18 @@ function App() {
     };
   }, []);
 
+  // The inbox checks its sources only while this page has focus, and catches up on the overdue ones when focus comes back.
+  useEffect(() => {
+    const tick = () => document.hasFocus() && act(async () => window.dispatchEvent(new CustomEvent("kk:inbox", { detail: await api("POST", "/api/inbox/tick", {}) })));
+    tick();
+    const timer = setInterval(tick, 30000);
+    window.addEventListener("focus", tick);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", tick);
+    };
+  }, []);
+
   useEffect(() => {
     for (const id of open) loadDetail(id);
   }, [open.join(",")]);

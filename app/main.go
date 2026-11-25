@@ -118,7 +118,6 @@ func serve() error {
 	mux := s.routes()
 	go watchStats()
 	go s.groupLoop()
-	go s.inbox.loop()
 	s.backfillGroups()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
