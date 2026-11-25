@@ -87,9 +87,16 @@ func (s *Server) routes() *http.ServeMux {
 				if errors.As(err, &ae) {
 					code = ae.code
 				}
+				// A read of something missing is not an event.
+				if r.Method != http.MethodGet || code >= 500 {
+					log.Printf("%s %s by %s failed (%d): %v", r.Method, r.URL.Path, who(r), code, err)
+				}
 				w.WriteHeader(code)
 				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
+			}
+			if logged(r) {
+				log.Printf("%s %s by %s", r.Method, r.URL.Path, who(r))
 			}
 			json.NewEncoder(w).Encode(v)
 		})
@@ -139,6 +146,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("PUT /api/inbox/linear-key", s.handleLinearKey)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
+	mux.HandleFunc("GET /api/tmux", s.handleTmux)
+	mux.HandleFunc("GET /api/logs", s.handleLogs)
+	api("POST /api/logs", s.handleClientError)
 	dist, _ := fs.Sub(web.Dist, "dist")
 	files := http.FileServerFS(dist)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +159,20 @@ func (s *Server) routes() *http.ServeMux {
 		files.ServeHTTP(w, r)
 	})
 	return mux
+}
+
+// logged reports whether a successful request is an action for the log: reads, hooks, client errors and the inbox
+// polling log what happens on their own.
+func logged(r *http.Request) bool {
+	return r.Method != http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/hook/") && r.URL.Path != "/api/logs" && r.URL.Path != "/api/inbox/tick"
+}
+
+// who names who made a request for the log.
+func who(r *http.Request) string {
+	if byUser(r) {
+		return "user"
+	}
+	return "agent " + clip(r.Header.Get(agentHeader), 40)
 }
 
 // guard protects the TCP listener: a token from the URL becomes a cookie, and writes must come from the same origin.
@@ -670,6 +694,7 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	json.Unmarshal(body, &p)
+	log.Printf("hook %s %s", event, id)
 	now := time.Now()
 	open := 0
 	if event == "Stop" {

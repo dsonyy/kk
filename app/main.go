@@ -89,6 +89,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	if err := openLog(store.dir); err != nil {
+		return err
+	}
 	token, err := readToken(store.dir)
 	if err != nil {
 		return err
@@ -127,6 +130,8 @@ func serve() error {
 			log.Printf("conductor: %v", err)
 		}
 	}
+	log.Printf("kk started on %s", addr())
+	// Only stdout gets the token.
 	fmt.Printf("kk is running: http://%s/?token=%s\n", addr(), token)
 	go func() {
 		for range time.Tick(time.Second) {
@@ -134,6 +139,7 @@ func serve() error {
 		}
 	}()
 	<-sig
+	log.Print("kk stopping")
 	s.inbox.stop()
 	os.Remove(sockPath())
 	return nil

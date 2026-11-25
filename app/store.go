@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -210,8 +211,35 @@ func (s *Store) save(c *Conversation) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
+	logChange(s.convs[c.ID], c)
 	s.convs[c.ID] = c
 	return nil
+}
+
+// logChange logs what changed about a conversation. Titles, groups, prompts and attention texts can repeat what was said, so they stay out.
+func logChange(old, c *Conversation) {
+	if old == nil {
+		log.Printf("conversation %s created: %s in %s", c.ID, c.Harness, c.Dir)
+		old = &Conversation{Status: c.Status}
+	}
+	if old.Status != c.Status {
+		log.Printf("conversation %s: %s -> %s", c.ID, old.Status, c.Status)
+	}
+	if (old.Attention == "") != (c.Attention == "") {
+		log.Printf("conversation %s: %s", c.ID, map[bool]string{true: "needs attention", false: "attention cleared"}[c.Attention != ""])
+	}
+	if old.Closed != c.Closed {
+		log.Printf("conversation %s: %s", c.ID, map[bool]string{true: "closed", false: "reopened"}[c.Closed])
+	}
+	if old.Escalation == "" && c.Escalation != "" {
+		log.Printf("conversation %s: escalated to the user", c.ID)
+	}
+	if old.Group != c.Group {
+		log.Printf("conversation %s: group changed", c.ID)
+	}
+	if old.Session != c.Session && c.Session != "" {
+		log.Printf("conversation %s: session %s", c.ID, c.Session)
+	}
 }
 
 func (s *Store) recentDirs() []string {
