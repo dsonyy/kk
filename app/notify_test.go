@@ -205,7 +205,7 @@ func TestHandOverToConductor(t *testing.T) {
 	handed := create("hello\nfrom the user "+strings.Repeat("x", 400), true)
 	mine := create("hello mine", false)
 	e.waitNotified(handed, "the user started it in "+e.work+" and handed it over to you, first prompt \"hello from the user xxx")
-	e.waitNotified(handed, "\"; finished its turn. Look: kk screen "+handed)
+	e.waitNotified(handed, "finished its turn. Look: kk screen "+handed)
 	e.waitFor("conductor's turn", handed, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
 	e.waitFor("user's turn", mine, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 
