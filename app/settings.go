@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +25,13 @@ type Settings struct {
 	StartTimeoutSeconds int      `yaml:"start_timeout_seconds" json:"start_timeout_seconds"`
 	CompactAfterMinutes int      `yaml:"compact_after_minutes" json:"compact_after_minutes"`
 	CompactTokens       int      `yaml:"compact_tokens" json:"compact_tokens"`
+	// Inbox holds, per inbox source, whether kk checks it and how often.
+	Inbox map[string]InboxSettings `yaml:"inbox" json:"inbox"`
+}
+
+type InboxSettings struct {
+	Enabled         bool `yaml:"enabled" json:"enabled"`
+	IntervalMinutes int  `yaml:"interval_minutes" json:"interval_minutes"`
 }
 
 // settingsEnv maps a setting to the environment variable that overrides it.
@@ -34,11 +42,17 @@ var settingsEnv = map[string]string{
 
 func settingsPath(dir string) string { return filepath.Join(dir, "settings.yaml") }
 
+// inboxDefaults checks Slack less often, since every check is a model run.
+func inboxDefaults() map[string]InboxSettings {
+	return map[string]InboxSettings{"github": {true, 15}, "linear": {true, 15}, "slack": {true, 60}}
+}
+
 func loadSettings(dir string) Settings {
 	h, _ := os.UserHomeDir()
 	st := Settings{
 		Addr: "127.0.0.1:7420", Coordinator: true, Source: filepath.Join(h, "repos", "kk"), SkillDirs: []string{},
 		StartTimeoutSeconds: 20, CompactAfterMinutes: 55, CompactTokens: 50_000,
+		Inbox: inboxDefaults(),
 	}
 	if data, err := os.ReadFile(settingsPath(dir)); err == nil {
 		yaml.Unmarshal(data, &st)
@@ -103,6 +117,7 @@ func (s *Server) handleSettings(*http.Request) (any, error) {
 
 func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	st := s.cfg()
+	st.Inbox = maps.Clone(st.Inbox)
 	if err := decode(r, &st); err != nil {
 		return nil, err
 	}
@@ -111,6 +126,11 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	}
 	if st.StartTimeoutSeconds < 1 || st.CompactAfterMinutes < 1 || st.CompactTokens < 1 {
 		return nil, fail(400, "timeouts and the token limit must be positive")
+	}
+	for name, in := range st.Inbox {
+		if _, ok := inboxDefaults()[name]; !ok || in.IntervalMinutes < 1 {
+			return nil, fail(400, "inbox source %q needs a known name and an interval of at least a minute", name)
+		}
 	}
 	claude, _ := findHarness("claude")
 	if !slices.Contains(claude.Models, st.CoordinatorModel) {

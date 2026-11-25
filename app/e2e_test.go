@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 			panic(string(out))
 		}
 	}
-	for _, name := range []string{"claude", "codex", "cursor-agent"} {
+	for _, name := range []string{"claude", "codex", "cursor-agent", "gh"} {
 		os.Symlink(filepath.Join(fakeBin, "fakeagent"), filepath.Join(fakeBin, name))
 	}
 	code := m.Run()

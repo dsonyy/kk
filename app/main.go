@@ -112,9 +112,11 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	s.inbox = openInbox(store.dir, func() map[string]InboxSettings { return s.cfg().Inbox })
 	mux := s.routes()
 	go watchStats()
 	go s.groupLoop()
+	go s.inbox.loop()
 	s.backfillGroups()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))

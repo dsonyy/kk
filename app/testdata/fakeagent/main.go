@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,7 +45,15 @@ type turn struct {
 func main() {
 	mode = filepath.Base(os.Args[0])
 	args := os.Args[1:]
+	if mode == "gh" {
+		fakeGH(args)
+		return
+	}
 	if mode == "claude" && len(args) > 0 && args[0] == "-p" {
+		if slices.Contains(args, "dontAsk") {
+			printSlack(args)
+			return
+		}
 		printGroup(args[len(args)-1])
 		return
 	}
@@ -200,6 +209,46 @@ func printGroup(prompt string) {
 	lines := strings.Split(task, "\n")
 	words := strings.Fields(lines[len(lines)-1])
 	fmt.Println(strings.Join(words[:min(2, len(words))], " "))
+}
+
+// fakeGH answers gh with the files in FAKE_HOME/gh, named after the query, and an empty list when there is none.
+func fakeGH(args []string) {
+	dir := filepath.Join(os.Getenv("FAKE_HOME"), "gh")
+	if _, err := os.Stat(filepath.Join(dir, "logged-out")); err == nil {
+		fmt.Fprintln(os.Stderr, "To get started with GitHub CLI, please run:  gh auth login")
+		os.Exit(4)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fail")); err == nil {
+		fmt.Fprintln(os.Stderr, "HTTP 502: Bad Gateway")
+		os.Exit(1)
+	}
+	line := strings.Join(args, " ")
+	name := "notifications"
+	switch {
+	case strings.HasPrefix(line, "search prs"):
+		name = "review"
+	case strings.Contains(line, "--assignee"):
+		name = "assigned"
+	case strings.Contains(line, "--mentions"):
+		name = "mentions"
+	}
+	data, err := os.ReadFile(filepath.Join(dir, name+".json"))
+	if err != nil {
+		data = []byte("[]")
+	}
+	os.Stdout.Write(data)
+}
+
+// printSlack prints FAKE_HOME/slack.out as the answer of the Slack run and keeps its arguments in slack-args.json.
+func printSlack(args []string) {
+	home := os.Getenv("FAKE_HOME")
+	data, _ := json.Marshal(args)
+	os.WriteFile(filepath.Join(home, "slack-args.json"), data, 0o644)
+	out, err := os.ReadFile(filepath.Join(home, "slack.out"))
+	if err != nil {
+		out = []byte(`{"items":[]}`)
+	}
+	os.Stdout.Write(out)
 }
 
 func logArgs(args []string) {

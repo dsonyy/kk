@@ -22,6 +22,7 @@ import (
 
 type Server struct {
 	store *Store
+	inbox *Inbox
 	bin   string
 	token string
 
@@ -119,6 +120,11 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/attachments/{id}/{name}", s.handleAttachment)
 	api("GET /api/settings", s.handleSettings)
 	api("PUT /api/settings", s.handleSaveSettings)
+	api("GET /api/inbox", s.handleInbox)
+	api("POST /api/inbox/refresh", s.handleInboxRefresh)
+	api("POST /api/inbox/dismiss", s.handleInboxDismiss)
+	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) { return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil })
+	api("PUT /api/inbox/linear-key", s.handleLinearKey)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
 	dist, _ := fs.Sub(web.Dist, "dist")
