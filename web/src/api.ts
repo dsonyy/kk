@@ -64,6 +64,27 @@ export type Conversation = {
   // Messages the agent holds until it gets to them.
   queued: Event[];
   events: Event[];
+  // The agents the session's agent started, oldest first.
+  subagents: Subagent[];
+  // Set when this is a subagent, which is shown read only.
+  subagent?: Subagent;
+};
+
+// A subagent of a session. Its id is the session's id and the subagent's, joined by a colon; parent is the id of the
+// subagent that started it, empty when the session's agent did. Its usage is part of the session's.
+export type Subagent = {
+  id: string;
+  of: string;
+  parent?: string;
+  title: string;
+  type?: string;
+  model?: string;
+  state: "running" | "done" | "failed" | "stopped";
+  started: string;
+  last: string;
+  worktree?: string;
+  branch?: string;
+  usage: Usage | null;
 };
 
 // Days are weekdays, 0 for Sunday; times are local, "09:30".

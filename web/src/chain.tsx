@@ -1,26 +1,51 @@
 import type { ComponentChildren, JSX } from "preact";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
-import type { Conversation } from "./api";
+import type { Conversation, Subagent } from "./api";
 import { time } from "./filter";
 
-// An edge leads from a session to one that follows it. It skips when the sessions between them are not in the list.
-type Edge = { from: string; to: string; skip: boolean };
+// An edge leads from a session to one that follows it, or from a session or subagent to a subagent it started. A chain
+// edge skips when the sessions between them are not in the list.
+type Edge = { from: string; to: string; skip: boolean; agent?: boolean };
+
+// A row is a session's card, or with a set the card of one of its subagents, depth levels below the session's agent.
+export type Row = { id: string; c: Conversation; a?: Subagent; depth: number };
 
 export type Chains = {
-  // The list with every chain kept together, a predecessor above the sessions that follow it.
-  order: Conversation[];
+  // The list with every chain kept together, a predecessor above the sessions that follow it, and each session's
+  // subagents right below it.
+  order: Row[];
   edges: Edge[];
-  // The lane of the line that leaves a session, counted outwards from the cards.
+  // The lane of each line that leaves a card, by trunk, counted outwards from the cards.
   lane: Map<string, number>;
   lanes: number;
   // The chain neighbours of a session that are not in the list, such as filtered out, folded or in another group.
   before: Map<string, Conversation>;
   after: Map<string, Conversation[]>;
+  // How many finished subagents of a session fold away, whether they are folded or not.
+  folded: Map<string, number>;
 };
+
+// The trunk of an edge: the lines to a card's subagents leave it apart from those to the sessions that follow it.
+const trunk = (e: Edge) => (e.agent ? `${e.from}>` : e.from);
+
+// shownAgents lists the subagents of a session as a tree, each below the one that started it. Folded, it keeps the
+// running ones and those that started a running one.
+function shownAgents(c: Conversation, all: boolean): Map<string, Subagent[]> {
+  const list = c.subagents ?? [];
+  const ids = new Set(list.map((a) => a.id));
+  const kids = new Map<string, Subagent[]>();
+  for (const a of list) {
+    const p = a.parent && ids.has(a.parent) ? a.parent : c.id;
+    kids.set(p, [...(kids.get(p) ?? []), a]);
+  }
+  const shown = (a: Subagent): boolean => all || a.state === "running" || (kids.get(a.id) ?? []).some(shown);
+  for (const [p, k] of kids) kids.set(p, k.filter(shown));
+  return kids;
+}
 
 // arrange keeps the chains of a list together. A chain sits where its first member in the list's order is, its members
 // in dependency order below it, the successors of one session oldest first.
-export function arrange(list: Conversation[], all: Conversation[]): Chains {
+export function arrange(list: Conversation[], all: Conversation[], unfolded: (c: Conversation) => boolean = () => false): Chains {
   const byId = new Map(all.map((c) => [c.id, c]));
   const listed = new Set(list.map((c) => c.id));
   const parent = new Map<string, string>();
@@ -44,20 +69,37 @@ export function arrange(list: Conversation[], all: Conversation[]): Chains {
   }
   for (const k of [...kids.values(), ...after.values()]) k.sort((a, b) => time(a.created) - time(b.created));
 
-  const order: Conversation[] = [];
+  const order: Row[] = [];
   const edges: Edge[] = [];
   const lane = new Map<string, number>();
+  const folded = new Map<string, number>();
   const placed = new Set<string>();
-  // A line keeps clear of the lines of the sessions below it, which lie inside its span.
+  // A line keeps clear of the lines of the cards below it, which lie inside its span.
+  const branch = (c: Conversation, agents: Map<string, Subagent[]>, from: string, depth: number): number => {
+    const out = agents.get(from) ?? [];
+    let outer = -1;
+    for (const a of out) {
+      edges.push({ from, to: a.id, skip: false, agent: true });
+      order.push({ id: a.id, c, a, depth });
+      outer = Math.max(outer, branch(c, agents, a.id, depth + 1));
+    }
+    if (!out.length) return -1;
+    lane.set(`${from}>`, outer + 1);
+    return outer + 1;
+  };
   const walk = (c: Conversation): number => {
     placed.add(c.id);
-    order.push(c);
-    let outer = -1;
+    order.push({ id: c.id, c, depth: 0 });
+    const running = shownAgents(c, false);
+    const hidden = (c.subagents?.length ?? 0) - [...running.values()].reduce((n, k) => n + k.length, 0);
+    if (hidden) folded.set(c.id, hidden);
+    const agents = hidden && unfolded(c) ? shownAgents(c, true) : running;
+    let outer = branch(c, agents, c.id, 0);
     for (const k of kids.get(c.id) ?? []) {
       edges.push({ from: c.id, to: k.id, skip: k.after !== c.id });
       outer = Math.max(outer, walk(k));
     }
-    if (!kids.has(c.id)) return -1;
+    if (!kids.has(c.id)) return outer;
     lane.set(c.id, outer + 1);
     return outer + 1;
   };
@@ -69,7 +111,7 @@ export function arrange(list: Conversation[], all: Conversation[]): Chains {
     walk(root);
   }
   const lanes = lane.size ? Math.max(...lane.values()) + 1 : 0;
-  return { order, edges, lane, lanes, before, after };
+  return { order, edges, lane, lanes, before, after, folded };
 }
 
 const PORT = 7;
@@ -109,21 +151,25 @@ export function ChainLinks({ chains, hot, children }: { chains: Chains; hot?: (i
 
   const paths: JSX.Element[] = [];
   const from = new Map<string, Edge[]>();
-  for (const e of chains.edges) from.set(e.from, [...(from.get(e.from) ?? []), e]);
-  for (const [id, out] of from) {
+  for (const e of chains.edges) from.set(trunk(e), [...(from.get(trunk(e)) ?? []), e]);
+  for (const [key, out] of from) {
+    const id = out[0].from;
+    const agent = !!out[0].agent;
     const a = boxes.get(id);
     const ends = out.map((e) => [e, boxes.get(e.to)] as const).filter((x): x is readonly [Edge, Box] => !!x[1]);
     if (!a || !ends.length) continue;
-    const x = a.right + PORT + chains.lane.get(id)! * STEP + 0.5;
-    const y0 = Math.round(a.bottom - OUT) + 0.5;
+    const x = a.right + PORT + chains.lane.get(key)! * STEP + 0.5;
+    // The line to a card's subagents runs inside the line to its successors, so it leaves below it and they never cross.
+    const y0 = Math.round(a.bottom - (!agent && chains.lane.has(`${id}>`) ? OUT + STEP : OUT)) + 0.5;
     const yEnd = Math.round(ends[ends.length - 1][1].top + IN) + 0.5;
     const on = hot?.(id);
-    paths.push(<path key={`t${id}`} class={on ? "trunk on" : "trunk"} d={`M${a.right} ${y0}H${x}V${yEnd}`} />);
-    paths.push(<rect key={`p${id}`} class={on ? "port on" : "port"} x={a.right} y={y0 - 1.5} width={3} height={3} />);
+    const kind = agent ? " agent" : "";
+    paths.push(<path key={`t${key}`} class={`trunk${kind}${on ? " on" : ""}`} d={`M${a.right} ${y0}H${x}V${yEnd}`} />);
+    paths.push(<rect key={`p${key}`} class={`port${kind}${on ? " on" : ""}`} x={a.right} y={y0 - 1.5} width={3} height={3} />);
     for (const [e, b] of ends) {
       const y = Math.round(b.top + IN) + 0.5;
       const lit = on || hot?.(e.to);
-      const cls = [lit && "on", e.skip && "skip"].filter(Boolean).join(" ");
+      const cls = [lit && "on", e.skip && "skip", agent && "agent"].filter(Boolean).join(" ");
       // A lit successor lights its whole way from the predecessor; only its own leg shows the skip.
       if (lit && !on) paths.push(<path key={`w${e.to}`} class="leg on" d={`M${a.right} ${y0}H${x}V${y}`} />);
       paths.push(<path key={`l${e.to}`} class={`leg ${cls}`} d={`M${x} ${y}H${b.right + 5}`} />);

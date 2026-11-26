@@ -12,6 +12,7 @@ import { ImageViewer, linkImages, showImages } from "./images";
 import { fitTables } from "./tables";
 import { Board, CardTitle } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
+import { AgentsFold, AgentTile, agentState, useUnfolded } from "./subagents";
 import { Inbox } from "./inbox";
 import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
@@ -209,6 +210,8 @@ function App() {
       timer = window.setTimeout(() => {
         loadList();
         for (const id of pending) if (isOpen(id) || id === reading.current) loadDetail(id);
+        // A subagent changes with its session.
+        for (const p of placeRef.current.panels) if (pending.has(p.id.split(":")[0]) && p.id.includes(":")) loadDetail(p.id);
         pending.clear();
       }, 100);
     };
@@ -350,7 +353,7 @@ function App() {
   // A session opens in its own directory, unless All is shown or the directory is given.
   const show = (id: string, to?: string) => {
     const cur = placeRef.current;
-    const project = sessions.find((c) => c.id === id)?.project;
+    const project = sessions.find((c) => c.id === id.split(":")[0])?.project;
     const target = to ?? (cur.dir && project ? project : cur.dir);
     const list = target === cur.dir ? cur.panels : (storedPanels()[target] ?? []);
     const slot = list.findIndex((p) => !p.pinned);
@@ -499,6 +502,7 @@ function App() {
                     key={id}
                     c={details[id]}
                     before={sessions.find((x) => x.id === details[id].after)}
+                    of={sessions.find((x) => x.id === details[id].subagent?.of)}
                     onShow={show}
                     reload={() => loadDetail(id)}
                     onHide={() => hide(id)}
@@ -736,13 +740,18 @@ function Group({ all, title, name, mono, muted, list, open, collapsed, onCollaps
 }
 
 function Tiles({ list, all, open, onOpen }: { list: Conversation[]; all: Conversation[]; open: string[]; onOpen: (id: string) => void }) {
-  const chains = arrange(list, all);
+  const [unfolded] = useUnfolded();
+  const chains = arrange(list, all, unfolded);
   return (
     <ChainLinks chains={chains} hot={(id) => open.includes(id)}>
       <ul class="tiles">
-        {chains.order.map((c) => (
-          <Tile key={c.id} c={c} chains={chains} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
-        ))}
+        {chains.order.map((r) =>
+          r.a ? (
+            <AgentTile key={r.id} row={r} on={open.includes(r.id)} onOpen={() => onOpen(r.id)} />
+          ) : (
+            <Tile key={r.id} c={r.c} chains={chains} on={open.includes(r.id)} onOpen={() => onOpen(r.id)} />
+          ),
+        )}
       </ul>
     </ChainLinks>
   );
@@ -774,6 +783,7 @@ function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: 
           </>
         )}
       </div>
+      <AgentsFold c={c} n={chains.folded.get(c.id)} />
     </li>
   );
 }
@@ -968,15 +978,19 @@ type ConversationViewProps = {
   onPin?: (on: boolean) => void;
   // The session this one follows in a chain.
   before?: Conversation;
+  // The session that started this subagent.
+  of?: Conversation;
   onShow?: (id: string) => void;
   // What the konduktor panel shows in place of the title.
   head?: preact.ComponentChildren;
 };
 
-function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onShow, head }: ConversationViewProps) {
+function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, onShow, head }: ConversationViewProps) {
   const [chosen, setView] = useState<"chat" | "terminal" | "media">("chat");
+  // A subagent is read only: it has no window of its own and takes no input; its session does.
+  const sub = c.subagent;
   // Closing kills the window, so a closed session has no terminal to show.
-  const view = chosen === "terminal" && c.closed ? "chat" : chosen;
+  const view = chosen === "terminal" && (c.closed || sub) ? "chat" : chosen;
   const images = useMemo(() => media(c.events), [c.events]);
   const [confirmClose, setConfirmClose] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -1081,11 +1095,18 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             </button>
           )}
           {head ?? <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>}
+          {sub && (
+            <a class="subagent-of" title="Open the session that started this subagent" onClick={() => onShow?.(sub.of)}>
+              <Icon name="agent" />
+              <span>Subagent of</span>
+              <bdi>{of?.title || "Untitled"}</bdi>
+            </a>
+          )}
           <div class="actions">
             {!queued && (
               <div class="modes">
                 <Button label="Chat" class={view === "chat" ? "small on" : "small"} onClick={() => setView("chat")} />
-                {!c.closed && <Button label="Terminal" icon="terminal" class={view === "terminal" ? "small on" : "small"} onClick={() => setView("terminal")} />}
+                {!c.closed && !sub && <Button label="Terminal" icon="terminal" class={view === "terminal" ? "small on" : "small"} onClick={() => setView("terminal")} />}
                 <Button
                   label="Media"
                   icon="image"
@@ -1096,12 +1117,12 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
                 />
               </div>
             )}
-            {(exited || c.closed) && !(c.integration && c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
-            <Controls c={c} reload={reload} />
-            {!side && !c.closed && !queued && !c.integration && (
+            {(exited || c.closed) && !(c.integration && c.closed) && !sub && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
+            {!sub && <Controls c={c} reload={reload} />}
+            {!side && !c.closed && !queued && !c.integration && !sub && (
               <Button label="Schedule" icon="clock" class={c.schedule ? "small on" : "small"} title="Resume the session with a prompt on set days and times" onClick={() => setScheduling(true)} />
             )}
-            {(!side || c.id !== COORDINATOR) && !c.closed && !c.integration && (
+            {(!side || c.id !== COORDINATOR) && !c.closed && !c.integration && !sub && (
               <Button
                 label={confirmClose ? "Confirm close" : "Close"}
                 icon="close"
@@ -1113,11 +1134,28 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>
           <div class="meta">
-            <span class={`status ${attention(c)} ${c.waiting_for}`}>
-              <Dot c={c} />
-              {stateLabel(c)}
+            {sub ? (
+              <span class="status">
+                <i class={`dot agent-${sub.state}`} />
+                {agentState(sub)}
+              </span>
+            ) : (
+              <span class={`status ${attention(c)} ${c.waiting_for}`}>
+                <Dot c={c} />
+                {stateLabel(c)}
+              </span>
+            )}
+            <span>
+              {sub?.type ? `${sub.type} · ` : `${harnessLabel(c.harness)} · `}
+              {c.model || "default"}
             </span>
-            <span>{harnessLabel(c.harness)} · {c.model || "default"}</span>
+            {sub && <span title={usageTitle(sub.usage, c.harness)}>{usageLabel(sub.usage)}</span>}
+            {sub?.branch && (
+              <span class="mono" title={sub.worktree}>
+                <Icon name="worktree" />
+                {sub.branch}
+              </span>
+            )}
             {c.schedule && (
               <span class="schedule-meta" title={c.schedule.prompt}>
                 <Icon name="clock" />
@@ -1150,7 +1188,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
           <div class="feed-inner" ref={inner}>
             {queued && <Queued c={c} before={before} onShow={onShow} reload={reload} />}
             {c.events.length === 0 && !c.attention && !busy && !queued && <div class="empty">No messages yet.</div>}
-            <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length && !c.integration ? () => send(RETRY, []) : undefined} />
+            <Feed c={c} live={live.current} rewind={sub ? undefined : rewind} retry={c.status === "idle" && !sending.length && !c.integration && !sub ? () => send(RETRY, []) : undefined} />
             {c.queued.map((e, i) => (
               <div class="msg user queued" key={`q${i}`} title="The agent reads this message at its next step">
                 {e.text && <Markdown text={e.text} />}
@@ -1190,7 +1228,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             )}
           </div>
         </div>
-        {quote && view === "chat" && !exited && (
+        {quote && view === "chat" && !exited && !sub && (
           <div class="quote-bar" style={{ left: `${quote.x}px`, top: `${quote.y}px` }} onMouseDown={(e) => e.preventDefault()}>
             <Button
               label="Quote"
@@ -1216,7 +1254,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             ))}
           </div>
         )}
-        {view === "chat" && !queued && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
+        {view === "chat" && !queued && !sub && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
         {scheduling && <ScheduleDialog c={c} onClose={() => setScheduling(false)} />}
       </Scope>
     </Tag>

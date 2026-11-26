@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -128,4 +131,94 @@ func TestCodexSubagentsTracked(t *testing.T) {
 	if out := e.mustKK("show", a.ID); !strings.Contains(out, "Work on Agent task 1") || !strings.Contains(out, "done with Agent task 1") {
 		t.Errorf("kk show of a codex subagent:\n%s", out)
 	}
+}
+
+// tileOf is the card of a session or subagent in a part of the page.
+func tileOf(part, id string) string {
+	return fmt.Sprintf(`document.querySelector(%q)`, fmt.Sprintf(`%s .tile[data-chain="%s"]`, part, id))
+}
+
+func TestSubagentCards(t *testing.T) {
+	e := newEnv(t)
+	writeImage(t, filepath.Join(e.fake, "shot.png"), func(b *bytes.Buffer, i image.Image) error { return png.Encode(b, i) })
+	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "start 2 agents nested image worktree")
+	c := e.waitFor("three running subagents", id, func(c convView) bool { return len(c.Subagents) == 3 && (turnEnded(c) || c.Status == statusBackground) })
+	next := e.mustKK("new", "claude", "-C", e.work, "--after", id, "then this")
+	first, nested, second := subagent(c, "Agent task 1"), subagent(c, "Agent task 2"), subagent(c, "Agent task 3")
+
+	p := e.openPage(1600, 900)
+	for _, a := range []subagentView{first, nested, second} {
+		p.until(tileOf(".sidebar", a.ID))
+	}
+	// Each subagent hangs below its parent, its nested one below it, and the queued successor after them.
+	var order []string
+	p.eval(`[...document.querySelectorAll(".sidebar .tile")].map((t) => t.dataset.chain)`, &order)
+	if want := []string{id, first.ID, nested.ID, second.ID, next}; !slices.Equal(order, want) {
+		t.Errorf("sidebar order %v, want %v", order, want)
+	}
+	var edges struct{ Agent, Chain int }
+	edgeCount := `(() => { const legs = [...document.querySelectorAll(".sidebar .chain-links .leg")]; return { agent: legs.filter((l) => l.classList.contains("agent")).length, chain: legs.filter((l) => !l.classList.contains("agent")).length } })()`
+	p.until(`document.querySelectorAll(".sidebar .chain-links .leg").length === 4`)
+	p.eval(edgeCount, &edges)
+	if edges.Agent != 3 || edges.Chain != 1 {
+		t.Errorf("edges: %+v, want 3 to subagents and 1 to the successor", edges)
+	}
+	if text := p.texts(fmt.Sprintf(`.sidebar .tile[data-chain="%s"] .title`, first.ID)); len(text) != 1 || text[0] != "Agent task 1" {
+		t.Errorf("subagent title: %v", text)
+	}
+	p.shot("subagents-running")
+	p.resize(1000, 900)
+	p.shot("subagents-narrow")
+	p.resize(1600, 900)
+
+	// Finished subagents fold behind a count on the parent, unless one they started still runs.
+	e.finishAgent(1, false)
+	e.finishAgent(3, true)
+	p.until(fmt.Sprintf(`!%s`, tileOf(".sidebar", second.ID)))
+	p.until(tileOf(".sidebar", first.ID))
+	fold := fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".sidebar", id))
+	p.until(fmt.Sprintf(`%s?.textContent.includes("1 finished subagent")`, fold))
+	p.shot("subagents-folded")
+	p.click(fold)
+	p.until(tileOf(".sidebar", second.ID))
+	p.shot("subagents-unfolded")
+
+	// A subagent opens read-only: its transcript without a reply box or controls, and a way back to its parent.
+	p.click(tileOf(".sidebar", first.ID))
+	panel := fmt.Sprintf(`document.getElementById("panel-%s")`, first.ID)
+	p.until(fmt.Sprintf(`%s?.textContent.includes("done with Agent task 1")`, panel))
+	p.until(fmt.Sprintf(`[...%s.querySelectorAll(".msg.assistant img")].some((i) => i.complete && i.naturalWidth === 4)`, panel))
+	var controls []string
+	p.eval(fmt.Sprintf(`[...%s.querySelectorAll("textarea, .conv-head button")].map((b) => b.textContent.trim() || b.tagName)`, panel), &controls)
+	for _, c := range controls {
+		if c == "TEXTAREA" || strings.Contains(c, "Close") || strings.Contains(c, "Schedule") || strings.Contains(c, "Terminal") || strings.Contains(c, "Kill") || strings.Contains(c, "Reset") {
+			t.Errorf("a subagent's panel offers %q: %v", c, controls)
+		}
+	}
+	p.shot("subagent-transcript")
+	p.click(fmt.Sprintf(`%s.querySelector(".subagent-of")`, panel))
+	p.until(fmt.Sprintf(`document.getElementById("panel-%s")`, id))
+
+	p.view("Sessions")
+	p.until(tileOf(".board", nested.ID))
+	p.until(fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".board", id)))
+	// The finished subagents stay unfolded as they were in the sidebar.
+	p.until(`document.querySelectorAll(".board .chain-links .leg.agent").length === 3`)
+	p.shot("subagents-board")
+
+	// A closed parent takes its subagents with it.
+	e.mustKK("close", next)
+	e.mustKK("close", id)
+	p.view("Agents")
+	p.until(fmt.Sprintf(`%s?.classList.contains("closed") && document.querySelectorAll(".sidebar .tile.closed").length === 2`, tileOf(".sidebar", id)))
+	p.eval(`document.querySelector(".sidebar .group").open || document.querySelector(".sidebar .group > summary").click()`, nil)
+	p.until(`document.querySelector(".sidebar .group").open`)
+	p.until(fmt.Sprintf(`%s?.querySelector(".agents-fold")?.textContent.includes("3 finished subagents")`, tileOf(".sidebar", id)))
+	if p.until(tileOf(".sidebar", id)); len(p.texts(".sidebar .tile.subagent")) != 0 {
+		t.Error("a closed session shows its subagents unfolded")
+	}
+	p.shot("subagents-closed")
+	p.click(fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".sidebar", id)))
+	p.until(tileOf(".sidebar", nested.ID))
+	p.shot("subagents-closed-unfolded")
 }

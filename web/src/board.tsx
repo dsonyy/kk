@@ -2,6 +2,7 @@ import { harnessLabel, type Conversation } from "./api";
 import { arrange, ChainLinks, ChainRefs } from "./chain";
 import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
 import { placedAt, TitleIcon } from "./schedule";
+import { AgentsFold, AgentTile, useUnfolded } from "./subagents";
 
 type Column = { project: string; group: string; sessions: Conversation[] };
 
@@ -77,6 +78,7 @@ type BoardProps = {
 };
 
 export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen }: BoardProps) {
+  const [unfolded] = useUnfolded();
   if (list.length === 0) return <div class="board empty">{empty}</div>;
   return (
     <div class="board">
@@ -88,7 +90,7 @@ export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen
               const shut = col.group ? folded(col.project, col.group) : undefined;
               const foldable = shut !== undefined;
               const fold = !!shut;
-              const chains = arrange(col.sessions, all);
+              const chains = arrange(col.sessions, all, unfolded);
               return (
                 <section class={fold ? "column folded" : "column"} key={`${col.project}\n${col.group}`}>
                   <header
@@ -107,7 +109,9 @@ export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen
                   {!fold && (
                     <ChainLinks chains={chains}>
                       <ul class="tiles">
-                        {chains.order.map((c) => {
+                        {chains.order.map((r) => {
+                          if (r.a) return <AgentTile key={r.id} row={r} on={false} onOpen={() => onOpen(r.id)} />;
+                          const c = r.c;
                           const [cls, label] = state(c);
                           return (
                             <li key={c.id} class={`tile ${cls}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
@@ -121,6 +125,7 @@ export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen
                                 </span>
                               </div>
                               {c.attention && <div class="attention-text">{c.attention}</div>}
+                              <AgentsFold c={c} n={chains.folded.get(c.id)} />
                             </li>
                           );
                         })}
