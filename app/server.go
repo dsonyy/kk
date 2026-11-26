@@ -8,10 +8,12 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -29,8 +31,10 @@ type Server struct {
 	mu       sync.Mutex
 	settings Settings
 	tails    map[string]*Tail
-	grouping chan string
-	subs     map[chan string]bool
+	// subagents holds the tails of the transcripts of agents' subagents, by path.
+	subagents map[string]*Tail
+	grouping  chan string
+	subs      map[chan string]bool
 	// asked counts, per conversation without a group, the user messages the last question about its group covered.
 	asked map[string]int
 	ticks int
@@ -57,6 +61,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// Usage covers every transcript of the conversation. It is nil for a harness that does not report usage.
+	Usage *Usage `json:"usage"`
 }
 
 type apiError struct {
@@ -119,6 +125,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/stats", s.handleStats)
+	api("GET /api/activity", s.handleActivity)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
 	api("POST /api/pick", handlePick)
@@ -137,7 +144,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/inbox/refresh", s.handleInboxRefresh)
 	api("POST /api/inbox/tick", func(*http.Request) (any, error) { s.inbox.tick(time.Now()); return s.inbox.view(), nil })
 	api("POST /api/inbox/status", s.handleInboxStatus)
-	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) { return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil })
+	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) {
+		return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil
+	})
 	api("PUT /api/inbox/linear-key", s.handleLinearKey)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
@@ -220,6 +229,10 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 
 func (s *Server) view(c Conversation, events bool) convView {
 	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	if usageParser[c.Harness] != nil {
+		u := c.TotalActivity().Usage
+		v.Usage = &u
+	}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -848,6 +861,7 @@ func (s *Server) tick() {
 			continue
 		}
 		events := s.readTail(c)
+		activity := s.activity(c)
 		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
@@ -883,6 +897,16 @@ func (s *Server) tick() {
 				}
 				if t.Waiting && c.Status == statusIdle {
 					c.Status, changed = statusWorking, true
+				}
+			}
+			for path, a := range activity {
+				if !reflect.DeepEqual(c.Transcripts[path], a) {
+					// The stored conversation shares the map with this copy.
+					c.Transcripts = maps.Clone(c.Transcripts)
+					if c.Transcripts == nil {
+						c.Transcripts = map[string]Activity{}
+					}
+					c.Transcripts[path], changed = a, true
 				}
 			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
@@ -927,6 +951,30 @@ func (s *Server) readTail(c Conversation) *Tail {
 	}
 	cp := *t
 	return &cp
+}
+
+// activity returns the activity of c's current transcript and of the transcripts of its subagents, by file. It counts
+// the lines of the transcript that were read.
+func (s *Server) activity(c Conversation) map[string]Activity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tail(c)
+	if t == nil {
+		return nil
+	}
+	out := map[string]Activity{c.Transcript: t.Activity.clone()}
+	if list := subagents[c.Harness]; list != nil {
+		for _, p := range list(c) {
+			sub := s.subagents[p]
+			if sub == nil {
+				sub = newTail(p)
+				s.subagents[p] = sub
+			}
+			sub.read(usageParser[c.Harness])
+			out[p] = sub.Activity.clone()
+		}
+	}
+	return out
 }
 
 // tail returns the tail of c's transcript, or nil when kk cannot read it. The caller holds s.mu.
