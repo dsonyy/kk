@@ -140,7 +140,8 @@ func TestScheduledSession(t *testing.T) {
 		t.Fatalf("the run interrupted the work: %s", c.Status)
 	}
 	e.mustKK("interrupt", id)
-	e.waitFor("the run after the work", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: scheduled later") })
+	// The turn has to end before the server stops, or its Stop hook is lost and the made up run waits for it.
+	e.waitFor("the run after the work", id, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "echo: scheduled later") })
 
 	// A run missed while kk was off is made up once.
 	e.soon(id, "made up", 2*time.Second)

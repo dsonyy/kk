@@ -315,9 +315,8 @@ func TestKonduktorPanel(t *testing.T) {
 	p.shot("konduktor-unread")
 	p.dirTab("alpha")
 	p.until(`![...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
-	if c := e.conv(k); c.Unread {
-		t.Fatal("the konduktor shown is still unread")
-	}
+	// The page clears the mark before the server hears that the konduktor was seen.
+	e.waitFor("the konduktor shown read", k, func(c convView) bool { return !c.Unread })
 
 	// Closing it from the panel brings back the start.
 	p.click(`[...document.querySelectorAll(".side-panel .conv-head button")].find((b) => b.textContent === "Close")`)
