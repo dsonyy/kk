@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -119,6 +120,12 @@ func TestWorkerPrompt(t *testing.T) {
 	e.waitFor("resume", claude, func(c convView) bool { return c.Status == statusIdle })
 	if p, _ := argOf(e.launches("claude")[1], "--append-system-prompt"); p != worker || !strings.Contains(strings.Join(e.launches("claude")[1], " "), "--resume") {
 		t.Fatalf("claude resume: %v", e.launches("claude")[1])
+	}
+
+	// The worker prompt rides on every launch's command line, which tmux limits.
+	big, _ := json.Marshal(map[string]string{"worker_prompt": strings.Repeat("x", workerPromptMax+1)})
+	if resp, out := e.request("PUT", "/api/settings", bytes.NewReader(big)); resp.StatusCode != 400 || !strings.Contains(string(out), "at most") {
+		t.Fatalf("an oversize worker prompt was saved: %d %s", resp.StatusCode, out)
 	}
 
 	writeFile(t, filepath.Join(e.fake, "gmail.out"), gmailAnswer)

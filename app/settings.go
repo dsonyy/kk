@@ -158,6 +158,9 @@ type settingsView struct {
 	Placeholders map[string]string `json:"placeholders"`
 }
 
+// workerPromptMax keeps a launch under tmux's command size of 16 KB, next to the session's own prompt and the hooks.
+const workerPromptMax = 8000
+
 // override is what a prompt setting stores: nothing when the text is empty or the default.
 func override(text, def string) string {
 	if t := strings.TrimSpace(text); t == "" || t == strings.TrimSpace(def) {
@@ -203,6 +206,9 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	}
 	st.CoordinatorPrompt = override(st.CoordinatorPrompt, coordinatorPrompt)
 	st.WorkerPrompt = override(st.WorkerPrompt, workerPrompt)
+	if len(st.WorkerPrompt) > workerPromptMax {
+		return nil, fail(400, "the worker prompt has %d bytes, at most %d fit on an agent's command line", len(st.WorkerPrompt), workerPromptMax)
+	}
 	if _, _, err := net.SplitHostPort(st.Addr); err != nil {
 		return nil, fail(400, "address %q is not host:port", st.Addr)
 	}

@@ -137,7 +137,7 @@ export function SettingsView() {
             24,
             "The system prompt of konduktor. A new konduktor gets it at once, a running one after its next restart; saving does not restart it. Empty means the default.",
             <div class="placeholders">
-              <span class="hint">kk fills in these placeholders, then appends what it generates for each konduktor:</span>
+              <span class="hint">kk fills in these placeholders:</span>
               <dl>
                 {Object.keys(view.placeholders)
                   .sort()
@@ -152,7 +152,7 @@ export function SettingsView() {
             "worker_prompt",
             "Worker prompt",
             8,
-            "Given to every session kk starts for work, besides its own prompt: as a system prompt in Claude Code and Codex, before the first prompt in Cursor. New sessions get it at once; running Claude Code and Codex sessions after their next restart. The inbox checks never get it.",
+            "Given to every session kk starts for work, besides its own prompt: as a system prompt in Claude Code and Codex, before the first prompt in Cursor. New sessions get it at once, running Claude Code and Codex sessions after their next restart, running Cursor sessions not at all. The inbox checks never get it. At most 8000 bytes.",
           )}
 
           <h1>Inbox</h1>
