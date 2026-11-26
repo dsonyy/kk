@@ -27,7 +27,11 @@ export type Conversation = {
   created: string;
   last_message: string;
   activity: string;
-  status: "starting" | "working" | "background" | "idle" | "exited";
+  // A queued session waits with its prompt for a start; no agent runs yet.
+  status: "queued" | "starting" | "working" | "background" | "idle" | "exited";
+  // The session this one follows in a chain.
+  after?: string;
+  prompt?: string;
   attention?: string;
   // Who has to act on an agent that stopped; empty while it works.
   waiting_for: "" | "user" | "conductor";

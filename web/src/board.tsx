@@ -1,5 +1,5 @@
-import { Fragment } from "preact";
 import { harnessLabel, type Conversation } from "./api";
+import { arrange, ChainLinks, ChainRefs } from "./chain";
 import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
 
 type Column = { project: string; group: string; sessions: Conversation[] };
@@ -7,7 +7,7 @@ type Column = { project: string; group: string; sessions: Conversation[] };
 function state(c: Conversation): [string, string] {
   if (c.closed) return ["closed", "Closed"];
   if (c.attention) return ["attention", "Action required"];
-  return [c.status, { starting: "Starting", working: "Working", background: "Background working", idle: "Idle", exited: "Exited" }[c.status]];
+  return [c.status, { queued: "Queued", starting: "Starting", working: "Working", background: "Background working", idle: "Idle", exited: "Exited" }[c.status]];
 }
 
 // A column follows its first session in the chosen order. By title it follows its group name, the sessions without a group
@@ -45,11 +45,10 @@ function days(list: Conversation[], sort: Sort): [string, Column[]][] {
   return [...out.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 }
 
-// The arrows lead from an older session to a newer one, so a column shows them only while its order is the order of creation.
-const linked = (sessions: Conversation[]) => sessions.every((c, i) => i === 0 || time(sessions[i - 1].created) >= time(c.created));
-
 type BoardProps = {
   list: Conversation[];
+  // Every session, for the chain neighbours of a shown one that are filtered out.
+  all: Conversation[];
   sort: Sort;
   empty: string;
   // Whether a column is folded, or undefined when it cannot fold.
@@ -58,7 +57,7 @@ type BoardProps = {
   onOpen: (id: string) => void;
 };
 
-export function Board({ list, sort, empty, folded, onFold, onOpen }: BoardProps) {
+export function Board({ list, all, sort, empty, folded, onFold, onOpen }: BoardProps) {
   if (list.length === 0) return <div class="board empty">{empty}</div>;
   return (
     <div class="board">
@@ -70,7 +69,7 @@ export function Board({ list, sort, empty, folded, onFold, onOpen }: BoardProps)
               const shut = col.group ? folded(col.project, col.group) : undefined;
               const foldable = shut !== undefined;
               const fold = !!shut;
-              const arrows = linked(col.sessions);
+              const chains = arrange(col.sessions, all);
               return (
                 <section class={fold ? "column folded" : "column"} key={`${col.project}\n${col.group}`}>
                   <header
@@ -87,14 +86,14 @@ export function Board({ list, sort, empty, folded, onFold, onOpen }: BoardProps)
                     </div>
                   </header>
                   {!fold && (
-                    <ul class={arrows ? "tiles" : "tiles unlinked"}>
-                      {col.sessions.map((c, i) => {
-                        const [cls, label] = state(c);
-                        return (
-                          <Fragment key={c.id}>
-                            {i > 0 && arrows && <li class="link" aria-hidden="true" />}
-                            <li class={`tile ${cls}`} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
+                    <ChainLinks chains={chains}>
+                      <ul class="tiles">
+                        {chains.order.map((c) => {
+                          const [cls, label] = state(c);
+                          return (
+                            <li key={c.id} class={`tile ${cls}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
                               <div class="title">{c.title || "Untitled"}</div>
+                              <ChainRefs chains={chains} id={c.id} />
                               <div class="meta">
                                 <span>{harnessLabel(c.harness)}</span>
                                 <span class="state">
@@ -104,10 +103,10 @@ export function Board({ list, sort, empty, folded, onFold, onOpen }: BoardProps)
                               </div>
                               {c.attention && <div class="attention-text">{c.attention}</div>}
                             </li>
-                          </Fragment>
-                        );
-                      })}
-                    </ul>
+                          );
+                        })}
+                      </ul>
+                    </ChainLinks>
                   )}
                 </section>
               );

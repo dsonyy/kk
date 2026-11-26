@@ -8,6 +8,7 @@ import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
 import { Board } from "./board";
+import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { Inbox } from "./inbox";
 import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
@@ -208,6 +209,7 @@ function App() {
             <Scope>{filters()}</Scope>
             <Board
               list={shown}
+              all={sessions}
               sort={sort}
               empty={empty}
               folded={(project, group) => (allClosed((c) => c.project === project && c.group === group) ? !unfolded.includes(`${project}\n${group}`) : undefined)}
@@ -233,6 +235,7 @@ function App() {
               return (
                 <Group
                   key={project}
+                  all={sessions}
                   project={project}
                   name={names.get(project)!}
                   list={groups.get(project)!}
@@ -250,7 +253,16 @@ function App() {
           {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
           {panels.map(({ id, pinned }) =>
             details[id] ? (
-              <ConversationView key={id} c={details[id]} reload={() => loadDetail(id)} onHide={() => hide(id)} pinned={pinned} onPin={(on) => pin(id, on)} />
+              <ConversationView
+                key={id}
+                c={details[id]}
+                before={sessions.find((x) => x.id === details[id].after)}
+                onShow={show}
+                reload={() => loadDetail(id)}
+                onHide={() => hide(id)}
+                pinned={pinned}
+                onPin={(on) => pin(id, on)}
+              />
             ) : (
               <main key={id} id={`panel-${id}`} class="conversation placeholder">Loading…</main>
             ),
@@ -276,10 +288,11 @@ function App() {
 
 function stateLabel(c: Conversation) {
   if (c.closed) return "Closed";
+  if (c.status === "queued") return "Queued";
   if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
   if (c.attention) return "Action required";
   if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
-  return { starting: "Starting", working: "Working", background: "Background working", idle: "Your turn", exited: "Exited" }[c.status];
+  return { starting: "Starting", working: "Working", background: "Background working", idle: "Your turn", exited: "Exited", queued: "Queued" }[c.status];
 }
 
 function Dot({ c }: { c: Conversation }) {
@@ -298,6 +311,7 @@ function loudness(c: Conversation) {
 }
 
 type GroupProps = {
+  all: Conversation[];
   project: string;
   name: string;
   list: Conversation[];
@@ -307,7 +321,8 @@ type GroupProps = {
   onOpen: (id: string) => void;
 };
 
-function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
+function Group({ all, project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
+  const chains = arrange(list, all);
   const loud = list.filter((c) => !c.closed && loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
   const unread = list.some((c) => c.unread && !open.includes(c.id));
   const cls = ["group", collapsed && loud && attention(loud), collapsed && unread && "unread"];
@@ -324,20 +339,23 @@ function Group({ project, name, list, open, collapsed, onCollapse, onOpen }: Gro
         )}
         <span class="count">{list.length}</span>
       </summary>
-      <ul class="tiles">
-        {list.map((c) => (
-          <Tile key={c.id} c={c} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
-        ))}
-      </ul>
+      <ChainLinks chains={chains} hot={(id) => open.includes(id)}>
+        <ul class="tiles">
+          {chains.order.map((c) => (
+            <Tile key={c.id} c={c} chains={chains} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
+          ))}
+        </ul>
+      </ChainLinks>
     </details>
   );
 }
 
-function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", attention(c) || ((c.status === "working" || c.status === "background") && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
+function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: boolean; onOpen: () => void }) {
+  const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
-    <li class={cls.filter(Boolean).join(" ")} onClick={onOpen} title={c.attention || c.escalation || undefined}>
+    <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <div class="title">{c.title || "Untitled"}</div>
+      <ChainRefs chains={chains} id={c.id} />
       {c.escalation && <div class="reason">{c.escalation}</div>}
       <div class="meta">
         <span>
@@ -350,7 +368,7 @@ function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => v
       </div>
       <div class="meta">
         <span>Created {when(c.created)}</span>
-        <span>Last {when(c.last_message)}</span>
+        {c.status !== "queued" && <span>Last {when(c.last_message)}</span>}
       </div>
     </li>
   );
@@ -537,9 +555,19 @@ const RETRY = "The last turn was cut off by an API error. Continue from where yo
 
 type Pending = { text: string; files: Attachment[]; expect: number };
 
-type ConversationViewProps = { c: Conversation; reload: () => void; side?: boolean; onHide?: () => void; pinned?: boolean; onPin?: (on: boolean) => void };
+type ConversationViewProps = {
+  c: Conversation;
+  reload: () => void;
+  side?: boolean;
+  onHide?: () => void;
+  pinned?: boolean;
+  onPin?: (on: boolean) => void;
+  // The session this one follows in a chain.
+  before?: Conversation;
+  onShow?: (id: string) => void;
+};
 
-function ConversationView({ c, reload, side, onHide, pinned, onPin }: ConversationViewProps) {
+function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onShow }: ConversationViewProps) {
   const [terminal, setShowTerminal] = useState(false);
   // Closing kills the window, so a closed session has no terminal to show.
   const showTerminal = terminal && !c.closed;
@@ -594,13 +622,14 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
   }, [confirmClose]);
 
   const exited = c.status === "exited";
+  const queued = c.status === "queued" && !c.closed;
   const users = c.events.filter((e) => e.kind === "user").length + c.queued.length;
   const working = useRef(false);
   working.current = c.status === "working";
   const sending = pending.filter((p) => users < p.expect);
   // A rewind lowers the count again, which must not bring back messages that already arrived.
   if (sending.length < pending.length) setPending(sending);
-  const busy = !exited && !c.attention && (c.status !== "idle" || sending.length > 0);
+  const busy = !exited && !c.attention && c.status !== "queued" && (c.status !== "idle" || sending.length > 0);
   const last = c.events[c.events.length - 1];
 
   const send = async (text: string, files: Attachment[]) => {
@@ -646,15 +675,23 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
           )}
           <h1>{side ? "Conductor" : c.title || "Untitled"}</h1>
           <div class="actions">
-            {!c.closed && (
+            {!c.closed && !queued && (
               <div class="modes">
                 <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
                 <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
               </div>
             )}
-            {exited && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
+            {(exited || c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
             <Controls c={c} reload={reload} />
-            {!side && !c.closed && <Button label={confirmClose ? "Confirm close" : "Close"} icon="close" class="small" title="Stop the agent and move the session to the closed ones" onClick={close} />}
+            {!side && !c.closed && (
+              <Button
+                label={confirmClose ? "Confirm close" : "Close"}
+                icon="close"
+                class="small"
+                title={queued ? "Drop the queued session, it moves to the closed ones" : "Stop the agent and move the session to the closed ones"}
+                onClick={close}
+              />
+            )}
             {onHide && <Button label="Hide" icon="hide" class="small" title="Hide this panel, the agent keeps running" onClick={onHide} />}
           </div>
           <div class="meta">
@@ -685,7 +722,8 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
           }}
         >
           <div class="feed-inner" ref={inner}>
-            {c.events.length === 0 && !c.attention && !busy && <div class="empty">No messages yet.</div>}
+            {queued && <Queued c={c} before={before} onShow={onShow} reload={reload} />}
+            {c.events.length === 0 && !c.attention && !busy && !queued && <div class="empty">No messages yet.</div>}
             <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length ? () => send(RETRY, []) : undefined} />
             {c.queued.map((e, i) => (
               <div class="msg user queued" key={`q${i}`} title="The agent reads this message at its next step">
@@ -752,9 +790,97 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
             ))}
           </div>
         )}
-        {!showTerminal && <Composer c={c} exited={exited} onResume={resume} onSend={send} insert={composer} />}
+        {!showTerminal && !queued && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
       </Scope>
     </Tag>
+  );
+}
+
+// Queued shows the prepared prompt of a session that waits for its start, for the user to edit or start it.
+function Queued({ c, before, onShow, reload }: { c: Conversation; before?: Conversation; onShow?: (id: string) => void; reload: () => void }) {
+  const saved = c.prompt ?? "";
+  const [text, setText] = useState(saved);
+  const [base, setBase] = useState(saved);
+  const [busy, setBusy] = useState(false);
+  const area = useRef<HTMLTextAreaElement>(null);
+  const skills = useSkills(c.harness, c.dir);
+  const attachments = useAttachments();
+  // A prompt changed elsewhere replaces the one shown, unless the user has edited it here.
+  if (saved !== base) {
+    setBase(saved);
+    if (text === base) setText(saved);
+  }
+  const prompt = withPaths(text, attachments.items as Attachment[]);
+  const dirty = prompt !== saved;
+  const empty = !prompt.trim();
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`;
+  }, [text]);
+  const run = (start: boolean) => {
+    if (busy || empty || attachments.uploading) return;
+    setBusy(true);
+    act(async () => {
+      try {
+        if (dirty) {
+          await api("POST", `/api/conversations/${c.id}/prompt`, { prompt });
+          setText(prompt);
+          attachments.setItems([]);
+        }
+        if (start) await api("POST", `/api/conversations/${c.id}/start`, {});
+        reload();
+      } finally {
+        setBusy(false);
+      }
+    });
+  };
+  return (
+    <section class="queued-card">
+      <header>
+        <Icon name="chain" />
+        {before ? (
+          <span class="after">
+            Queued after{" "}
+            <button type="button" class="link" title="Open that session" onClick={() => onShow?.(before.id)}>
+              {before.title || "Untitled"}
+            </button>
+            <span class={`state ${before.waiting_for}`}>
+              <Dot c={before} />
+              {stateLabel(before)}
+            </span>
+          </span>
+        ) : (
+          <span class="after">Queued</span>
+        )}
+      </header>
+      <p class="hint">
+        Nothing starts by itself. When the session before it has finished, the conductor checks the work and starts this one with a handoff added to the prompt. You can
+        start it yourself any time.
+      </p>
+      <Field label="Prepared prompt">
+        <PromptInput
+          inputRef={area}
+          value={text}
+          onValue={setText}
+          skills={skills}
+          attachments={attachments}
+          onEnter={(e) => {
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              run(false);
+            }
+          }}
+        />
+      </Field>
+      <div class="row">
+        {dirty && <Button label="Revert" class="small" title="Go back to the saved prompt" onClick={() => (setText(saved), attachments.setItems([]))} />}
+        <Button label="Attach" icon="file" class="small" title="Attach files, or paste or drop them" onClick={attachments.pick} />
+        <Button label="Save prompt" class="small" disabled={!dirty || empty || busy || attachments.uploading} onClick={() => run(false)} />
+        <Button label="Start" icon="play" class="small primary" title="Start the agent with this prompt now" disabled={empty || busy || attachments.uploading} onClick={() => run(true)} />
+      </div>
+    </section>
   );
 }
 
