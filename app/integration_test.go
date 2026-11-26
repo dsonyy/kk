@@ -160,7 +160,7 @@ func TestIntegrationSession(t *testing.T) {
 	writeFile(t, filepath.Join(e.fake, "gmail-error"), "")
 	e.refreshInbox("gmail")
 	c = e.conv(id)
-	if !c.Attention != "The Gmail run ended on an API error." || c.WaitingFor != waitingUser {
+	if c.Attention != "The Gmail run ended on an API error." || c.WaitingFor != waitingUser {
 		t.Fatalf("a failed run should need the user: %+v", c.Conversation)
 	}
 	os.Remove(filepath.Join(e.fake, "gmail-error"))
