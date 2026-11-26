@@ -105,7 +105,7 @@ func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.T
 	mine := conductorsTurn(c)
 	var reason string
 	switch {
-	case c.Closed || !mine && !chain:
+	case c.Closed || c.Sleeping || !mine && !chain:
 	case mine && attention && (!w.attention || raises > w.raises):
 		reason = "needs action"
 	case c.Status == statusExited && prev.Status != statusExited && prev.Status != "":

@@ -1,12 +1,15 @@
 import { harnessLabel, type Conversation } from "./api";
 import { arrange, ChainLinks, ChainRefs } from "./chain";
 import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
+import { placedAt, ScheduleIcon } from "./schedule";
 
 type Column = { project: string; group: string; sessions: Conversation[] };
 
 function state(c: Conversation): [string, string] {
   if (c.closed) return ["closed", "Closed"];
   if (c.attention) return ["attention", "Action required"];
+  if (c.run_done) return ["called", "Scheduled run done"];
+  if (c.sleeping) return ["sleeping", "Sleeping"];
   return [c.status, { queued: "Queued", starting: "Starting", working: "Working", background: "Background working", idle: "Idle", exited: "Exited" }[c.status]];
 }
 
@@ -27,7 +30,8 @@ function columns(list: Conversation[], sort: Sort): Column[] {
 
 export function CardTitle({ c }: { c: Conversation }) {
   return (
-    <div class="head">
+    <div class="tile-top">
+      <ScheduleIcon c={c} />
       <div class="title">{c.title || "Untitled"}</div>
       {c.in_worktree && <i class="icon icon-worktree" role="img" aria-label="Git worktree" title={`Works in a git worktree: ${c.dir}`} />}
     </div>
@@ -45,10 +49,14 @@ export function dayLabel(key: string): string {
 }
 
 // A column sits once, under the day it was last active or finished when sorting by activity, else the day of its newest session.
+// A scheduled session counts by its planned run of today, or by its last run.
 function days(list: Conversation[], sort: Sort): [string, Column[]][] {
   const out = new Map<string, Column[]>();
   for (const col of columns(list, sort)) {
-    const day = dayKey(sort === "active" ? groupTime(col.sessions) : Math.max(...col.sessions.map((c) => time(c.created))));
+    const planned = col.sessions.map(placedAt);
+    const rest = col.sessions.filter((_, i) => planned[i] === undefined);
+    const base = !rest.length ? -Infinity : sort === "active" ? groupTime(rest) : Math.max(...rest.map((c) => time(c.created)));
+    const day = dayKey(Math.max(base, ...planned.filter((t) => t !== undefined)));
     out.set(day, [...(out.get(day) ?? []), col]);
   }
   return [...out.entries()].sort((a, b) => b[0].localeCompare(a[0]));

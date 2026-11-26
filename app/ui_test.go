@@ -291,6 +291,21 @@ func TestNewSessionWindowKeepsItsSize(t *testing.T) {
 	same("opened again", full)
 
 	// A screen lower than the window limits it to the screen.
+	p.click(`[...document.querySelectorAll(".new-session button")].find((b) => b.getAttribute("aria-label") === "Cancel")`)
+
+	// The schedule dialog borrows the look of the window and keeps the size of its content.
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.click(`[...document.querySelectorAll(".panels button")].find((b) => b.getAttribute("aria-label") === "Schedule")`)
+	p.until(`document.querySelector(".new-session.schedule")`)
+	var schedule struct{ Height, Content float64 }
+	p.eval(`(() => { const w = document.querySelector(".new-session.schedule"); return { height: w.offsetHeight, content: w.scrollHeight + w.offsetHeight - w.clientHeight } })()`, &schedule)
+	if schedule.Height >= 720 || math.Abs(schedule.Height-schedule.Content) > 1 {
+		t.Errorf("the schedule dialog: %+v", schedule)
+	}
+	p.click(`[...document.querySelectorAll(".new-session.schedule button")].find((b) => b.getAttribute("aria-label") === "Cancel")`)
+	p.click(`document.querySelector(".sidebar-head > button")`)
+
 	p.resize(1600, 500)
 	program("claude")
 	p.until(`document.querySelectorAll(".past .tile").length === 12`)
