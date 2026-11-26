@@ -507,6 +507,8 @@ func TestNoAccentStripes(t *testing.T) {
 		Stripes                                                     []string
 		Rules                                                       int
 		Dot, Shadow, Reason, Quote, Selected, SelectedShadow, Other string
+		// The space between the frame of the quote and its text, above it and below it.
+		Above, Below float64
 	}
 	p.eval(`(() => {
 		const stripes = []
@@ -532,7 +534,10 @@ func TestNoAccentStripes(t *testing.T) {
 		const style = (selector, pseudo) => getComputedStyle(document.querySelector(selector), pseudo)
 		const frame = (s) => [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth, s.borderLeftStyle].join(" ")
 		const outline = (s) => s.outlineStyle + " " + s.outlineWidth
+		const quote = document.querySelector(".msg.user blockquote"), box = quote.getBoundingClientRect()
 		return {
+			above: quote.firstElementChild.getBoundingClientRect().top - box.top,
+			below: box.bottom - quote.lastElementChild.getBoundingClientRect().bottom,
 			stripes, rules,
 			dot: style(".sidebar .tile.unread .title", "::before").content,
 			shadow: style(".sidebar .tile.unread").boxShadow,
@@ -552,6 +557,9 @@ func TestNoAccentStripes(t *testing.T) {
 	}
 	if got.Reason != framed || got.Quote != framed {
 		t.Errorf("escalation reason %q and quote %q are not framed", got.Reason, got.Quote)
+	}
+	if math.Abs(got.Above-got.Below) > 0.5 {
+		t.Errorf("the quote has %.0f px above its text and %.0f px below", got.Above, got.Below)
 	}
 	if got.Selected != "solid 1px" || got.SelectedShadow != "none" || got.Other != "none" {
 		t.Errorf("selected suggestion: %q, shadow %q, others %q", got.Selected, got.SelectedShadow, got.Other)

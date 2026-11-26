@@ -322,8 +322,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 /* Markdown is set for reading: a short measure, open leading, and space that groups a heading with the text under it. */
 .md { font-size: 15px; line-height: 1.65; color: var(--read-text); overflow-wrap: anywhere; text-wrap: pretty; }
 .msg.assistant .md { max-width: 72ch; }
-.md > :first-child { margin-top: 0; }
-.md > :last-child { margin-bottom: 0; }
+.md > :first-child, .md blockquote > :first-child { margin-top: 0; }
+.md > :last-child, .md blockquote > :last-child { margin-bottom: 0; }
 .md :is(h1, h2, h3, h4, h5, h6) { margin: 1.6em 0 .5em; color: var(--read-strong); font-weight: 600; line-height: 1.3; text-wrap: balance; }
 .md h1 { font-size: 20px; }
 .md h2 { font-size: 17px; }
