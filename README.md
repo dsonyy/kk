@@ -1,6 +1,6 @@
 # kk
 
-konduktor, kk for short, runs coding agents on tmux and shows them on the web: Claude Code, Codex and Cursor CLI side by side, with a main agent, konduktor, that knows all of them. The two k's of konduktor give kk its name.
+konduktor runs coding agents on tmux and shows them on the web: Claude Code, Codex and Cursor CLI side by side, with a main agent, konduktor, that knows all of them.
 
 ## Install
 
