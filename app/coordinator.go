@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log"
@@ -83,6 +84,24 @@ When you acted on your own, say in one line what you did.
 
 The source code is in {{SOURCE}} (Go server in app/, web client in web/, read AGENTS.md there first). After a change: run the tests, then "just install", which rebuilds the binary and restarts the kk service. Agents and your own session keep running in tmux across restarts.
 `
+
+// workerPrompt is the built-in text every session kk starts for work gets besides its own prompt.
+const workerPrompt = ""
+
+// placeholders maps each placeholder of the konduktor prompt to its value.
+func (s *Server) placeholders() map[string]string {
+	return map[string]string{"{{BIN}}": s.bin, "{{HOME}}": s.store.dir, "{{SOURCE}}": s.cfg().source()}
+}
+
+// coordinatorText is the base of every konduktor's system prompt: the text from Settings, or the default, with its
+// placeholders filled. writePrompts appends the generated section about the konduktors after it.
+func (s *Server) coordinatorText() string {
+	var pairs []string
+	for k, v := range s.placeholders() {
+		pairs = append(pairs, k, v)
+	}
+	return strings.NewReplacer(pairs...).Replace(cmp.Or(s.cfg().CoordinatorPrompt, coordinatorPrompt))
+}
 
 // konduktorsPrompt follows the base prompt of every konduktor. It tells each one who it is and how the konduktors
 // share the work, and corrects what the base prompt says for a single konduktor.
@@ -187,7 +206,7 @@ func (s *Server) writePrompts() error {
 	}
 	// Before there were several, the one prompt lay in the kk home.
 	os.Remove(filepath.Join(s.store.dir, "coordinator.md"))
-	base := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", s.cfg().source()).Replace(coordinatorPrompt)
+	base := s.coordinatorText()
 	for _, k := range ks {
 		if err := os.WriteFile(s.konduktorPrompt(k.ID), []byte(base+konduktorsSection(k, ks)), 0o600); err != nil {
 			return err

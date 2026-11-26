@@ -534,6 +534,13 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .settings .row { display: flex; justify-content: flex-end; gap: 8px; position: sticky; bottom: 0; padding: 12px 0 20px; background: var(--bg); }
 .settings table { border-collapse: collapse; font-size: 13px; }
 .settings td { padding: 3px 16px 3px 0; }
+.prompt-setting { display: flex; flex-direction: column; gap: 8px; }
+.settings .prompt-setting .field textarea { min-height: 0; resize: vertical; }
+.prompt-state { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.prompt-state .badge { direction: ltr; border: 1px solid var(--line-strong); }
+.prompt-state .badge.on { border-color: var(--text-strong); }
+.placeholders dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 4px 0 0; }
+.placeholders dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .hint { font-size: 12px; color: var(--text-dim); }
 .schedule { width: min(520px, 100%); height: auto; max-height: 100%; overflow-y: auto; }
 .schedule .hint { margin: 0; }

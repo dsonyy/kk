@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -188,6 +189,9 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 			}
 			argv = append(argv, "--append-system-prompt-file", s.konduktorPrompt(c.ID), "--name", name)
 		}
+		if w := s.worker(c); w != "" {
+			argv = append(argv, "--append-system-prompt", w)
+		}
 		if resume {
 			return append(argv, "--resume", c.Session), nil
 		}
@@ -206,6 +210,11 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 		}
 		if c.Model != "" {
 			argv = append(argv, "-m", c.Model)
+		}
+		if w := s.worker(c); w != "" {
+			// A JSON string is a valid TOML string, which -c expects.
+			value, _ := json.Marshal(w)
+			argv = append(argv, "-c", "developer_instructions="+string(value))
 		}
 		if resume {
 			return append(argv, "resume", c.Session), nil
@@ -230,11 +239,24 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 			return append(argv, "--resume", c.Session), nil
 		}
 		if c.Prompt != "" {
-			argv = append(argv, "--", c.Prompt)
+			prompt := c.Prompt
+			// Cursor CLI has no system prompt option, so the worker prompt goes before the first prompt.
+			if w := s.worker(c); w != "" {
+				prompt = w + "\n\n" + prompt
+			}
+			argv = append(argv, "--", prompt)
 		}
 		return argv, nil
 	}
 	return nil, fmt.Errorf("unknown harness %q", c.Harness)
+}
+
+// worker is the worker prompt for c: every session kk starts for work gets it, konduktor and the inbox checks do not.
+func (s *Server) worker(c *Conversation) string {
+	if c.Role != "" || c.Integration != "" {
+		return ""
+	}
+	return strings.TrimSpace(cmp.Or(s.cfg().WorkerPrompt, workerPrompt))
 }
 
 // cursorPlugin writes a Cursor plugin whose hooks report to kk. Cursor CLI 2026.11 fires only

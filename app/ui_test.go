@@ -183,6 +183,80 @@ func TestSettingsViewIsCentered(t *testing.T) {
 	}
 }
 
+func TestSettingsPrompts(t *testing.T) {
+	e := newEnv(t)
+	p := e.openPage(1600, 900)
+	p.click(`[...document.querySelectorAll("nav.tabs .tab")].find((a) => a.textContent === "Settings")`)
+	p.until(`document.querySelector("[data-prompt=coordinator_prompt] textarea")`)
+	type field struct {
+		Value, State string
+		Reset        bool
+		Mono         bool
+		Rows         int
+		Placeholders []string
+	}
+	read := func(key string) field {
+		var f field
+		p.eval(fmt.Sprintf(`(() => {
+			const box = document.querySelector("[data-prompt=%s]"), area = box.querySelector("textarea")
+			const reset = [...box.querySelectorAll("button")].find((b) => b.ariaLabel === "Reset to default")
+			return { value: area.value, state: box.querySelector(".badge").textContent, reset: !reset.disabled,
+				mono: getComputedStyle(area).fontFamily === getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim(), rows: area.rows,
+				placeholders: [...box.querySelectorAll(".placeholders dt")].map((d) => d.textContent) }
+		})()`, key), &f)
+		return f
+	}
+	typeInto := func(key, text string) {
+		p.eval(fmt.Sprintf(`(() => { const a = document.querySelector("[data-prompt=%s] textarea"); a.focus(); a.select() })()`, key), nil)
+		p.call("Input.insertText", map[string]any{"text": text})
+	}
+	save := func() {
+		p.click(`document.querySelector(".settings .row button.primary:not(:disabled)")`)
+		p.until(`document.querySelector(".settings .row button.primary:disabled")`)
+	}
+	saved := func() Settings {
+		var v settingsView
+		_, out := e.request("GET", "/api/settings", nil)
+		json.Unmarshal(out, &v)
+		return v.Settings
+	}
+
+	k := read("coordinator_prompt")
+	if k.Value != coordinatorPrompt || k.State != "Default" || k.Reset || !k.Mono || k.Rows < 20 ||
+		!slices.Equal(k.Placeholders, []string{"{{BIN}}", "{{HOME}}", "{{SOURCE}}"}) {
+		t.Fatalf("konduktor prompt: %+v", k)
+	}
+	if w := read("worker_prompt"); w.Value != "" || w.State != "Default" || w.Reset || !w.Mono {
+		t.Fatalf("worker prompt: %+v", w)
+	}
+
+	typeInto("coordinator_prompt", "My konduktor in {{HOME}}.")
+	typeInto("worker_prompt", "Commit small.")
+	if k, w := read("coordinator_prompt"), read("worker_prompt"); k.State != "Edited" || !k.Reset || w.State != "Edited" || !w.Reset {
+		t.Fatalf("edited prompts: %+v %+v", k, w)
+	}
+	save()
+	if st := saved(); st.CoordinatorPrompt != "My konduktor in {{HOME}}." || st.WorkerPrompt != "Commit small." {
+		t.Fatalf("saved: %q %q", st.CoordinatorPrompt, st.WorkerPrompt)
+	}
+	p.call("Page.reload", nil)
+	p.until(`document.querySelector("nav.tabs")`)
+	p.click(`[...document.querySelectorAll("nav.tabs .tab")].find((a) => a.textContent === "Settings")`)
+	p.until(`document.querySelector("[data-prompt=coordinator_prompt] textarea")`)
+	if k := read("coordinator_prompt"); k.Value != "My konduktor in {{HOME}}." || k.State != "Edited" {
+		t.Fatalf("after a reload: %+v", k)
+	}
+
+	p.click(`[...document.querySelectorAll("[data-prompt=coordinator_prompt] button")].find((b) => b.ariaLabel === "Reset to default")`)
+	if k := read("coordinator_prompt"); k.Value != coordinatorPrompt || k.State != "Default" || k.Reset {
+		t.Fatalf("after reset: %+v", k)
+	}
+	save()
+	if st := saved(); st.CoordinatorPrompt != "" || st.WorkerPrompt != "Commit small." {
+		t.Fatalf("saved after reset: %q %q", st.CoordinatorPrompt, st.WorkerPrompt)
+	}
+}
+
 func TestSavedFilterSurvivesRebrand(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1")
 	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })

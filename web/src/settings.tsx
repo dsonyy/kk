@@ -1,10 +1,12 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { act, api, flash, harnessLabel, type Harness, type Settings, type Skill } from "./api";
 import { DirField } from "./dirpicker";
 import { InboxSettings } from "./inbox";
 import { Button, Field, Scope } from "./mnemonic";
 
-type View = { settings: Settings; env: Record<string, string> };
+type Prompt = "coordinator_prompt" | "worker_prompt";
+type View = { settings: Settings; env: Record<string, string>; defaults: Record<Prompt, string>; placeholders: Record<string, string> };
 
 export function SettingsView() {
   const [view, setView] = useState<View>();
@@ -39,6 +41,22 @@ export function SettingsView() {
   const number = (key: "start_timeout_seconds" | "compact_after_minutes" | "compact_tokens") => (
     <input type="number" min={1} value={draft[key]} onInput={(e) => set(key, Number(e.currentTarget.value))} />
   );
+  const prompt = (key: Prompt, label: string, rows: number, hint: string, below?: ComponentChildren) => {
+    const edited = draft[key] !== "" && draft[key].trim() !== view.defaults[key].trim();
+    return (
+      <div class="prompt-setting" data-prompt={key}>
+        <Field label={label}>
+          <span class="hint">{hint}</span>
+          <textarea class="mono" rows={rows} spellcheck={false} value={draft[key] || view.defaults[key]} onInput={(e) => set(key, e.currentTarget.value)} />
+        </Field>
+        <div class="prompt-state">
+          <span class={edited ? "badge on" : "badge"}>{edited ? "Edited" : "Default"}</span>
+          <Button label="Reset to default" disabled={!edited} onClick={() => set(key, "")} />
+        </div>
+        {below}
+      </div>
+    );
+  };
   const dirty = JSON.stringify(draft) !== JSON.stringify(view.settings);
   const save = (e: SubmitEvent) => {
     e.preventDefault();
@@ -111,6 +129,31 @@ export function SettingsView() {
             {number("compact_tokens")}
           </Field>
           <DirField label="Source directory" hint={noteText("source", "Where the kk source is. konduktor is told to change kk there.")} value={draft.source} onValue={(dir) => set("source", dir)} />
+
+          <h1>Prompts</h1>
+          {prompt(
+            "coordinator_prompt",
+            "konduktor prompt",
+            24,
+            "The system prompt of every konduktor. A new konduktor gets it at once, a running one after its next restart; saving does not restart it. Empty means the default.",
+            <div class="placeholders">
+              <span class="hint">kk fills in these placeholders, then appends a section about the konduktors that overrides this text where they differ:</span>
+              <dl>
+                {Object.keys(view.placeholders)
+                  .sort()
+                  .flatMap((name) => [
+                    <dt key={name} class="mono">{name}</dt>,
+                    <dd key={name + "="} class="mono">{view.placeholders[name]}</dd>,
+                  ])}
+              </dl>
+            </div>,
+          )}
+          {prompt(
+            "worker_prompt",
+            "Worker prompt",
+            8,
+            "Given to every session kk starts for work, besides its own prompt: as a system prompt in Claude Code and Codex, before the first prompt in Cursor. New sessions get it at once, running Claude Code and Codex sessions after their next restart, running Cursor sessions not at all. The inbox checks never get it. At most 8000 bytes.",
+          )}
 
           <h1>Inbox</h1>
           <InboxSettings value={draft.inbox} onValue={(v) => set("inbox", v)} />
