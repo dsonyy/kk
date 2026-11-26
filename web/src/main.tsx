@@ -1418,6 +1418,7 @@ function KonduktorPick({ dirs, shown, of, label, tab, onPick }: PickProps) {
           }}
         >
           <span class="what">{konduktorTitle(shown, label)}</span>
+          {!shown && <span class="muted">for All</span>}
           {!k && <span class="muted">not started</span>}
           <Icon name="chevron" />
         </button>

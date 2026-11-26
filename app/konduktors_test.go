@@ -248,7 +248,7 @@ func TestKonduktorPanel(t *testing.T) {
 		p.click(fmt.Sprintf(`[...document.querySelectorAll(".dir-menu .dir-item")].find((b) => b.querySelector(".mono").textContent === %q)`, name))
 	}
 	// All shows the main konduktor.
-	p.until(head + ` === "main konduktor"`)
+	p.until(head + ` === "main konduktorfor All"`)
 	if n := len(p.texts(".side-panel .pin")); n != 0 {
 		t.Fatal("the konduktor panel has a pin")
 	}
@@ -279,7 +279,7 @@ func TestKonduktorPanel(t *testing.T) {
 	p.dirTab("beta")
 	p.until(head + ` === "konduktor of betanot started" && document.querySelector(".side-panel .konduktor-hint")`)
 	p.dirTab("All")
-	p.until(head + ` === "main konduktor" && !` + away)
+	p.until(head + ` === "main konduktorfor All" && !` + away)
 
 	// The menu lists main and every directory, also those whose konduktor has not started: kk is the one of the inbox sessions.
 	p.click(`document.querySelector(".side-panel .konduktor-name")`)
