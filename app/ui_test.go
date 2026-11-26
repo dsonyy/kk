@@ -787,3 +787,22 @@ func TestLocalImagesInChat(t *testing.T) {
 		t.Fatalf("a path in code opens %q, want %q", c, shots[0])
 	}
 }
+
+func TestCardTokensLeaveOutCacheReads(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "ask a subagent")
+	waitUsage(e, id, answerTokens+1100, opusAnswer+haikuAgent)
+	p := e.openPage(1600, 900)
+	sel := fmt.Sprintf(`document.querySelector('.sidebar .tile[data-chain=%q] .meta > span[title]')`, id)
+	p.until(sel)
+	var card struct{ Text, Title string }
+	p.eval(fmt.Sprintf(`(() => { const s = %s; return { text: s.textContent, title: s.title } })()`, sel), &card)
+	if card.Text != "1.2k tokens · <$0.01" {
+		t.Errorf("card: %q, want the tokens without the 990 cache reads", card.Text)
+	}
+	for _, line := range []string{"1,160 tokens without cache reads", "New input 1,010", "Cache writes 0", "Output 150", "Cache reads 990, the context read again on each request", "Cost <$0.01 at API list prices"} {
+		if !strings.Contains(card.Title, line) {
+			t.Errorf("tooltip lacks %q:\n%s", line, card.Title)
+		}
+	}
+}

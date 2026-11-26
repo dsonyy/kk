@@ -149,6 +149,9 @@ export function harnessLabel(name: string): string {
 
 export const usageTokens = (u: Usage) => u.input + u.cache_read + u.cache_write + u.output;
 
+// newTokens leaves out cache reads, which repeat the context on every request and dwarf the rest.
+export const newTokens = (u: Usage) => u.input + u.cache_write + u.output;
+
 export function count(n: number): string {
   if (n < 1000) return String(n);
   const [d, unit] = n < 1e6 ? [1e3, "k"] : n < 1e9 ? [1e6, "M"] : [1e9, "B"];
@@ -161,22 +164,24 @@ export function dollars(v: number): string {
   return "$" + (v < 100 ? v.toFixed(2) : Math.round(v).toLocaleString("en-US"));
 }
 
-const ESTIMATE = "Cost at API list prices. With a subscription it is an estimate, not what you pay.";
+const ESTIMATE_NOTE = "With a subscription it is an estimate, not what you pay.";
 
 // usageLabel is the short form for a session card; usageTitle the breakdown for its tooltip.
 export function usageLabel(u: Usage | null): string {
   if (!u) return "Usage unavailable";
-  const tokens = `${count(usageTokens(u))} tokens`;
+  const tokens = `${count(newTokens(u))} tokens`;
   return u.unpriced?.length ? tokens : `${tokens} · ${dollars(u.cost)}`;
 }
 
 export function usageTitle(u: Usage | null, harness: string): string {
   if (!u) return `${harnessLabel(harness)} does not report token usage`;
   const n = (v: number) => v.toLocaleString("en-US");
-  const lines = [
-    `${n(usageTokens(u))} tokens`,
-    `Input ${n(u.input)} · cache read ${n(u.cache_read)} · cache write ${n(u.cache_write)} · output ${n(u.output)}`,
-    u.unpriced?.length ? `No list price for ${u.unpriced.join(", ")}, so no cost is shown` : ESTIMATE,
-  ];
-  return lines.join("\n");
+  return [
+    `${n(newTokens(u))} tokens without cache reads`,
+    `New input ${n(u.input)}`,
+    `Cache writes ${n(u.cache_write)}`,
+    `Output ${n(u.output)}`,
+    `Cache reads ${n(u.cache_read)}, the context read again on each request`,
+    u.unpriced?.length ? `No list price for ${u.unpriced.join(", ")}, so no cost is shown` : `Cost ${dollars(u.cost)} at API list prices. ${ESTIMATE_NOTE}`,
+  ].join("\n");
 }
