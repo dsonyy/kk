@@ -48,6 +48,8 @@ type Server struct {
 	notices map[string]notice
 	// handovers holds the conversations the user started and handed to the konduktor, until the konduktor hears of them.
 	handovers map[string]bool
+	// answers holds the answer of the current run of each integration, by conversation.
+	answers map[string]runAnswer
 }
 
 type convView struct {
@@ -751,6 +753,7 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		TranscriptPath   string `json:"transcript_path"`
 		Message          string `json:"message"`
 		NotificationType string `json:"notification_type"`
+		LastMessage      string `json:"last_assistant_message"`
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	json.Unmarshal(body, &p)
@@ -762,6 +765,7 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		s.tick()
 		if cur, ok := s.store.get(id); ok && (p.TranscriptPath == "" || p.TranscriptPath == cur.Transcript) {
 			open, _ = s.background(cur)
+			s.keepAnswer(cur, p.SessionID, p.LastMessage)
 		}
 	}
 	raised := false

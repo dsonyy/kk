@@ -46,8 +46,11 @@ var (
 	total counts
 	// connector is the inbox source of kk's integration session, from the connector tools it may use.
 	connector string
-	// allowed are the tools of --allowedTools.
-	allowed []string
+	// allowed are the tools of --allowedTools, and builtins those of --tools.
+	allowed  []string
+	builtins []string
+	// reads are the connector's tools among the allowed ones.
+	reads []string
 	argv    []string
 )
 
@@ -308,10 +311,14 @@ func parseArgs(args []string) (prompt string, resume bool) {
 		case a == "--allowedTools":
 			allowed = strings.Split(next(), ",")
 			for source, prefix := range map[string]string{"gmail": "mcp__claude_ai_Gmail__", "slack": "mcp__claude_ai_Slack__"} {
-				if strings.HasPrefix(allowed[0], prefix) {
-					connector = source
+				for _, t := range allowed {
+					if strings.HasPrefix(t, prefix) {
+						connector, reads = source, append(reads, t)
+					}
 				}
 			}
+		case a == "--tools":
+			builtins = strings.Split(next(), ",")
 		case a == "--plugin-dir":
 			var p struct {
 				Hooks map[string][]struct{ Command string } `json:"hooks"`
@@ -335,7 +342,7 @@ func parseArgs(args []string) (prompt string, resume bool) {
 			session, resume = next(), true
 		case a == "--model" || a == "-m":
 			model = next()
-		case a == "--append-system-prompt-file" || a == "--name" || a == "--system-prompt" || a == "--setting-sources" || a == "--tools" ||
+		case a == "--append-system-prompt-file" || a == "--name" || a == "--system-prompt" || a == "--setting-sources" ||
 			a == "--permission-mode" || a == "--disallowedTools":
 			next()
 		}
@@ -857,8 +864,13 @@ func uuid() string {
 
 // integrationTurn answers a turn of kk's inbox session like a model that has only its connector's tools. A prompt
 // "use <tool>" calls that tool; any other prompt collects the inbox: it keeps the arguments in FAKE_HOME/<source>-args.json,
-// reads with the first allowed tool and answers with FAKE_HOME/<source>.out. FAKE_HOME/<source>-connector "none" leaves the
-// connector out, and FAKE_HOME/<source>-error ends the turn on an API error. Tools that ran are listed in FAKE_HOME/<source>-tools.log.
+// reads with the first allowed connector tool and answers with FAKE_HOME/<source>.out. FAKE_HOME/<source>-connector "none"
+// leaves the connector out, and FAKE_HOME/<source>-error ends the turn on an API error. Tools that ran are listed in
+// FAKE_HOME/<source>-tools.log.
+//
+// Like Claude Code 2.1, the agent takes its first prompt while the claude.ai connectors are still connecting: it has
+// no connector tools then, unless it may wait for them with ToolSearch. And it fires the Stop hook before the answer
+// reaches the transcript.
 func integrationTurn(prompt string) {
 	home := os.Getenv("FAKE_HOME")
 	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
@@ -867,8 +879,7 @@ func integrationTurn(prompt string) {
 	write(map[string]any{"type": "ai-title", "aiTitle": "Mail from Gus about a contract"})
 	if tool, ok := strings.CutPrefix(prompt, "use "); ok {
 		useTool(tool)
-		answer("done", 1000)
-		hook("Stop", nil)
+		reply("done")
 		return
 	}
 	data, _ := json.Marshal(argv)
@@ -877,19 +888,30 @@ func integrationTurn(prompt string) {
 		write(map[string]any{"type": "assistant", "isApiErrorMessage": true, "apiError": "overloaded", "error": "server_error", "message": map[string]any{"role": "assistant", "model": "<synthetic>", "content": []any{map[string]any{"type": "text", "text": "API Error: 529 Overloaded"}}}})
 		return
 	}
-	if b, _ := os.ReadFile(filepath.Join(home, connector+"-connector")); strings.TrimSpace(string(b)) == "none" {
-		answer(`{"connector":"missing"}`, 1000)
-		hook("Stop", nil)
+	if !slices.Contains(builtins, "ToolSearch") {
+		reply(`{"connector":"missing"}`)
 		return
 	}
-	useTool(allowed[0])
+	useTool("ToolSearch")
+	if b, _ := os.ReadFile(filepath.Join(home, connector+"-connector")); strings.TrimSpace(string(b)) == "none" {
+		reply(`{"connector":"missing"}`)
+		return
+	}
+	useTool(reads[0])
 	out, err := os.ReadFile(filepath.Join(home, connector+".out"))
 	if err != nil {
 		out = []byte(`{"items":[]}`)
 	}
-	answer(string(out), 1000)
 	fmt.Println("agent: answered")
-	hook("Stop", nil)
+	reply(string(out))
+}
+
+// reply ends an integration turn the way Claude Code 2.1 does: the Stop hook reports the answer before the transcript
+// holds it.
+func reply(text string) {
+	hook("Stop", map[string]any{"last_assistant_message": text})
+	time.Sleep(300 * time.Millisecond)
+	answer(text, 1000)
 }
 
 // useTool calls a tool the way Claude Code does: a PreToolUse hook that exits with 2 refuses it, and then it does not run.

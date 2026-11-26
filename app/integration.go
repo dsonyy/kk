@@ -26,19 +26,25 @@ const (
 
 func integrationID(source string) string { return "inbox-" + source }
 
-// integrationCommand builds the argv of an integration's agent. Without the user's settings it gets no tools but the
-// connector's read tools. The guard hook refuses every other tool whatever the permission mode and rules say by then.
+// toolSearch is the only built-in tool of an integration's agent. Claude Code takes the run's prompt before the claude.ai
+// connectors have connected, and ToolSearch waits for them; without it the agent finds no connector tools.
+const toolSearch = "ToolSearch"
+
+// integrationCommand builds the argv of an integration's agent. Without the user's settings it gets no tools but
+// ToolSearch and the connector's read tools. The guard hook refuses every other tool whatever the permission mode and
+// rules say by then.
 func (s *Server) integrationCommand(c *Conversation, resume bool) ([]string, error) {
 	r, ok := connectorRuns[c.Integration]
 	if !ok {
 		return nil, fmt.Errorf("unknown integration %q", c.Integration)
 	}
+	allowed := toolSearch + "," + r.tools(r.read)
 	hooks := s.claudeHooks()
-	guard := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellJoin([]string{s.bin, "guard", r.tools(r.read)})}}}
+	guard := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellJoin([]string{s.bin, "guard", allowed})}}}
 	hooks["PreToolUse"] = append([]any{guard}, hooks["PreToolUse"]...)
 	settings, _ := json.Marshal(map[string]any{"hooks": hooks})
-	argv := []string{"claude", "--settings", string(settings), "--model", integrationModel, "--setting-sources", "", "--tools", "",
-		"--permission-mode", "dontAsk", "--allowedTools", r.tools(r.read), "--disallowedTools", r.tools(r.write), "--disable-slash-commands",
+	argv := []string{"claude", "--settings", string(settings), "--model", integrationModel, "--setting-sources", "", "--tools", toolSearch,
+		"--permission-mode", "dontAsk", "--allowedTools", allowed, "--disallowedTools", r.tools(r.write), "--disable-slash-commands",
 		"--system-prompt", r.system}
 	if resume {
 		return append(argv, "--resume", c.Session), nil
@@ -119,31 +125,35 @@ func (s *Server) integrationAnswer(ctx context.Context, r connectorRun) (string,
 			if cur.Attention != "" {
 				return "", fmt.Errorf("the %s run ended on an API error", r.label)
 			}
-			return s.firstAnswer(cur), nil
+			s.mu.Lock()
+			a := s.answers[id]
+			s.mu.Unlock()
+			if !a.launched.Equal(cur.Launched) {
+				return "", nil
+			}
+			return a.text, nil
 		}
 	}
 }
 
-// firstAnswer is the last thing the agent said in the run's own turn, before anything typed into the session.
-func (s *Server) firstAnswer(c Conversation) string {
+// runAnswer is the last message of the first turn of an integration's run, which answers the run's prompt.
+type runAnswer struct {
+	launched time.Time
+	text     string
+}
+
+// keepAnswer keeps the answer a Stop hook of c's agent reports, unless the run already has one: later turns answer
+// what is typed into the session. The answer is taken from the hook because Claude Code fires it before it writes
+// the answer to the transcript. It stays in memory, since it holds message text.
+func (s *Server) keepAnswer(c Conversation, session, text string) {
+	if c.Integration == "" || session != c.Session {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := s.tails[c.ID]
-	if t == nil || t.path != c.Transcript {
-		return ""
+	if !s.answers[c.ID].launched.Equal(c.Launched) {
+		s.answers[c.ID] = runAnswer{c.Launched, text}
 	}
-	text, users := "", 0
-	for _, e := range t.Events {
-		if e.Kind == kindUser {
-			if users++; users > 1 {
-				break
-			}
-		}
-		if e.Kind == kindAssistant && users == 1 {
-			text = e.Text
-		}
-	}
-	return text
 }
 
 // foldRuns adds up the activity of every earlier run into one entry, so the conversation does not grow with each run.

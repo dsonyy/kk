@@ -197,10 +197,10 @@ func TestInbox(t *testing.T) {
 	json.Unmarshal(data, &args)
 	line := strings.Join(args, " ")
 	i := slices.Index(args, "--allowedTools")
-	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools  ") || i < 0 {
+	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch ") || i < 0 {
 		t.Fatalf("the Slack run must be read-only: %s", line)
 	}
-	for _, tool := range strings.Split(args[i+1], ",") {
+	for _, tool := range strings.Split(args[i+1], ",")[1:] {
 		name := strings.TrimPrefix(tool, slackRun.prefix)
 		if !strings.HasPrefix(name, "slack_search_") && !strings.HasPrefix(name, "slack_read_") {
 			t.Fatalf("the Slack run may use %s", tool)
@@ -270,8 +270,8 @@ func TestInbox(t *testing.T) {
 	writeFile(t, filepath.Join(e.fake, "slack-connector"), "none")
 	writeFile(t, filepath.Join(gh, "logged-out"), "")
 	v = e.refreshInbox("")
-	if s := sourceOf(v, "slack"); !strings.Contains(s.Setup, "Connect Slack") {
-		t.Fatalf("slack without the connector: %+v", s)
+	if s, c := sourceOf(v, "slack"), e.conv(integrationID("slack")); !strings.Contains(s.Setup, "Connect Slack") || c.Attention != "" {
+		t.Fatalf("slack without the connector: %+v %q", s, c.Attention)
 	}
 	if s := sourceOf(v, "github"); !strings.Contains(s.Setup, "gh auth login") {
 		t.Fatalf("gh logged out: %+v", s)
@@ -323,10 +323,10 @@ func TestInboxGmail(t *testing.T) {
 	json.Unmarshal(data, &args)
 	line := strings.Join(args, " ")
 	allowed, denied := slices.Index(args, "--allowedTools"), slices.Index(args, "--disallowedTools")
-	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools  ") || allowed < 0 || denied < 0 {
+	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch ") || allowed < 0 || denied < 0 {
 		t.Fatalf("the Gmail run must be read-only: %s", line)
 	}
-	read := []string{"mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Gmail__list_labels"}
+	read := []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Gmail__list_labels"}
 	if !slices.Equal(strings.Split(args[allowed+1], ","), read) {
 		t.Fatalf("the Gmail run may use only the read tools: %s", args[allowed+1])
 	}
@@ -344,8 +344,8 @@ func TestInboxGmail(t *testing.T) {
 	os.Remove(filepath.Join(e.fake, "gmail-error"))
 	writeFile(t, filepath.Join(e.fake, "gmail-connector"), "none")
 	v = e.refreshInbox("gmail")
-	if s := sourceOf(v, "gmail"); !strings.Contains(s.Setup, "Connect Gmail") || s.Error != "" || len(v.Items) != 0 {
-		t.Fatalf("gmail without the connector: %+v %d", s, len(v.Items))
+	if s, c := sourceOf(v, "gmail"), e.conv(integrationID("gmail")); !strings.Contains(s.Setup, "Connect Gmail") || s.Error != "" || len(v.Items) != 0 || c.Attention != "" {
+		t.Fatalf("gmail without the connector: %+v %d %q", s, len(v.Items), c.Attention)
 	}
 }
 
