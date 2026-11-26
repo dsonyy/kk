@@ -46,7 +46,7 @@ type Server struct {
 	raises  map[string]int
 	watches map[string]*watch
 	notices map[string]notice
-	// handovers holds the conversations the user started and handed to the conductor, until the conductor hears of them.
+	// handovers holds the conversations the user started and handed to the konduktor, until the konduktor hears of them.
 	handovers map[string]bool
 }
 
@@ -313,8 +313,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Worktree bool `json:"worktree"`
 		// Group puts the conversation in a feature group. Without it kk decides from the prompt.
 		Group string `json:"group"`
-		// Conductor hands a conversation the user starts to the conductor, as if the conductor had started it.
-		Conductor bool `json:"conductor"`
+		// Konduktor hands a conversation the user starts to the konduktor, as if the konduktor had started it.
+		Konduktor bool `json:"conductor"`
 		// After queues the conversation behind another one. It waits with its prompt until kk start.
 		After string `json:"after"`
 	}
@@ -336,7 +336,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "a group name is 1 to %d characters and not %q", groupMaxLen, ungrouped)
 	}
 	now := time.Now()
-	byAgent := !byUser(r) || in.Conductor
+	byAgent := !byUser(r) || in.Konduktor
 	if in.Session != "" {
 		if in.After != "" {
 			return nil, fail(400, "an earlier session resumes now and cannot wait for another")
@@ -361,7 +361,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
-			if byUser(r) && in.Conductor {
+			if byUser(r) && in.Konduktor {
 				s.handOver(c.ID)
 			}
 			s.queueGroup(c.ID)
@@ -391,7 +391,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}
-	if byUser(r) && in.Conductor {
+	if byUser(r) && in.Konduktor {
 		s.handOver(c.ID)
 	}
 	s.queueGroup(c.ID)
@@ -556,7 +556,7 @@ func (s *Server) driven(id string, r *http.Request) {
 	}
 }
 
-// handleEscalate hands a waiting agent from the conductor to the user, with the reason the user sees.
+// handleEscalate hands a waiting agent from the konduktor to the user, with the reason the user sees.
 func (s *Server) handleEscalate(r *http.Request) (any, error) {
 	c, err := s.conv(r)
 	if err != nil {
@@ -573,7 +573,7 @@ func (s *Server) handleEscalate(r *http.Request) (any, error) {
 		return nil, fail(400, "reason is empty")
 	}
 	if c.Role != "" {
-		return nil, fail(400, "the conductor waits for the user already")
+		return nil, fail(400, "the konduktor waits for the user already")
 	}
 	if !c.Waiting() {
 		return nil, fail(409, "the agent is %s, escalate it once it stops", c.Status)
@@ -642,7 +642,7 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		return nil, err
 	}
 	if c.Role != "" {
-		return nil, fail(400, "the conductor cannot be closed")
+		return nil, fail(400, "the konduktor cannot be closed")
 	}
 	if c.Integration != "" {
 		return nil, fail(400, "switch %s off in Settings to stop its checks", c.Integration)
@@ -1042,10 +1042,10 @@ func (s *Server) maybeCompact(c Conversation, now time.Time) {
 		return
 	}
 	if err := pasteText(c.Window, "/compact"); err != nil {
-		log.Printf("compact conductor: %v", err)
+		log.Printf("compact konduktor: %v", err)
 		return
 	}
-	log.Printf("conductor compacted at %d tokens", c.Context)
+	log.Printf("konduktor compacted at %d tokens", c.Context)
 	s.store.update(c.ID, func(c *Conversation) bool {
 		c.Compacted = true
 		return true

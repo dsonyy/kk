@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// closedReason is the notice the conductor gets when a conversation with queued successors is closed.
+// closedReason is the notice the konduktor gets when a conversation with queued successors is closed.
 const closedReason = "was closed"
 
 // queued maps each conversation to the queued conversations that follow it, oldest first.
@@ -34,7 +34,7 @@ func (s *Server) queue(c Conversation, after string, worktree bool) (Conversatio
 	case !ok:
 		return c, fail(400, "no conversation %s to follow", after)
 	case pred.Role != "":
-		return c, fail(400, "a session cannot follow the conductor")
+		return c, fail(400, "a session cannot follow the konduktor")
 	case pred.Integration != "":
 		return c, fail(400, "a session cannot follow the %s session", pred.Integration)
 	case pred.Closed:
@@ -155,7 +155,7 @@ func (s *Server) handleStart(r *http.Request) (any, error) {
 	return s.view(c, false), nil
 }
 
-// chainNote names the queued successors of a conversation for the conductor.
+// chainNote names the queued successors of a conversation for the konduktor.
 func chainNote(next []Conversation) string {
 	names := make([]string, len(next))
 	for i, c := range next {
@@ -164,7 +164,7 @@ func chainNote(next []Conversation) string {
 	return "queued after it: " + strings.Join(names, ", ")
 }
 
-// closeNotice tells the conductor that a conversation with queued successors was closed. The tick no longer
+// closeNotice tells the konduktor that a conversation with queued successors was closed. The tick no longer
 // looks at a closed conversation, so the notice is queued here.
 func (s *Server) closeNotice(id string) {
 	if !s.cfg().coordinator() || len(s.successors(id)) == 0 {

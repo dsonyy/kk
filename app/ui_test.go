@@ -192,7 +192,20 @@ func TestSettingsViewIsCentered(t *testing.T) {
 	}
 }
 
-func TestConductorToggle(t *testing.T) {
+func TestSavedFilterSurvivesRebrand(t *testing.T) {
+	e := newEnv(t, "KK_COORDINATOR=1")
+	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
+	mine := e.mustKK("new", "claude", "-C", e.work, "mine")
+	e.waitFor("the user's turn", mine, func(c convView) bool { return c.WaitingFor == waitingUser })
+	theirs := e.asKonduktor("new", "claude", "-C", e.work, "theirs")
+	e.waitFor("konduktor's turn", theirs, func(c convView) bool { return c.WaitingFor == waitingKonduktor })
+	p := e.openPage(1600, 900)
+	p.eval(`localStorage.setItem("kk.filter", JSON.stringify({ states: ["Conductor's turn"] }))`, nil)
+	p.call("Page.reload", nil)
+	p.until(fmt.Sprintf(`document.querySelector('.tile[data-chain=%q]') && !document.querySelector('.tile[data-chain=%q]')`, theirs, mine))
+}
+
+func TestKonduktorToggle(t *testing.T) {
 	e := newEnv(t)
 	p := e.openPage(1600, 900)
 	type toggle struct {
@@ -202,7 +215,7 @@ func TestConductorToggle(t *testing.T) {
 	read := func() (got toggle) {
 		t.Helper()
 		p.eval(`(() => {
-			const b = document.querySelector("nav.tabs .conductor-toggle")
+			const b = document.querySelector("nav.tabs .konduktor-toggle")
 			return {
 				text: b.textContent,
 				pressed: b.getAttribute("aria-pressed"),
@@ -215,23 +228,23 @@ func TestConductorToggle(t *testing.T) {
 	}
 	press := func() {
 		t.Helper()
-		p.click(`document.querySelector("nav.tabs .conductor-toggle")`)
+		p.click(`document.querySelector("nav.tabs .konduktor-toggle")`)
 	}
 	on := read()
-	if on.Text != "Conductor" || on.Pressed != "true" || !on.Panel {
+	if on.Text != "konduktor" || on.Pressed != "true" || !on.Panel {
 		t.Fatalf("at the start: %+v", on)
 	}
 	press()
 	p.until(`!document.querySelector(".side-panel").getClientRects().length`)
 	off := read()
-	if off.Text != "Conductor" || off.Pressed != "false" {
+	if off.Text != "konduktor" || off.Pressed != "false" {
 		t.Fatalf("switched off: %+v", off)
 	}
 	if off.Background == on.Background || off.Mark == on.Mark {
 		t.Fatalf("the two states look the same: on %+v, off %+v", on, off)
 	}
 	p.call("Page.reload", nil)
-	p.until(`document.querySelector("nav.tabs .conductor-toggle") && performance.getEntriesByType("navigation")[0].type === "reload"`)
+	p.until(`document.querySelector("nav.tabs .konduktor-toggle") && performance.getEntriesByType("navigation")[0].type === "reload"`)
 	if got := read(); got != off {
 		t.Fatalf("after a reload: %+v, want %+v", got, off)
 	}
@@ -509,10 +522,10 @@ func TestNoAccentStripes(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: A skill\n---\n"), 0o644)
 	}
 	idle := func(c convView) bool { return c.Status == statusIdle }
-	e.waitFor("conductor start", coordinatorID, idle)
-	escalated := e.asConductor("new", "claude", "-C", e.work, "escalated work")
+	e.waitFor("konduktor start", coordinatorID, idle)
+	escalated := e.asKonduktor("new", "claude", "-C", e.work, "escalated work")
 	e.waitFor("a stop to escalate", escalated, idle)
-	e.asConductor("escalate", escalated, "Pick a database")
+	e.asKonduktor("escalate", escalated, "Pick a database")
 	quoting := e.mustKK("new", "claude", "-C", e.work, "> a quoted line\n\nmy reply")
 	e.waitFor("answer to the quote", quoting, idle)
 
@@ -636,7 +649,7 @@ func TestMessageImages(t *testing.T) {
 
 	type viewer struct {
 		Open, OnClose, Inside bool
-		Src, Focus, Conductor string
+		Src, Focus, Konduktor string
 		Width, Height         float64
 	}
 	read := func() (got viewer) {
@@ -646,14 +659,14 @@ func TestMessageImages(t *testing.T) {
 			const img = d?.querySelector("img"), box = img?.getBoundingClientRect()
 			return { open: !!d?.open, onClose: a?.getAttribute("aria-label") === "Close" && !!d?.contains(a), inside: a === document.body || !!d?.contains(a),
 				src: img?.getAttribute("src") ?? "", focus: a?.querySelector?.("img")?.alt ?? "", width: box?.width ?? 0, height: box?.height ?? 0,
-				conductor: document.querySelector(".conductor-toggle").getAttribute("aria-pressed") }
+				konduktor: document.querySelector(".konduktor-toggle").getAttribute("aria-pressed") }
 		})()`, &got)
 		return got
 	}
 	closed := func(how, focus string) {
 		t.Helper()
 		p.until(`!document.querySelector("dialog.viewer")`)
-		if got := read(); got.Focus != focus || got.Conductor != "true" {
+		if got := read(); got.Focus != focus || got.Konduktor != "true" {
 			t.Errorf("closed with %s: %+v, want the focus on %q", how, got, focus)
 		}
 	}

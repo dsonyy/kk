@@ -25,7 +25,7 @@ export type Conversation = {
   project: string;
   // The agent works in a git worktree, apart from the main checkout.
   in_worktree: boolean;
-  // The feature the agent works on. Empty until kk or the coordinator has decided.
+  // The feature the agent works on. Empty until kk or konduktor has decided.
   group?: string;
   title: string;
   created: string;
@@ -39,7 +39,7 @@ export type Conversation = {
   attention?: string;
   // Who has to act on an agent that stopped; empty while it works.
   waiting_for: "" | "user" | "conductor";
-  // Why the conductor handed the agent to the user.
+  // Why konduktor handed the agent to the user.
   escalation?: string;
   closed?: boolean;
   closed_at?: string;

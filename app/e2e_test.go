@@ -167,14 +167,14 @@ func (e *env) mustKK(args ...string) string {
 	return strings.TrimSpace(out)
 }
 
-// asConductor runs the kk CLI the way the conductor does, from its own window.
-func (e *env) asConductor(args ...string) string {
+// asKonduktor runs the kk CLI the way the konduktor does, from its own window.
+func (e *env) asKonduktor(args ...string) string {
 	e.t.Helper()
 	cmd := exec.Command(kkBin, args...)
 	cmd.Env = append(e.environ(), "KK_CONVERSATION="+coordinatorID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		e.t.Fatalf("kk %v as the conductor: %v\n%s", args, err, out)
+		e.t.Fatalf("kk %v as the konduktor: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
 }
@@ -534,7 +534,7 @@ func TestSettings(t *testing.T) {
 	put := func(body string) string {
 		return curl("-X", "PUT", "-d", body, "http://kk/api/settings")
 	}
-	if out := put(`{"coordinator_model":"gpt"}`); !strings.Contains(out, "unknown conductor model") {
+	if out := put(`{"coordinator_model":"gpt"}`); !strings.Contains(out, "unknown konduktor model") {
 		t.Fatalf("bad model accepted: %s", out)
 	}
 	body, _ := json.Marshal(map[string]any{"default_dir": e.work, "skill_dirs": []string{extra}, "start_timeout_seconds": 7})
@@ -638,6 +638,19 @@ func TestCoordinatorCompacts(t *testing.T) {
 	e.waitFor("coordinator after restart", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
 	if n := strings.Count(e.mustKK("screen", coordinatorID), "fake claude started"); n != 1 {
 		t.Fatalf("coordinator restarted with the server: %d starts", n)
+	}
+}
+
+func TestKonduktorTitleMigrates(t *testing.T) {
+	e := newEnv(t, "KK_COORDINATOR=1")
+	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle && c.Title == "konduktor" })
+	e.stop()
+	path := filepath.Join(e.home, "conversations", coordinatorID+".yaml")
+	data, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(data), "title: konduktor", "title: Conductor", 1)), 0o600)
+	e.start()
+	if show := e.mustKK("show", coordinatorID); !strings.HasPrefix(show, "konduktor · claude") {
+		t.Fatalf("show: %s", show)
 	}
 }
 
@@ -1185,23 +1198,26 @@ func TestQueuedMessages(t *testing.T) {
 
 func TestWhoseTurn(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1")
-	e.waitFor("conductor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
 	if c := e.conv(coordinatorID); c.WaitingFor != waitingUser {
-		t.Fatalf("the conductor waits for %q", c.WaitingFor)
+		t.Fatalf("the konduktor waits for %q", c.WaitingFor)
 	}
 	if out, err := e.kk("escalate", coordinatorID, "why"); err == nil {
-		t.Fatalf("the conductor escalated: %s", out)
+		t.Fatalf("the konduktor escalated: %s", out)
 	}
 
-	id := e.asConductor("new", "claude", "-C", e.work, "hello")
-	c := e.waitFor("a stop that waits for the conductor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
-	if ls := e.mustKK("ls"); !strings.Contains(ls, "idle             conductor") {
+	id := e.asKonduktor("new", "claude", "-C", e.work, "hello")
+	c := e.waitFor("a stop that waits for the konduktor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
+	if ls := e.mustKK("ls"); !strings.Contains(ls, "idle             konduktor") {
 		t.Fatalf("ls: %s", ls)
+	}
+	if show := e.mustKK("show", id); !strings.Contains(show, "Waiting for the konduktor") {
+		t.Fatalf("show: %s", show)
 	}
 	if out, err := e.kk("escalate", id, " "); err == nil {
 		t.Fatalf("escalated without a reason: %s", out)
 	}
-	e.asConductor("escalate", id, "Pick a database:", "Postgres or SQLite?\nmore")
+	e.asKonduktor("escalate", id, "Pick a database:", "Postgres or SQLite?\nmore")
 	c = e.conv(id)
 	if c.WaitingFor != waitingUser || c.Escalation != "Pick a database: Postgres or SQLite?" {
 		t.Fatalf("after escalate: %q %q", c.WaitingFor, c.Escalation)
@@ -1215,13 +1231,13 @@ func TestWhoseTurn(t *testing.T) {
 		t.Fatalf("escalation lost in a restart: %q %q", c.WaitingFor, c.Escalation)
 	}
 
-	e.asConductor("send", id, "slow work")
+	e.asKonduktor("send", id, "slow work")
 	e.waitFor("work that clears the escalation", id, func(c convView) bool { return c.Status == statusWorking && c.WaitingFor == "" && c.Escalation == "" })
 	if out, err := e.kk("escalate", id, "too early"); err == nil {
 		t.Fatalf("escalated a working agent: %s", out)
 	}
-	e.asConductor("interrupt", id)
-	e.waitFor("back to the conductor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
+	e.asKonduktor("interrupt", id)
+	e.waitFor("back to the konduktor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
 
 	e.mustKK("send", id, "from the user")
 	e.waitFor("a stop that waits for the user who wrote", id, func(c convView) bool {
@@ -1229,9 +1245,9 @@ func TestWhoseTurn(t *testing.T) {
 	})
 
 	// A permission prompt waits on a working agent; an escalation there lasts until the agent goes on.
-	e.asConductor("send", id, "ask for permission")
-	e.waitFor("attention for the conductor", id, func(c convView) bool { return c.Attention != "" && c.WaitingFor == waitingConductor })
-	e.asConductor("escalate", id, "Allow Bash?")
+	e.asKonduktor("send", id, "ask for permission")
+	e.waitFor("attention for the konduktor", id, func(c convView) bool { return c.Attention != "" && c.WaitingFor == waitingKonduktor })
+	e.asKonduktor("escalate", id, "Allow Bash?")
 	time.Sleep(1500 * time.Millisecond)
 	if c = e.conv(id); c.Escalation != "Allow Bash?" || c.WaitingFor != waitingUser {
 		t.Fatalf("escalation on attention: %q %q", c.WaitingFor, c.Escalation)
@@ -1243,23 +1259,23 @@ func TestWhoseTurn(t *testing.T) {
 
 	codex := e.mustKK("new", "codex", "-C", e.work, "hi codex")
 	e.waitFor("a codex stop for the user who started it", codex, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
-	e.asConductor("send", codex, "again")
-	e.waitFor("a codex stop for the conductor", codex, func(c convView) bool {
-		return hasEvent(c, kindAssistant, "echo: again") && c.Status == statusIdle && c.WaitingFor == waitingConductor
+	e.asKonduktor("send", codex, "again")
+	e.waitFor("a codex stop for the konduktor", codex, func(c convView) bool {
+		return hasEvent(c, kindAssistant, "echo: again") && c.Status == statusIdle && c.WaitingFor == waitingKonduktor
 	})
-	e.asConductor("escalate", codex, "Review the plan")
-	e.asConductor("send", codex, "exit")
+	e.asKonduktor("escalate", codex, "Review the plan")
+	e.asKonduktor("send", codex, "exit")
 	c = e.waitFor("exit", codex, func(c convView) bool { return c.Status == statusExited })
-	if c.WaitingFor != waitingConductor || c.Escalation != "" {
+	if c.WaitingFor != waitingKonduktor || c.Escalation != "" {
 		t.Fatalf("after exit: %q %q", c.WaitingFor, c.Escalation)
 	}
 	e.mustKK("resume", codex)
 	e.waitFor("a resume by the user that waits for the user", codex, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 }
 
-func TestNoConductorTurn(t *testing.T) {
+func TestNoKonduktorTurn(t *testing.T) {
 	e := newEnv(t)
-	id := e.asConductor("new", "claude", "-C", e.work, "hello")
+	id := e.asKonduktor("new", "claude", "-C", e.work, "hello")
 	e.waitFor("a stop for the user", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 	code, body := e.post("/api/conversations", map[string]any{"harness": "claude", "dir": e.work, "prompt": "hello", "conductor": true})
 	var handed convView

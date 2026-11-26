@@ -71,7 +71,7 @@ func (e *env) toolsRun() []string {
 
 func TestIntegrationSession(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1")
-	e.waitFor("conductor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
 	id := integrationID("gmail")
 	writeFile(t, filepath.Join(e.fake, "gmail.out"), gmailAnswer)
 	e.refreshInbox("gmail")
@@ -100,9 +100,9 @@ func TestIntegrationSession(t *testing.T) {
 		t.Fatalf("tools run: %v", got)
 	}
 
-	// Typing into the session neither widens its tools nor makes it the conductor's.
+	// Typing into the session neither widens its tools nor makes it the konduktor's.
 	for i, tool := range []string{"mcp__claude_ai_Gmail__send_message", "Bash", "mcp__claude_ai_Google_Drive__create_file", "mcp__claude_ai_Gmail__get_thread"} {
-		e.asConductor("send", id, "use "+tool)
+		e.asKonduktor("send", id, "use "+tool)
 		c = e.waitFor("the typed turn", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done" })
 	}
 	if got := e.toolsRun(); !slices.Equal(got, []string{"mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread"}) {
@@ -170,7 +170,7 @@ func TestIntegrationSession(t *testing.T) {
 	}
 
 	if c := e.conv(coordinatorID); slices.ContainsFunc(c.Events, func(ev Event) bool { return strings.Contains(ev.Text, id) }) {
-		t.Fatalf("the conductor heard of the session: %+v", c.Events)
+		t.Fatalf("the konduktor heard of the session: %+v", c.Events)
 	}
 
 	// Chains, schedules, closing and resuming from history keep off the session.

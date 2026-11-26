@@ -145,7 +145,7 @@ func (s *Server) handleSchedule(r *http.Request) (any, error) {
 		return nil, err
 	}
 	if c.Role != "" {
-		return nil, fail(400, "the conductor cannot be scheduled")
+		return nil, fail(400, "the konduktor cannot be scheduled")
 	}
 	if c.Integration != "" {
 		return nil, fail(400, "the %s session runs on the interval set in Settings", c.Integration)
