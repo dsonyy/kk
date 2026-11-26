@@ -218,22 +218,18 @@ func (b *browser) glenzShot() (image.Image, int) {
 	return img, lit
 }
 
-// litRows returns the first and last rows of a canvas shot that hold drawn pixels, in CSS pixels from the canvas top.
-func litRows(img image.Image, height float64) (top, bottom float64) {
-	bg, scale := img.At(0, 0), float64(img.Bounds().Dy())/height
-	first, last := -1, -1
-	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
-		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+// litBox returns the box of a canvas shot's drawn pixels, in CSS pixels from the canvas top left.
+func litBox(img image.Image, height float64) (left, top, right, bottom float64) {
+	b, bg, scale := img.Bounds(), img.At(0, 0), float64(img.Bounds().Dy())/height
+	x0, y0, x1, y1 := b.Max.X, b.Max.Y, -1, -1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
 			if img.At(x, y) != bg {
-				if first < 0 {
-					first = y
-				}
-				last = y
-				break
+				x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x), max(y1, y)
 			}
 		}
 	}
-	return float64(first-img.Bounds().Min.Y) / scale, float64(last-img.Bounds().Min.Y+1) / scale
+	return float64(x0-b.Min.X) / scale, float64(y0-b.Min.Y) / scale, float64(x1-b.Min.X+1) / scale, float64(y1-b.Min.Y+1) / scale
 }
 
 // tones returns the shares of a canvas shot's drawn pixels that are clearly light and near black.
@@ -280,12 +276,11 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	var webgl bool
 	b.eval(`!!document.querySelector("canvas.glenz").getContext("webgl2")`, &webgl)
 
-	var size struct{ Width, Height, CanvasWidth, CanvasHeight, SidebarWidth, SidebarHeight, Groups, Below, Floor, Chart float64 }
+	var size struct{ Width, Height, CanvasWidth, CanvasHeight, SidebarWidth, SidebarHeight, Groups, Below, Floor float64 }
 	measure := `(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect(); const s = document.querySelector("aside.sidebar");
 		const below = document.querySelector(".load").getBoundingClientRect().top;
 		return { width: r.width, height: r.height, canvasWidth: c.width, canvasHeight: c.height, sidebarWidth: s.clientWidth, sidebarHeight: s.clientHeight,
-			groups: document.querySelector(".groups").getBoundingClientRect().bottom, below, floor: below - r.top,
-			chart: document.querySelector(".load svg").getBoundingClientRect().top - r.top }; })()`
+			groups: document.querySelector(".groups").getBoundingClientRect().bottom, below, floor: below - r.top }; })()`
 	b.eval(measure, &size)
 	near := func(a, b float64) bool { return math.Abs(a-b) <= 1 }
 	if !near(size.Width, size.SidebarWidth) || !near(size.Height, size.SidebarHeight) || !near(size.CanvasWidth, 2*size.Width) || !near(size.CanvasHeight, 2*size.Height) {
@@ -303,16 +298,20 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if now, _ := b.glenzShot(); lit < 500 || same(first, now) {
 		t.Fatalf("the solid is not drawn or does not move: %d pixels drawn", lit)
 	}
-	// Over one 13.6 s bounce the solid stays in a low band just above the system load chart: the floor plus 72 px of
-	// travel and the solid's own height.
-	high, low := size.Height, 0.0
+	// Over one 13.6 s bounce the solid stays in a low band just above the system load: the floor plus 72 px of travel and
+	// the solid's own height. Nothing is drawn below the floor, as the solid casts no shadow, and the solid keeps clear of
+	// the sidebar's sides.
+	left, high, right, low := size.Width, size.Height, 0.0, 0.0
 	for end := time.Now().Add(14400 * time.Millisecond); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
 		img, _ := b.glenzShot()
-		top, bottom := litRows(img, size.Height)
-		high, low = math.Min(high, top), math.Max(low, bottom)
+		l, top, r, bottom := litBox(img, size.Height)
+		left, high, right, low = math.Min(left, l), math.Min(high, top), math.Max(right, r), math.Max(low, bottom)
 	}
-	if low >= size.Chart || high < size.Floor-170 {
-		t.Fatalf("the solid reaches from %.0f to %.0f px, want within 170 px above the floor at %.0f and above the chart at %.0f", high, low, size.Floor, size.Chart)
+	if low > size.Floor || high < size.Floor-240 || low-high < 140 {
+		t.Fatalf("the solid reaches from %.0f to %.0f px, want 140 px tall or more and within 240 px above the floor at %.0f", high, low, size.Floor)
+	}
+	if left < 2 || right > size.Width-2 {
+		t.Fatalf("the solid reaches from %.0f to %.0f px across, want inside the %.0f px sidebar", left, right, size.Width)
 	}
 	if n := b.counter("maps") - maps; n != 0 {
 		t.Fatalf("the page map was drawn %d times while nothing changed", n)
@@ -352,8 +351,8 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 		t.Fatalf("%.0f%% of the solid is clearly light and %.0f%% near black, want at least 25%% each", light*100, dark*100)
 	}
 	b.eval(measure, &size)
-	if top, bottom := litRows(still, size.Height); bottom >= size.Chart || top < size.Floor-170 {
-		t.Fatalf("the still frame spans %.0f to %.0f px, want above the chart at %.0f and near the floor at %.0f", top, bottom, size.Chart, size.Floor)
+	if _, top, _, bottom := litBox(still, size.Height); bottom > size.Floor || top < size.Floor-170 {
+		t.Fatalf("the still frame spans %.0f to %.0f px, want resting on the floor at %.0f", top, bottom, size.Floor)
 	}
 
 	b.open(e.url, 1400, 900, false)

@@ -23,15 +23,15 @@ const FPS = 30;
 const BOUNCE = 13.6;
 // The height of a bounce in pixels, the one the solid had in its own 110 px strip.
 const LIFT = 72;
-const SIZE = 18;
+const SIZE = 36;
 // The still frame rests on the floor at the far right, just above the system load chart.
 const STILL = 14 * BOUNCE - 0.01;
 const CAMERA = 7;
 const LIGHT = norm([-0.5, -0.8, -0.6]);
 
-type Style = { light: V; dark: V; edge: V; shadow: V };
+type Style = { light: V; dark: V; edge: V };
 type Tri = { p: number[][]; r: V[]; n: V; tone: number; front: boolean; depth: number };
-type Frame = { tris: Tri[]; cx: number; cy: number; shadow: { x: number; rx: number; alpha: number } };
+type Frame = { tris: Tri[]; cx: number; cy: number };
 
 function norm(v: V): V {
   const l = Math.hypot(...v);
@@ -50,7 +50,7 @@ function readStyle(canvas: HTMLCanvasElement): Style {
     const hex = probe.fillStyle;
     return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as V;
   };
-  return { light: rgb("--glenz-light"), dark: rgb("--glenz-dark"), edge: rgb("--glenz-edge"), shadow: rgb("--glenz-shadow") };
+  return { light: rgb("--glenz-light"), dark: rgb("--glenz-dark"), edge: rgb("--glenz-edge") };
 }
 
 function frame(t: number, w: number, floor: number): Frame {
@@ -83,8 +83,7 @@ function frame(t: number, w: number, floor: number): Frame {
   const bottom = Math.max(...tris.flatMap((tr) => tr.p.map((p) => p[1])));
   const margin = SIZE * 2.2;
   const cx = w / 2 + (w / 2 - margin) * (0.75 * Math.sin(t * 0.085) + 0.25 * Math.sin(t * 0.205 + 1));
-  const near = 1 - lift / (3 * LIFT);
-  return { tris, cx, cy: floor - 1 - bottom - lift, shadow: { x: cx, rx: SIZE * 1.7 * sx * (0.6 + 0.4 * near), alpha: 0.25 + 0.55 * near } };
+  return { tris, cx, cy: floor - 1 - bottom - lift };
 }
 
 // The floor is the top of the system load, the element after the canvas.
@@ -114,19 +113,7 @@ function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
   const { w, h, dpr, floor } = size(canvas);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const { tris, cx, cy, shadow } = frame(t, w, floor);
-
-  const gradient = ctx.createRadialGradient(shadow.x, floor, 0, shadow.x, floor, shadow.rx);
-  gradient.addColorStop(0, `rgb(${style.shadow.join(" ")})`);
-  gradient.addColorStop(1, "transparent");
-  ctx.save();
-  ctx.translate(0, floor);
-  ctx.scale(1, 0.16);
-  ctx.translate(0, -floor);
-  ctx.fillStyle = gradient;
-  ctx.globalAlpha = shadow.alpha;
-  ctx.fillRect(shadow.x - shadow.rx, floor - shadow.rx, shadow.rx * 2, shadow.rx);
-  ctx.restore();
+  const { tris, cx, cy } = frame(t, w, floor);
 
   ctx.lineJoin = "round";
   ctx.lineWidth = 0.75;
@@ -215,23 +202,18 @@ void main() {
   vKind = kind;
 }`;
 
-// kind.x is the tone, 2 for the shadow; kind.y is 1 on faces turned to the viewer. The colour is premultiplied.
+// kind.x is the tone; kind.y is 1 on faces turned to the viewer. The colour is premultiplied.
 const FRAGMENT = `#version 300 es
 precision highp float;
 in vec3 vRot;
 flat in vec3 vNormal;
 in vec3 vBary;
 flat in vec2 vKind;
-uniform vec3 light, dark, edge, shadow, lightDir;
+uniform vec3 light, dark, edge, lightDir;
 uniform sampler2D page;
 uniform vec2 anchor, reach, spread;
 out vec4 color;
 void main() {
-  if (vKind.x > 1.5) {
-    float a = (1.0 - smoothstep(0.0, 1.0, length(vBary.xy))) * vBary.z;
-    color = vec4(shadow * a, a);
-    return;
-  }
   bool front = vKind.y > 0.5;
   float lit = max(0.0, -dot(vNormal, lightDir));
   vec3 c = mix(dark, light, vKind.x < 0.5 ? 0.76 + 0.24 * lit : 0.03 + 0.12 * lit);
@@ -293,12 +275,12 @@ function webgl(canvas: HTMLCanvasElement) {
   gl.uniform3f(uniform("lightDir"), ...LIGHT);
   gl.uniform2f(uniform("reach"), 1.4, 1.1);
   gl.uniform2f(uniform("spread"), 0.1, 0.13);
-  const data = new Float32Array((FACES.length * 3 + 6) * STRIDE);
+  const data = new Float32Array(FACES.length * 3 * STRIDE);
   const bary: V[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 
   return {
     style(style: Style) {
-      for (const key of ["light", "dark", "edge", "shadow"] as const) gl.uniform3f(uniform(key), ...(style[key].map((c) => c / 255) as V));
+      for (const key of ["light", "dark", "edge"] as const) gl.uniform3f(uniform(key), ...(style[key].map((c) => c / 255) as V));
     },
     map(map: HTMLCanvasElement) {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, map);
@@ -306,15 +288,12 @@ function webgl(canvas: HTMLCanvasElement) {
     },
     draw(t: number, box: DOMRect) {
       const { w, h, dpr, floor } = size(canvas);
-      const { tris, cx, cy, shadow } = frame(t, w, floor);
+      const { tris, cx, cy } = frame(t, w, floor);
       let i = 0;
       const put = (...v: number[]) => {
         data.set(v, i);
         i += STRIDE;
       };
-      const ry = shadow.rx * 0.16;
-      for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]])
-        put(shadow.x + x * shadow.rx, floor + y * ry, 0, 0, 0, 0, 0, 0, x, y, shadow.alpha, 2, 0);
       for (const { p, r, n, tone, front } of tris)
         for (let k = 0; k < 3; k++) put(cx + p[k][0], cy + p[k][1], ...r[k], ...n, ...bary[k], tone, front ? 1 : 0);
       gl.viewport(0, 0, w * dpr, h * dpr);
