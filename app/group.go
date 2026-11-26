@@ -80,7 +80,7 @@ func askGroup(dir, text string, existing []string) string {
 	out, err := cmd.Output()
 	name := cleanGroup(string(out))
 	if err != nil || name == "" {
-		log.Printf("no group for %q: %v, answer %q", clip(text, 60), err, clip(string(out), 200))
+		log.Printf("grouping found no group: %v", err)
 		return ""
 	}
 	return name
@@ -128,6 +128,7 @@ func (s *Server) groupLoop() {
 		if !ok || c.Role != "" || c.Group != "" {
 			continue
 		}
+		log.Printf("grouping %s", id)
 		name := s.groupName(c.Project(), askGroup(s.store.dir, task(c), s.groupNames(c.Project())))
 		if name == "" {
 			continue

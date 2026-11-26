@@ -39,12 +39,27 @@ var (
 	turnMu sync.Mutex
 	// tasks are the background tasks of claude that are still running.
 	tasks []string
+	// model is the model the harness reports, from --model or -m.
+	model string
+	// total is the running token count of a codex thread, which codex carries over a resume and a revert.
+	total counts
 )
+
+type counts struct {
+	Input  int `json:"input_tokens"`
+	Cached int `json:"cached_input_tokens"`
+	Output int `json:"output_tokens"`
+	Total  int `json:"total_tokens"`
+}
+
+// claudeModels are the model ids Claude Code 2.1 writes for its aliases.
+var claudeModels = map[string]string{"": "claude-opus-5-5", "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-2"}
 
 type turn struct {
 	prompt string
 	parent string
 	offset int64
+	total  counts
 }
 
 func main() {
@@ -120,9 +135,10 @@ func openSession(fresh bool, source string) {
 	}
 	transcript = filepath.Join(dir, session+".jsonl")
 	os.MkdirAll(dir, 0o755)
-	rollout, turns, last = session, nil, ""
+	rollout, turns, last, total = session, nil, "", counts{}
 	if !fresh {
 		last = "before-" + uuid()
+		total = lastTotal()
 	}
 	if mode == "codex" && fresh {
 		write(map[string]any{"type": "session_meta", "payload": map[string]any{"session_id": session}})
@@ -341,7 +357,9 @@ func parseArgs(args []string) (prompt string, resume bool) {
 			session = next()
 		case a == "--resume" || (mode == "codex" && a == "resume"):
 			session, resume = next(), true
-		case a == "--model" || a == "-m" || a == "--append-system-prompt-file" || a == "--name":
+		case a == "--model" || a == "-m":
+			model = next()
+		case a == "--append-system-prompt-file" || a == "--name":
 			next()
 		}
 	}
@@ -523,7 +541,7 @@ func backtrack() {
 			rollout = uuid()
 			transcript = filepath.Join(filepath.Dir(transcript), "rollout-"+time.Now().Format("2006-01-02T15-04-05")+"-"+session+"_"+rollout+".jsonl")
 			write(map[string]any{"type": "session_meta", "payload": map[string]any{"id": session, "history_mode": "paginated", "history_base": base}})
-			turns, prefill, reverted = nil, t.prompt, true
+			turns, prefill, reverted, total = nil, t.prompt, true, t.total
 			fmt.Print("\x1b[2J\x1b[H")
 			fmt.Printf("• Conversation reverted to this point. File changes are unchanged.\n\n› %s\n", t.prompt)
 			return
@@ -569,7 +587,7 @@ func handle(prompt string) {
 		if prompt == "exit" {
 			os.Exit(0)
 		}
-		turns = append(turns, turn{prompt, "", size()})
+		turns = append(turns, turn{prompt, "", size(), total})
 		cursorLine(map[string]any{"role": "user", "message": map[string]any{"content": []any{map[string]any{"type": "text", "text": "<timestamp>Monday</timestamp>\n<user_query>\n" + prompt + "\n</user_query>"}}}})
 		hook("PreToolUse", map[string]any{"tool_name": "Shell"})
 		if strings.Contains(prompt, "slow") {
@@ -617,7 +635,7 @@ func handle(prompt string) {
 		hook("Stop", nil)
 		return
 	}
-	turns = append(turns, turn{prompt, last, size()})
+	turns = append(turns, turn{prompt, last, size(), total})
 	if mode == "codex" {
 		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "task_started"}})
 	}
@@ -674,6 +692,9 @@ func handle(prompt string) {
 	}
 	toolCall("ls", "a.txt\nb.txt\n")
 	hook("PostToolUse", map[string]any{"tool_name": "Bash"})
+	if strings.Contains(prompt, "subagent") {
+		subagent()
+	}
 	answer("echo: "+prompt, tokens)
 	if mode == "claude" {
 		words := strings.Fields(prompt)
@@ -768,13 +789,79 @@ func toolCall(cmd, output string) {
 	write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": output}}}})
 }
 
+// answer writes the agent's answer with the usage of its request: tokens of input, of which all but 10 come from the
+// cache, and 50 of output.
 func answer(text string, tokens int) {
 	if mode == "codex" {
+		write(map[string]any{"type": "turn_context", "payload": map[string]any{"model": model}})
 		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "AgentMessage", "content": []any{map[string]any{"type": "Text", "text": text}}}}})
-		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "token_count", "info": map[string]any{"last_token_usage": map[string]any{"input_tokens": tokens}}}})
+		last := counts{tokens, tokens - 10, 50, tokens + 50}
+		total = counts{total.Input + last.Input, total.Cached + last.Cached, total.Output + last.Output, total.Total + last.Total}
+		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "token_count", "info": map[string]any{"total_token_usage": total, "last_token_usage": last}}})
 		return
 	}
-	write(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}, "usage": map[string]any{"input_tokens": 10, "cache_read_input_tokens": tokens - 10}}})
+	// Claude Code writes a line per content block, each with the usage of the whole message.
+	id := "msg_" + uuid()[:8]
+	name := model
+	if m, ok := claudeModels[model]; ok {
+		name = m
+	}
+	usage := map[string]any{"input_tokens": 10, "cache_read_input_tokens": tokens - 10, "cache_creation_input_tokens": 0, "output_tokens": 50, "cache_creation": map[string]any{"ephemeral_1h_input_tokens": 0}}
+	for _, block := range []map[string]any{{"type": "thinking", "thinking": "", "signature": "x"}, {"type": "text", "text": text}} {
+		write(map[string]any{"type": "assistant", "message": map[string]any{"id": id, "model": name, "role": "assistant", "content": []any{block}, "usage": usage}})
+	}
+}
+
+// subagent writes the transcript of a subagent that used 1000 tokens of input and 100 of output, where the harness keeps it.
+func subagent() {
+	if mode == "codex" {
+		child := uuid()
+		path := filepath.Join(filepath.Dir(transcript), "rollout-"+time.Now().Format("2006-01-02T15-04-05")+"-"+child+".jsonl")
+		spawn := map[string]any{"thread_spawn": map[string]any{"parent_thread_id": session, "depth": 1}}
+		usage := counts{1000, 0, 100, 1100}
+		lines := []map[string]any{
+			{"type": "session_meta", "payload": map[string]any{"id": child, "source": map[string]any{"subagent": spawn}}},
+			{"type": "turn_context", "payload": map[string]any{"model": model}},
+			{"type": "event_msg", "payload": map[string]any{"type": "token_count", "info": map[string]any{"total_token_usage": usage, "last_token_usage": usage}}},
+		}
+		appendLines(path, lines)
+		return
+	}
+	dir := filepath.Join(strings.TrimSuffix(transcript, ".jsonl"), "subagents")
+	os.MkdirAll(dir, 0o755)
+	appendLines(filepath.Join(dir, "agent-a"+uuid()[:8]+".jsonl"), []map[string]any{{"type": "assistant", "isSidechain": true, "message": map[string]any{
+		"id": "msg_" + uuid()[:8], "model": "claude-haiku-5-5", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "found it"}},
+		"usage": map[string]any{"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 100},
+	}}})
+}
+
+func appendLines(path string, lines []map[string]any) {
+	f, _ := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	defer f.Close()
+	for _, l := range lines {
+		l["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
+		data, _ := json.Marshal(l)
+		f.Write(append(data, '\n'))
+	}
+}
+
+// lastTotal reads the running token count a resumed codex thread goes on from.
+func lastTotal() counts {
+	var t counts
+	data, _ := os.ReadFile(transcript)
+	for _, line := range strings.Split(string(data), "\n") {
+		var l struct {
+			Payload struct {
+				Info *struct {
+					Total *counts `json:"total_token_usage"`
+				} `json:"info"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &l) == nil && l.Payload.Info != nil && l.Payload.Info.Total != nil {
+			t = *l.Payload.Info.Total
+		}
+	}
+	return t
 }
 
 func uuid() string {

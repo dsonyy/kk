@@ -15,12 +15,14 @@ Design and plan: `~/brain/projects/kk/`.
 - Never edit `web/dist/` or `web/node_modules/`.
 - Never write to agent configuration (`~/.claude.json`, `~/.claude/settings.json`, `~/.codex/config.toml`). Hooks are passed per run with `--settings` and `-c`.
 - Never store kk state outside `~/.kk`. State files are YAML; the only JSON file is `~/.kk/hooks/claude.json`, because Claude Code requires it.
+- Never log message contents, prompts, titles, group names, mail or Slack texts, hook payloads, tokens or keys. Log events and metadata with `log.Printf`, one line each, only when something happens. The log is plain text in `~/.kk/kk.log`, which keeps its newer half past 1 MB.
 - Never copy agent messages into `~/.kk`. The agents' transcripts are the source.
 
 ## Layout
 
 - `app/` - Go server and CLI in one binary. No arguments: server. Arguments: client over `~/.kk/kk.sock`.
 - `app/harness.go` - how each agent is started and resumed. `app/transcript.go` - transcript parsers into one event model.
+- `app/usage.go` - token usage and cost per harness, with list price tables taken from the vendors' pricing pages. Cursor CLI reports no usage. Counts and cost per transcript file go into the conversation's YAML; the Stats tab reads them through `/api/activity`.
 - `app/rewind.go` - how each harness goes back to an earlier message. It drives the harness's own rewind in the terminal and checks the screen at each step.
 - `app/testdata/fakeagent` - fake `claude`, `codex` and `cursor-agent` for the end-to-end tests. Keep it in step with the real formats; `testdata/*.jsonl` are trimmed real transcripts.
 - `web/` - Vite, TypeScript and Preact, built into `web/dist` and embedded.

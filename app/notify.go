@@ -153,6 +153,7 @@ func (s *Server) flushNotices(now time.Time) {
 	}
 	slices.SortFunc(ids, func(a, b string) int { return s.notices[a].at.Compare(s.notices[b].at) })
 	lines := []string{notifyMarker}
+	var told []string
 	for _, id := range ids {
 		c, ok := s.store.get(id)
 		n := s.notices[id]
@@ -183,12 +184,14 @@ func (s *Server) flushNotices(now time.Time) {
 		}
 		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, strings.Join(parts, "; "))
 		lines = append(lines, line+". Look: kk screen "+id)
+		told = append(told, id)
 	}
 	clear(s.notices)
 	if len(lines) == 1 {
 		return
 	}
 	text := strings.Join(lines, "\n")
+	log.Printf("notify the conductor about %s", strings.Join(told, ", "))
 	go func() {
 		if err := pasteText(co.Window, text); err != nil {
 			log.Printf("notify the conductor: %v", err)

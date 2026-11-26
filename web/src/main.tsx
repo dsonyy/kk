@@ -3,7 +3,7 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
+import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
@@ -15,9 +15,14 @@ import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
+import { Logs, reportErrors } from "./logs";
+import { Stats } from "./stats";
 import "./app.css";
 
 const COORDINATOR = "coordinator";
+const tabs = ["Agents", "Sessions", "Inbox", "Stats", "Logs", "Tmux", "Settings"] as const;
+
+reportErrors();
 
 const mdCache = new Map<string, string>();
 function Markdown({ text, partial }: { text: string; partial?: boolean }) {
@@ -59,7 +64,7 @@ function App() {
   const [details, setDetails] = useState<Record<string, Conversation>>({});
   const [panels, setPanels] = useState(openPanels);
   const open = panels.map((p) => p.id);
-  const [tab, setTab] = useState<"Agents" | "Sessions" | "Inbox" | "Settings">("Agents");
+  const [tab, setTab] = useState<(typeof tabs)[number]>("Agents");
   // The prompt a new session starts with; undefined while the dialog is closed.
   const [creating, setCreating] = useState<string>();
   // Called once the session from the dialog exists, for the Inbox item it was started from.
@@ -177,7 +182,7 @@ function App() {
         <span class="logo">
           <b>k</b>ondu<b>k</b>tor
         </span>
-        {(["Agents", "Sessions", "Inbox", "Settings"] as const).map((t) => (
+        {tabs.map((t) => (
           <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
             {t}
           </a>
@@ -197,6 +202,13 @@ function App() {
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
         {tab === "Inbox" && <Inbox onStart={create} />}
+        {tab === "Stats" && <Stats />}
+        {tab === "Logs" && <Logs />}
+        {tab === "Tmux" && (
+          <main class="tmux">
+            <Terminal path="/api/tmux" />
+          </main>
+        )}
         {tab === "Sessions" && (
           <div class="sessions">
             <Scope>{filters()}</Scope>
@@ -343,7 +355,9 @@ function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => v
         </span>
       </div>
       <div class="meta">
-        <span>Created {when(c.created)}</span>
+        <span title={usageTitle(c.usage, c.harness)}>
+          {usageLabel(c.usage)}
+        </span>
         <span>Last {when(c.last_message)}</span>
       </div>
     </li>
@@ -668,7 +682,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin }: Conversati
             )}
           </div>
         </header>
-        {showTerminal && <Terminal id={c.id} />}
+        {showTerminal && <Terminal path={`/api/conversations/${c.id}/terminal`} />}
         <div
           hidden={showTerminal}
           class="feed"

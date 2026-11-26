@@ -89,6 +89,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	if err := openLog(store.dir); err != nil {
+		return err
+	}
 	token, err := readToken(store.dir)
 	if err != nil {
 		return err
@@ -99,7 +102,7 @@ func serve() error {
 	}
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
-		tails: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
+		tails: map[string]*Tail{}, subagents: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
 		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{}, handovers: map[string]bool{},
 	}
 	os.Remove(sockPath())
@@ -127,6 +130,8 @@ func serve() error {
 			log.Printf("conductor: %v", err)
 		}
 	}
+	log.Printf("kk started on %s", addr())
+	// Only stdout gets the token.
 	fmt.Printf("kk is running: http://%s/?token=%s\n", addr(), token)
 	go func() {
 		for range time.Tick(time.Second) {
@@ -134,6 +139,7 @@ func serve() error {
 		}
 	}()
 	<-sig
+	log.Print("kk stopping")
 	s.inbox.stop()
 	os.Remove(sockPath())
 	return nil
