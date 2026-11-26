@@ -864,13 +864,15 @@ func uuid() string {
 
 // integrationTurn answers a turn of kk's inbox session like a model that has only its connector's tools. A prompt
 // "use <tool>" calls that tool; any other prompt collects the inbox: it keeps the arguments in FAKE_HOME/<source>-args.json,
-// reads with the first allowed connector tool and answers with FAKE_HOME/<source>.out. FAKE_HOME/<source>-connector "none"
+// reads with the first allowed connector tool and answers with FAKE_HOME/<source>.once, which it then removes, or else
+// with FAKE_HOME/<source>.out. FAKE_HOME/<source>-connector "none"
 // leaves the connector out, and FAKE_HOME/<source>-error ends the turn on an API error. Tools that ran are listed in
 // FAKE_HOME/<source>-tools.log.
 //
 // Like Claude Code 2.1, the agent takes its first prompt while the claude.ai connectors are still connecting: it has
-// no connector tools then, unless it may wait for them with ToolSearch. And it fires the Stop hook before the answer
-// reaches the transcript.
+// no connector tools then, unless it may wait for them with ToolSearch. Claude Code sends ToolSearch to the model only
+// while some tool is deferred, so with no deferred built-in in --tools the model writes the call as text. And it fires
+// the Stop hook before the answer reaches the transcript.
 func integrationTurn(prompt string) {
 	home := os.Getenv("FAKE_HOME")
 	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
@@ -892,19 +894,31 @@ func integrationTurn(prompt string) {
 		reply(`{"connector":"missing"}`)
 		return
 	}
+	if !slices.ContainsFunc(builtins, func(t string) bool { return deferredBuiltins[t] }) {
+		reply(fmt.Sprintf(`<invoke name="ToolSearch"><parameter name="query">select:%s</parameter></invoke>`, strings.Join(reads, ",")))
+		return
+	}
 	useTool("ToolSearch")
 	if b, _ := os.ReadFile(filepath.Join(home, connector+"-connector")); strings.TrimSpace(string(b)) == "none" {
 		reply(`{"connector":"missing"}`)
 		return
 	}
 	useTool(reads[0])
-	out, err := os.ReadFile(filepath.Join(home, connector+".out"))
+	out, err := os.ReadFile(filepath.Join(home, connector+".once"))
+	if err == nil {
+		os.Remove(filepath.Join(home, connector+".once"))
+	} else {
+		out, err = os.ReadFile(filepath.Join(home, connector+".out"))
+	}
 	if err != nil {
 		out = []byte(`{"items":[]}`)
 	}
 	fmt.Println("agent: answered")
 	reply(string(out))
 }
+
+// deferredBuiltins are built-in tools that Claude Code 2.1.332 defers behind ToolSearch.
+var deferredBuiltins = map[string]bool{"CronList": true, "TaskStop": true, "NotebookEdit": true}
 
 // reply ends an integration turn the way Claude Code 2.1 does: the Stop hook reports the answer before the transcript
 // holds it.

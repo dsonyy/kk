@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,11 +27,16 @@ const (
 
 func integrationID(source string) string { return "inbox-" + source }
 
-// toolSearch is the only built-in tool of an integration's agent. Claude Code takes the run's prompt before the claude.ai
-// connectors have connected, and ToolSearch waits for them; without it the agent finds no connector tools.
+// toolSearch is the only built-in tool an integration's agent may use. Claude Code takes the run's prompt before the
+// claude.ai connectors have connected, and ToolSearch waits for them; without it the agent finds no connector tools.
 const toolSearch = "ToolSearch"
 
-// integrationCommand builds the argv of an integration's agent. Without the user's settings it gets no tools but
+// deferredTool is a built-in tool the agent gets but may not use. Claude Code offers ToolSearch to the model only while
+// some tool is deferred, and the connectors' tools arrive after the first request; without a deferred tool of its own
+// the model would write the ToolSearch call as text.
+const deferredTool = "CronList"
+
+// integrationCommand builds the argv of an integration's agent. Without the user's settings it may use no tools but
 // ToolSearch and the connector's read tools. The guard hook refuses every other tool whatever the permission mode and
 // rules say by then.
 func (s *Server) integrationCommand(c *Conversation, resume bool) ([]string, error) {
@@ -43,7 +49,7 @@ func (s *Server) integrationCommand(c *Conversation, resume bool) ([]string, err
 	guard := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellJoin([]string{s.bin, "guard", allowed})}}}
 	hooks["PreToolUse"] = append([]any{guard}, hooks["PreToolUse"]...)
 	settings, _ := json.Marshal(map[string]any{"hooks": hooks})
-	argv := []string{"claude", "--settings", string(settings), "--model", integrationModel, "--setting-sources", "", "--tools", toolSearch,
+	argv := []string{"claude", "--settings", string(settings), "--model", integrationModel, "--setting-sources", "", "--tools", toolSearch + "," + deferredTool,
 		"--permission-mode", "dontAsk", "--allowedTools", allowed, "--disallowedTools", r.tools(r.write), "--disable-slash-commands",
 		"--system-prompt", r.system}
 	if resume {
@@ -70,10 +76,11 @@ func guard(args []string) {
 // runIntegration runs r in its source's session and returns the items of the answer. A run that fails raises
 // attention on the session; one that finds no connector does not, the inbox shows it as not set up.
 func (s *Server) runIntegration(ctx context.Context, r connectorRun) ([]connectorItem, error) {
-	answer, err := s.integrationAnswer(ctx, r)
-	var items []connectorItem
-	if err == nil {
-		items, err = r.parse(answer)
+	items, err := s.integrationItems(ctx, r)
+	var bad badAnswer
+	if errors.As(err, &bad) {
+		log.Printf("inbox %s: the answer was not the expected JSON, checking again", r.source)
+		items, err = s.integrationItems(ctx, r)
 	}
 	var missing notSetUp
 	if err != nil && !errors.As(err, &missing) && !errors.Is(err, context.Canceled) {
@@ -86,6 +93,14 @@ func (s *Server) runIntegration(ctx context.Context, r connectorRun) ([]connecto
 		s.publish(id)
 	}
 	return items, err
+}
+
+func (s *Server) integrationItems(ctx context.Context, r connectorRun) ([]connectorItem, error) {
+	answer, err := s.integrationAnswer(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	return r.parse(answer)
 }
 
 // integrationAnswer starts a run and waits for the agent's answer to it.

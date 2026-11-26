@@ -197,7 +197,7 @@ func TestInbox(t *testing.T) {
 	json.Unmarshal(data, &args)
 	line := strings.Join(args, " ")
 	i := slices.Index(args, "--allowedTools")
-	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch ") || i < 0 {
+	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch,CronList ") || i < 0 {
 		t.Fatalf("the Slack run must be read-only: %s", line)
 	}
 	for _, tool := range strings.Split(args[i+1], ",")[1:] {
@@ -323,7 +323,7 @@ func TestInboxGmail(t *testing.T) {
 	json.Unmarshal(data, &args)
 	line := strings.Join(args, " ")
 	allowed, denied := slices.Index(args, "--allowedTools"), slices.Index(args, "--disallowedTools")
-	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch ") || allowed < 0 || denied < 0 {
+	if !strings.Contains(line, "--permission-mode dontAsk") || !strings.Contains(line, "--tools ToolSearch,CronList ") || allowed < 0 || denied < 0 {
 		t.Fatalf("the Gmail run must be read-only: %s", line)
 	}
 	read := []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread", "mcp__claude_ai_Gmail__get_message", "mcp__claude_ai_Gmail__list_labels"}
