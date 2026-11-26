@@ -1346,7 +1346,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         onValue={setText}
         skills={skills}
         attachments={attachments}
-        placeholder={c.role === COORDINATOR ? (c.scope ? `Message the konduktor of ${c.scope.replace(/\/+$/, "").split("/").pop()}` : "Message the main konduktor") : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
+        placeholder={c.role === COORDINATOR ? "Message konduktor" : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
             e.preventDefault();
@@ -1392,11 +1392,8 @@ type PickProps = {
   onPick: (dir: string) => void;
 };
 
-// Which konduktor is shown, in plain words: the main one, or the one of a directory.
-const konduktorTitle = (dir: string, label: (dir: string) => string) => (dir ? <>konduktor of <span class="mono">{label(dir)}</span></> : "main konduktor");
-
-// The head of the konduktor panel: which konduktor it shows, a menu of main and every directory, and while the menu's
-// choice differs from the tab, the way back to the tab's konduktor.
+// The head of the konduktor panel: a menu of All and every directory, and while the menu's choice differs from the tab,
+// the way back to the tab's directory.
 function KonduktorPick({ dirs, shown, of, label, tab, onPick }: PickProps) {
   const [at, setAt] = useState<{ top: number; left: number }>();
   const ref = useRef<HTMLDivElement>(null);
@@ -1413,29 +1410,31 @@ function KonduktorPick({ dirs, shown, of, label, tab, onPick }: PickProps) {
     };
   }, [at]);
   const k = of(shown);
+  const name = (d: string) => (d ? label(d) : "All");
   return (
     <div class="konduktor-pick" ref={ref}>
       <h1>
         <button
           type="button"
-          class="konduktor-name"
+          class="konduktor-name small"
           aria-expanded={!!at}
-          title={shown ? `${shown}\nPick another konduktor` : "Every directory without its own konduktor\nPick another konduktor"}
+          title={`${shown || "Every directory without its own konduktor"}\n${k ? stateLabel(k) : "not started"}`}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             setAt(at ? undefined : { top: r.bottom + 2, left: Math.max(0, Math.min(r.left, window.innerWidth - 320)) });
           }}
         >
-          <span class="what">{konduktorTitle(shown, label)}</span>
-          {!shown && <span class="muted">for All</span>}
-          {!k && <span class="muted">not started</span>}
+          <span class="mono">{name(shown)}</span>
           <Icon name="chevron" />
         </button>
+        {!k && <span class="muted">not started</span>}
       </h1>
       {tab !== undefined && (
         <div class="konduktor-away">
-          <span>Picked in the menu, not the {tab ? <>konduktor of <span class="mono">{label(tab)}</span></> : "main konduktor of All"}.</span>
-          <Button label={`Back to ${tab ? label(tab) : "main"}`} class="small" onClick={() => onPick(tab)} />
+          <span>
+            Showing <span class="mono">{name(shown)}</span>, not <span class="mono">{name(tab)}</span>.
+          </span>
+          <Button label={`Back to ${name(tab)}`} class="small" onClick={() => onPick(tab)} />
         </div>
       )}
       {at && (
@@ -1455,7 +1454,7 @@ function KonduktorPick({ dirs, shown, of, label, tab, onPick }: PickProps) {
               >
                 <span>
                   {k ? <Dot c={k} /> : <i class="dot none" />}
-                  <span class="mono">{d ? label(d) : "main"}</span>
+                  <span class="mono">{name(d)}</span>
                 </span>
                 <span class="count">{k ? stateLabel(k) : "not started"}</span>
               </button>
@@ -1502,7 +1501,7 @@ function KonduktorStart({ dir, name, head, onStarted }: { dir: string; name: str
             onValue={setText}
             skills={skills}
             attachments={attachments}
-            placeholder={`Message the konduktor of ${name}`}
+            placeholder="Message konduktor"
             onEnter={(e) => {
               if (!e.shiftKey && !e.isComposing) {
                 e.preventDefault();
