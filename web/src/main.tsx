@@ -1043,7 +1043,6 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
   const send = async (text: string, files: Attachment[]) => {
     const p = { text, files, expect: users + sending.length + 1 };
     const drop = () => setPending((q) => q.filter((x) => x !== p));
-    stick.current = true;
     setPending([...sending, p]);
     // A harness that does not record its queue shows the message only when the agent takes it, after its turn at the latest.
     const expire = () => (working.current ? setTimeout(expire, 30000) : drop());
