@@ -610,6 +610,14 @@ func handle(prompt string) {
 		reverted = false
 		hook("SessionStart", map[string]any{"source": "resume"})
 	}
+	// Claude Code 2.1 runs /rename locally: no hooks, no turn, a custom title and an agent name.
+	if name, ok := strings.CutPrefix(prompt, "/rename "); ok && mode == "claude" {
+		write(map[string]any{"type": "system", "subtype": "local_command", "level": "info", "content": "<command-name>/rename</command-name>\n<command-message>rename</command-message>\n<command-args>" + name + "</command-args>"})
+		write(map[string]any{"type": "custom-title", "customTitle": name})
+		write(map[string]any{"type": "agent-name", "agentName": name})
+		write(map[string]any{"type": "system", "subtype": "local_command", "level": "info", "content": "<local-command-stdout>Session renamed to: " + name + "</local-command-stdout>"})
+		return
+	}
 	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
 	// A kk notification quotes other agents, whose words must not trigger the behaviours below.
 	if strings.HasPrefix(prompt, "[kk notification") {

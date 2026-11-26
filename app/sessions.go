@@ -62,7 +62,7 @@ func (e *pastEntry) scan(parse func(*Tail, []byte)) PastSession {
 			continue
 		}
 		e.ps.Messages++
-		if e.first == "" && ev.Kind == kindUser {
+		if e.first == "" && ev.Kind == kindUser && !ev.command {
 			e.first = firstLine(ev.Text, 80)
 		}
 		if e.ps.Started.IsZero() {

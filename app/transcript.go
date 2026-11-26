@@ -27,6 +27,8 @@ type Event struct {
 	// Images are the local pictures the text names, filled in when the conversation is served.
 	Images []Attachment `json:"images,omitempty"`
 	Time   time.Time    `json:"time"`
+	// command marks a slash command the user ran, which is no message of theirs.
+	command bool
 }
 
 const (
@@ -50,8 +52,10 @@ type Tail struct {
 	// forks maps the parent of a Claude Code prompt to the number of events before that prompt.
 	forks map[string]int
 	// check holds the bytes before offset; a harness that rewrites its transcript changes them.
-	check   []byte
-	Title   string
+	check []byte
+	Title string
+	// named is true once the user named the session; their name wins over the titles the harness makes up.
+	named   bool
 	Context int
 	Last    time.Time
 	// Ended is when the last turn ended, as far as the transcript records it: every turn for Cursor,
@@ -240,6 +244,7 @@ type claudeLine struct {
 	IsCompactSummary  bool      `json:"isCompactSummary"`
 	IsApiErrorMessage bool      `json:"isApiErrorMessage"`
 	AiTitle           string    `json:"aiTitle"`
+	CustomTitle       string    `json:"customTitle"`
 	Level             string    `json:"level"`
 	Subtype           string    `json:"subtype"`
 	Operation         string    `json:"operation"`
@@ -304,8 +309,12 @@ func parseClaude(t *Tail, raw []byte) {
 	}
 	switch l.Type {
 	case "ai-title":
-		if l.AiTitle != "" {
+		if l.AiTitle != "" && !t.named {
 			t.Title = l.AiTitle
+		}
+	case "custom-title":
+		if l.CustomTitle != "" {
+			t.Title, t.named = l.CustomTitle, true
 		}
 	case "system":
 		if l.Level == "error" && l.Content != "" {
@@ -409,7 +418,7 @@ var pastedContent = regexp.MustCompile(`</?pasted_content[^>]*>`)
 func addClaudeUserText(t *Tail, l claudeLine, text string) {
 	text = strings.TrimSpace(pastedContent.ReplaceAllString(text, ""))
 	if m := commandName.FindStringSubmatch(text); m != nil {
-		t.add(Event{Kind: kindUser, Text: m[1], Time: l.Timestamp})
+		t.add(Event{Kind: kindUser, Text: m[1], Time: l.Timestamp, command: true})
 		return
 	}
 	if m := taskSummary.FindStringSubmatch(text); m != nil {

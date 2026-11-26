@@ -637,6 +637,49 @@ func TestResumeSessionFromHistory(t *testing.T) {
 	}
 }
 
+func TestPastSessionTitles(t *testing.T) {
+	e := newEnv(t)
+	project := filepath.Join(filepath.Dir(e.home), ".claude", "projects", "-work")
+	os.MkdirAll(project, 0o755)
+	command := func(name, args string) string {
+		return `{"type":"user","cwd":"` + e.work + `","message":{"content":"<command-name>` + name + `</command-name>\n<command-message>` + name[1:] + `</command-message>\n<command-args>` + args + `</command-args>"}}` + "\n"
+	}
+	prompt := `{"type":"user","cwd":"` + e.work + `","message":{"content":"plan the refactor"}}` + "\n"
+	renamed := "11111111-2222-4333-8444-555555555555"
+	os.WriteFile(filepath.Join(project, renamed+".jsonl"), []byte(command("/clear", "")+command("/model", "fable")+prompt+
+		`{"type":"ai-title","aiTitle":"Refactor planning"}`+"\n"+
+		`{"type":"custom-title","customTitle":"TASKY"}`+"\n"+`{"type":"agent-name","agentName":"TASKY"}`+"\n"+
+		`{"type":"ai-title","aiTitle":"Refactor planning again"}`+"\n"), 0o644)
+	untitled := "66666666-2222-4333-8444-555555555555"
+	os.WriteFile(filepath.Join(project, untitled+".jsonl"), []byte(command("/clear", "")+command("/model", "fable")+prompt), 0o644)
+	out, err := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/sessions?harness=claude").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var past []PastSession
+	json.Unmarshal(out, &past)
+	titles := map[string]string{}
+	for _, ps := range past {
+		titles[ps.ID] = ps.Title
+	}
+	if titles[renamed] != "TASKY" || titles[untitled] != "plan the refactor" {
+		t.Fatalf("past sessions: %s", out)
+	}
+}
+
+func TestRenamedClaudeSessionKeepsItsName(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("title", id, func(c convView) bool { return turnEnded(c) && c.Title == "Title: hello" })
+	e.mustKK("send", id, "/rename", "TASKY")
+	e.waitFor("custom title", id, func(c convView) bool { return c.Title == "TASKY" })
+	e.mustKK("send", id, "after", "the", "rename")
+	c := e.waitFor("answer after the rename", id, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "echo: after the rename") })
+	if c.Title != "TASKY" {
+		t.Fatalf("an ai title replaced the custom one: %q", c.Title)
+	}
+}
+
 func TestStatsReportsLoad(t *testing.T) {
 	e := newEnv(t)
 	var samples []Sample
