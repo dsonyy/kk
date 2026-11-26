@@ -34,14 +34,14 @@ func imagePaths(text string) []string {
 	return out
 }
 
-// openImage opens a local picture that is safe to show: a clean absolute path without symlinks to a regular file whose
+// openImage opens a local picture that is safe to show: a clean absolute path without user symlinks to a regular file whose
 // content is a raster image. Its content type comes from the content, not the name.
 func openImage(path string) (*os.File, string, error) {
 	notImage := errors.New("not an image")
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || !imageExt.MatchString(path) {
 		return nil, "", notImage
 	}
-	if real, err := filepath.EvalSymlinks(path); err != nil || real != path {
+	if userLinks(path) {
 		return nil, "", notImage
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
@@ -56,6 +56,21 @@ func openImage(path string) (*os.File, string, error) {
 		return nil, "", notImage
 	}
 	return f, kind, nil
+}
+
+// userLinks reports whether a directory of path is a symlink that is not part of the system layout, which root owns, as
+// /tmp and /var on macOS. A server run as root cannot tell the two apart.
+func userLinks(path string) bool {
+	for dir := filepath.Dir(path); dir != "/"; dir = filepath.Dir(dir) {
+		st, err := os.Lstat(dir)
+		if err != nil {
+			return true
+		}
+		if st.Mode()&os.ModeSymlink != 0 && (st.Sys().(*syscall.Stat_t).Uid != 0 || os.Geteuid() == 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // withImages lists the pictures a message names that can be shown, with the address that serves them.

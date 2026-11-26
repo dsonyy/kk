@@ -34,18 +34,8 @@ type page struct {
 func (e *env) openPage(width, height int) *page {
 	t := e.t
 	t.Helper()
-	var chrome string
-	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
-		if path, err := exec.LookPath(name); err == nil {
-			chrome = path
-			break
-		}
-	}
-	if chrome == "" {
-		t.Skip("needs Chrome")
-	}
 	profile := t.TempDir()
-	cmd := exec.Command(chrome, "--headless=new", "--remote-debugging-port=0", "--user-data-dir="+profile, "--no-first-run", "about:blank")
+	cmd := chrome(t, "--user-data-dir="+profile, "about:blank")
 	cmd.Env = append(os.Environ(), "HOME="+profile, "XDG_CONFIG_HOME="+profile, "XDG_CACHE_HOME="+profile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -605,12 +595,13 @@ func (p *page) press(key string, code int, text string) {
 	p.call("Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": key, "windowsVirtualKeyCode": code})
 }
 
-// tap clicks the middle of an element with the mouse.
+// tap clicks an element with the mouse, in the middle of its first line: the middle of an inline element that wraps lies
+// between its lines.
 func (p *page) tap(element string) {
 	p.t.Helper()
 	p.until(element)
 	var at struct{ X, Y float64 }
-	p.eval(fmt.Sprintf(`(() => { const e = %s; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`, element), &at)
+	p.eval(fmt.Sprintf(`(() => { const e = %s; e.scrollIntoView({ block: "center" }); const r = e.getClientRects()[0]; return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`, element), &at)
 	for _, kind := range []string{"mousePressed", "mouseReleased"} {
 		p.call("Input.dispatchMouseEvent", map[string]any{"type": kind, "x": at.X, "y": at.Y, "button": "left", "clickCount": 1})
 	}

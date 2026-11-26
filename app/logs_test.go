@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -147,8 +148,9 @@ func TestTmuxTab(t *testing.T) {
 	}
 	ws.Write(ctx, websocket.MessageText, []byte(`{"cols":120,"rows":30}`))
 	var seen strings.Builder
-	// The status bar lists the windows: the home shell and the agent.
-	for !strings.Contains(seen.String(), "[kk] 0:home") || !strings.Contains(seen.String(), "1:Title: hello") {
+	// The status bar lists the windows: the home shell and the agent. tmux 3.8 underlines the current one.
+	escapes := regexp.MustCompile(`\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-9A-Z]|.)`)
+	for screen := ""; !strings.Contains(screen, "[kk] 0:home") || !strings.Contains(screen, "1:Title: hello"); screen = escapes.ReplaceAllString(seen.String(), "") {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
 			t.Fatalf("tmux tab output: %v\n%q", err, seen.String())

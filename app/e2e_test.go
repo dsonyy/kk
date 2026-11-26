@@ -67,7 +67,16 @@ func freeAddr() string {
 
 func newEnv(t *testing.T, extra ...string) *env {
 	t.Helper()
-	root := t.TempDir()
+	// The server's socket lies in root, and t.TempDir names a path too long for one on macOS, where sun_path has 104 bytes.
+	root, err := os.MkdirTemp("/tmp", "kk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("removing the test directory: %v", err)
+		}
+	})
 	e := &env{t: t, home: filepath.Join(root, "kk"), fake: filepath.Join(root, "fake"), work: filepath.Join(root, "work"), addr: freeAddr()}
 	os.MkdirAll(e.fake, 0o755)
 	os.MkdirAll(e.work, 0o755)
