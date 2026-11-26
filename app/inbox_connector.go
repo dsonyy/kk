@@ -81,7 +81,15 @@ func (c connectorRun) parse(text string) ([]connectorItem, error) {
 	case err == nil && answer.Connector == "missing":
 		return nil, notSetUp(fmt.Sprintf("Connect %s to your Claude account at claude.ai, Settings, Connectors.", c.label))
 	case err != nil || answer.Items == nil:
-		return nil, fmt.Errorf("the %s run did not answer with the expected JSON", c.label)
+		return nil, badAnswer(c.label)
 	}
 	return answer.Items, nil
+}
+
+// badAnswer is a run's answer that is not the JSON its system prompt asks for. kk runs the check once more before it
+// reports it, since another run of the same agent usually answers as asked.
+type badAnswer string
+
+func (e badAnswer) Error() string {
+	return fmt.Sprintf("the %[1]s check answered twice without the expected JSON. Open the %[1]s inbox session to see the last answer; the next check tries again", string(e))
 }

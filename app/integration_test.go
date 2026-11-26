@@ -27,6 +27,18 @@ func (e *env) lastLaunch() []string {
 	return last
 }
 
+// launches counts the starts of the Gmail session's fake claude.
+func (e *env) launches() int {
+	data, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
+	n := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, `["claude"`) && strings.Contains(line, gmailRun.prefix) {
+			n++
+		}
+	}
+	return n
+}
+
 func argOf(argv []string, name string) (string, bool) {
 	i := slices.Index(argv, name)
 	if i < 0 || i+1 >= len(argv) {
@@ -39,7 +51,7 @@ func argOf(argv []string, name string) (string, bool) {
 func checkLimits(t *testing.T, argv []string) {
 	t.Helper()
 	want := map[string]string{
-		"--setting-sources": "", "--tools": "ToolSearch", "--permission-mode": "dontAsk", "--model": "sonnet",
+		"--setting-sources": "", "--tools": "ToolSearch,CronList", "--permission-mode": "dontAsk", "--model": "sonnet",
 		"--allowedTools":    "ToolSearch,mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_thread,mcp__claude_ai_Gmail__get_message,mcp__claude_ai_Gmail__list_labels",
 		"--disallowedTools": gmailRun.tools(gmailRun.write),
 		"--system-prompt":   gmailRun.system,
@@ -101,9 +113,11 @@ func TestIntegrationSession(t *testing.T) {
 	}
 
 	// Typing into the session neither widens its tools nor makes it the konduktor's.
-	for i, tool := range []string{"mcp__claude_ai_Gmail__send_message", "Bash", "mcp__claude_ai_Google_Drive__create_file", "mcp__claude_ai_Gmail__get_thread"} {
+	for i, tool := range []string{"mcp__claude_ai_Gmail__send_message", "Bash", "CronList", "mcp__claude_ai_Google_Drive__create_file", "mcp__claude_ai_Gmail__get_thread"} {
 		e.asKonduktor("send", id, "use "+tool)
-		c = e.waitFor("the typed turn", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done" })
+		c = e.waitFor("the typed turn", id, func(c convView) bool {
+			return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done"
+		})
 	}
 	if got := e.toolsRun(); !slices.Equal(got, []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread"}) {
 		t.Fatalf("only the read tools may run, whatever is typed: %v", got)
@@ -114,8 +128,8 @@ func TestIntegrationSession(t *testing.T) {
 			refused++
 		}
 	}
-	if refused != 3 || c.WaitingFor != "" {
-		t.Fatalf("the guard should refuse three tools and the session wait for nobody: %d %q %+v", refused, c.WaitingFor, c.Events)
+	if refused != 4 || c.WaitingFor != "" {
+		t.Fatalf("the guard should refuse four tools and the session wait for nobody: %d %q %+v", refused, c.WaitingFor, c.Events)
 	}
 
 	// A stopped session resumes with the same limits.
@@ -132,7 +146,9 @@ func TestIntegrationSession(t *testing.T) {
 		t.Fatalf("resume: %v", argv)
 	}
 	e.mustKK("send", id, "use Bash")
-	e.waitFor("the guard after a resume", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 6 && c.Events[len(c.Events)-1].Text == "done" })
+	e.waitFor("the guard after a resume", id, func(c convView) bool {
+		return c.Status == statusIdle && userTurns(c) == 7 && c.Events[len(c.Events)-1].Text == "done"
+	})
 	if got := e.toolsRun(); slices.Contains(got, "Bash") {
 		t.Fatalf("Bash ran after a resume: %v", got)
 	}
@@ -141,7 +157,7 @@ func TestIntegrationSession(t *testing.T) {
 	transcript := e.conv(id).Transcript
 	e.refreshInbox("gmail")
 	c = e.waitFor("the second check", id, func(c convView) bool {
-		return c.Status == statusIdle && c.Transcript != transcript && c.Usage != nil && c.Usage.Output == 350
+		return c.Status == statusIdle && c.Transcript != transcript && c.Usage != nil && c.Usage.Output == 400
 	})
 	argv = e.lastLaunch()
 	checkLimits(t, argv)
@@ -154,7 +170,7 @@ func TestIntegrationSession(t *testing.T) {
 	var saved Conversation
 	data, _ := os.ReadFile(filepath.Join(e.home, "conversations", id+".yaml"))
 	yaml.Unmarshal(data, &saved)
-	if len(saved.Transcripts) != 2 || saved.Transcripts[earlierRuns].Output != 300 || c.Usage.Output != 350 {
+	if len(saved.Transcripts) != 2 || saved.Transcripts[earlierRuns].Output != 350 || c.Usage.Output != 400 {
 		t.Fatalf("usage should fold the earlier runs into one entry: %+v %+v", saved.Transcripts, c.Usage)
 	}
 
@@ -170,6 +186,21 @@ func TestIntegrationSession(t *testing.T) {
 	if c = e.conv(id); c.Attention != "" || c.WaitingFor != "" {
 		t.Fatalf("a good run should clear the attention: %+v", c.Conversation)
 	}
+
+	// An answer that is not the JSON asked for gets one more run before the user hears of it.
+	launches := e.launches()
+	writeFile(t, filepath.Join(e.fake, "gmail.once"), "Here is your mail.")
+	v := e.refreshInbox("gmail")
+	if c = e.conv(id); c.Attention != "" || sourceOf(v, "gmail").Error != "" || e.launches() != launches+2 {
+		t.Fatalf("a bad answer should be checked again: %d launches, %+v %+v", e.launches()-launches, sourceOf(v, "gmail"), c.Conversation)
+	}
+	writeFile(t, filepath.Join(e.fake, "gmail.out"), "Here is your mail.")
+	e.refreshInbox("gmail")
+	want := "The Gmail check answered twice without the expected JSON. Open the Gmail inbox session to see the last answer; the next check tries again."
+	if c = e.conv(id); c.Attention != want || c.WaitingFor != waitingUser || e.launches() != launches+4 {
+		t.Fatalf("two bad answers should tell the user what to do: %+v", c.Conversation)
+	}
+	writeFile(t, filepath.Join(e.fake, "gmail.out"), gmailAnswer)
 
 	if c := e.conv(coordinatorID); slices.ContainsFunc(c.Events, func(ev Event) bool { return strings.Contains(ev.Text, id) }) {
 		t.Fatalf("the konduktor heard of the session: %+v", c.Events)
@@ -235,4 +266,3 @@ func userTurns(c convView) int {
 	}
 	return n
 }
-
