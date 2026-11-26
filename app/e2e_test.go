@@ -1187,7 +1187,8 @@ func TestReset(t *testing.T) {
 		t.Fatalf("reset of a working agent accepted: %s", out)
 	}
 	e.mustKK("interrupt", id)
-	old := e.waitFor("interrupted", id, func(c convView) bool { return c.Status == statusIdle }).Session
+	// kk marks the agent idle as it sends the key; the note shows that the agent took it before reset types after it.
+	old := e.waitFor("interrupted", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindNote, "Interrupted") }).Session
 	e.mustKK("reset", id)
 	e.waitFor("new session", id, func(c convView) bool { return c.Session != old })
 	e.mustKK("stop", id)
@@ -1321,7 +1322,9 @@ func TestWhoseTurn(t *testing.T) {
 		t.Fatalf("escalated a working agent: %s", out)
 	}
 	e.asKonduktor("interrupt", id)
-	e.waitFor("back to the konduktor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
+	e.waitFor("back to the konduktor", id, func(c convView) bool {
+		return c.Status == statusIdle && c.WaitingFor == waitingKonduktor && hasEvent(c, kindNote, "Interrupted")
+	})
 
 	e.mustKK("send", id, "from the user")
 	e.waitFor("a stop that waits for the user who wrote", id, func(c convView) bool {
