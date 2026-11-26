@@ -88,7 +88,7 @@ function decode(s: string) {
 
 type Picture = { src: string; alt: string; caption: string };
 
-// pictures lists the pictures of a message once each, in the order they appear.
+// pictures lists the pictures of a message, or of the media of a conversation, once each, in the order they appear.
 function pictures(message: Element): Picture[] {
   const out: Picture[] = [];
   for (const img of message.querySelectorAll("img")) {
@@ -111,10 +111,10 @@ export function ImageViewer() {
       const link = target.closest("a.image");
       // Enter on a link clicks the link, not the picture in it.
       const img = link || (target.matches("a") && !target.textContent?.trim() ? target.querySelector("img") : target.closest("img"));
-      if (!img?.closest(".feed :is(.md, .attachments)")) return;
+      if (!img?.closest(".feed :is(.md, .attachments), .media")) return;
       e.preventDefault();
       const src = link ? link.getAttribute("href")! : img.getAttribute("src")!;
-      const list = pictures(img.closest(".msg") ?? img.closest(".md")!);
+      const list = pictures(img.closest(".msg, .media") ?? img.closest(".md")!);
       setView({ list, at: Math.max(0, list.findIndex((p) => p.src === src)) });
     };
     document.addEventListener("click", open);

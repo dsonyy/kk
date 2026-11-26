@@ -59,7 +59,7 @@ export function withPaths(text: string, files: Attachment[]): string {
   return [text.replace(/\s+$/, ""), files.map((f) => f.path).join("\n")].filter(Boolean).join("\n\n");
 }
 
-const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
+export const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
 
 export function Attachments({ items, onRemove }: { items: { name: string; url?: string }[]; onRemove?: (index: number) => void }) {
   if (!items.length) return null;

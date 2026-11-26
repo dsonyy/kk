@@ -1,6 +1,6 @@
 import type * as preact from "preact";
 import { render } from "preact";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
@@ -18,6 +18,7 @@ import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
+import { Media, media } from "./media";
 import { Logs, reportErrors } from "./logs";
 import { ScheduleDialog, scheduleText } from "./schedule";
 import { Stats } from "./stats";
@@ -597,9 +598,10 @@ type ConversationViewProps = {
 };
 
 function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onShow }: ConversationViewProps) {
-  const [terminal, setShowTerminal] = useState(false);
+  const [chosen, setView] = useState<"chat" | "terminal" | "media">("chat");
   // Closing kills the window, so a closed session has no terminal to show.
-  const showTerminal = terminal && !c.closed;
+  const view = chosen === "terminal" && c.closed ? "chat" : chosen;
+  const images = useMemo(() => media(c.events), [c.events]);
   const [confirmClose, setConfirmClose] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
@@ -705,10 +707,18 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
           )}
           <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>
           <div class="actions">
-            {!c.closed && !queued && (
+            {!queued && (
               <div class="modes">
-                <Button label="Chat" class={showTerminal ? "small" : "small on"} onClick={() => setShowTerminal(false)} />
-                <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
+                <Button label="Chat" class={view === "chat" ? "small on" : "small"} onClick={() => setView("chat")} />
+                {!c.closed && <Button label="Terminal" icon="terminal" class={view === "terminal" ? "small on" : "small"} onClick={() => setView("terminal")} />}
+                <Button
+                  label="Media"
+                  icon="image"
+                  class={view === "media" ? "small on" : "small"}
+                  data-count={images.length || undefined}
+                  title={images.length ? `${images.length} ${images.length === 1 ? "image" : "images"}` : "No images"}
+                  onClick={() => setView("media")}
+                />
               </div>
             )}
             {(exited || c.closed) && !(c.integration && c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
@@ -751,9 +761,10 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             )}
           </div>
         </header>
-        {showTerminal && <Terminal path={`/api/conversations/${c.id}/terminal`} />}
+        {view === "terminal" && <Terminal path={`/api/conversations/${c.id}/terminal`} />}
+        {view === "media" && <Media items={images} />}
         <div
-          hidden={showTerminal}
+          hidden={view !== "chat"}
           class="feed"
           ref={feed}
           onScroll={(e) => {
@@ -804,7 +815,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             )}
           </div>
         </div>
-        {quote && !showTerminal && !exited && (
+        {quote && view === "chat" && !exited && (
           <div class="quote-bar" style={{ left: `${quote.x}px`, top: `${quote.y}px` }} onMouseDown={(e) => e.preventDefault()}>
             <Button
               label="Quote"
@@ -830,7 +841,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             ))}
           </div>
         )}
-        {!showTerminal && !queued && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
+        {view === "chat" && !queued && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
         {scheduling && <ScheduleDialog c={c} onClose={() => setScheduling(false)} />}
       </Scope>
     </Tag>
