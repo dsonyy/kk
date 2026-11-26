@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,14 +242,22 @@ func TestKonduktorPanel(t *testing.T) {
 	}
 	p := e.openPage(1600, 900)
 	head := `document.querySelector(".side-panel .konduktor-name")?.textContent`
+	away := `document.querySelector(".side-panel .konduktor-away")`
+	pickRow := func(name string) {
+		p.click(`document.querySelector(".side-panel .konduktor-name")`)
+		p.click(fmt.Sprintf(`[...document.querySelectorAll(".dir-menu .dir-item")].find((b) => b.querySelector(".mono").textContent === %q)`, name))
+	}
 	// All shows the main konduktor.
-	p.until(head + ` === "konduktormain"`)
+	p.until(head + ` === "main konduktor"`)
+	if n := len(p.texts(".side-panel .pin")); n != 0 {
+		t.Fatal("the konduktor panel has a pin")
+	}
 	p.shot("konduktor-all")
 
 	// A directory without a konduktor offers to start one with the first message.
 	p.dirTab("alpha")
 	p.until(`document.querySelector(".side-panel .konduktor-hint")?.textContent === "The konduktor of alpha starts with your first message."`)
-	p.until(head + ` === "konduktoralpha"`)
+	p.until(head + ` === "konduktor of alphanot started"`)
 	p.eval(`(() => {
 		const area = document.querySelector(".side-panel textarea")
 		Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(area, "hello alpha")
@@ -262,28 +272,43 @@ func TestKonduktorPanel(t *testing.T) {
 		t.Fatalf("konduktors: %+v", ks)
 	}
 	k := ks[1].ID
+	p.until(head + ` === "konduktor of alpha"`)
 	p.shot("konduktor-alpha")
 
-	// It follows the directory, unless pinned.
+	// It follows the tab.
 	p.dirTab("beta")
-	p.until(head + ` === "konduktorbeta" && document.querySelector(".side-panel .konduktor-hint")`)
+	p.until(head + ` === "konduktor of betanot started" && document.querySelector(".side-panel .konduktor-hint")`)
 	p.dirTab("All")
-	p.until(head + ` === "konduktormain"`)
+	p.until(head + ` === "main konduktor" && !` + away)
+
+	// The menu lists main and every directory, also those whose konduktor has not started: kk is the one of the inbox sessions.
 	p.click(`document.querySelector(".side-panel .konduktor-name")`)
-	p.until(`document.querySelectorAll(".dir-menu .dir-item").length === 2`)
-	if got := p.texts(".dir-menu .dir-item .mono"); len(got) != 2 || got[0] != "main" || got[1] != "alpha" {
+	p.until(`document.querySelectorAll(".dir-menu .dir-item").length > 0`)
+	if got := p.texts(".dir-menu .dir-item"); !slices.Equal(got, []string{"mainYour turn", "alphaYour turn", "betanot started", "gammanot started", "kknot started"}) {
 		t.Fatalf("konduktor menu: %q", got)
 	}
 	p.shot("konduktor-menu")
-	p.click(`document.querySelectorAll(".dir-menu .dir-item")[1]`)
-	p.until(head + ` === "konduktoralpha" && document.querySelector(".side-panel .konduktor-pick .pin.on")`)
+	p.click(`document.querySelector(".side-panel .konduktor-name")`)
+	p.until(`!document.querySelector(".dir-menu")`)
+
+	// A konduktor picked in the menu holds until the tab changes, and the head offers the way back.
+	pickRow("alpha")
+	p.until(head + ` === "konduktor of alpha" && ` + away + `?.textContent.includes("All")`)
+	p.shot("konduktor-away")
 	p.dirTab("beta")
-	time.Sleep(300 * time.Millisecond)
-	p.until(head + ` === "konduktoralpha"`)
+	p.until(head + ` === "konduktor of betanot started" && !` + away)
+	pickRow("alpha")
+	p.until(head + ` === "konduktor of alpha"`)
+	p.click(`[...document.querySelectorAll(".side-panel .konduktor-away button")].find((b) => b.textContent === "Back to beta")`)
+	p.until(head + ` === "konduktor of betanot started" && !` + away)
+	// Picking the tab again also ends it, and a konduktor picked before it starts is the one a message starts.
+	pickRow("gamma")
+	p.until(head + ` === "konduktor of gammanot started" && document.querySelector(".side-panel .konduktor-hint")?.textContent.includes("gamma")`)
+	p.shot("konduktor-away-start")
+	p.dirTab("beta")
+	p.until(head + ` === "konduktor of betanot started" && !` + away)
 
 	// A konduktor that wrote while another is shown marks its directory.
-	p.click(`document.querySelector(".side-panel .konduktor-pick .pin")`)
-	p.until(head + ` === "konduktorbeta"`)
 	p.until(`![...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
 	e.mustKK("send", k, "ping")
 	p.until(`[...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)

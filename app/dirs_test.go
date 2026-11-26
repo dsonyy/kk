@@ -203,3 +203,108 @@ func TestNewSessionInDirectory(t *testing.T) {
 	p.click(fmt.Sprintf(`document.querySelector('#panel-%s .queued-card button.link')`, queued))
 	p.until(fmt.Sprintf(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "alpha" && document.querySelector('#panel-%s')`, ids["Export invoices"]))
 }
+
+// hover moves the mouse over the middle of an element.
+func (p *page) hover(element string) {
+	p.t.Helper()
+	p.until(element)
+	var at struct{ X, Y float64 }
+	p.eval(fmt.Sprintf(`(() => { const r = %s.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`, element), &at)
+	p.call("Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": at.X, "y": at.Y})
+}
+
+func (p *page) width(element string) float64 {
+	p.t.Helper()
+	var w float64
+	p.eval(element+`.getBoundingClientRect().width`, &w)
+	return w
+}
+
+func TestHideDirectoryTab(t *testing.T) {
+	e := newEnv(t)
+	ids := e.dirSessions()
+	alpha, beta := filepath.Join(e.work, "alpha"), filepath.Join(e.work, "beta")
+	p := e.openPage(1600, 900)
+	tabOf := func(name string) string {
+		return fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .dirs .tab")].find((a) => a.textContent === %q)`, name)
+	}
+	p.until(`document.querySelectorAll("nav.tabs .dirs .tab").length === 3`)
+	if n := len(p.texts("nav.tabs .dirs .tab .dot")); n != 0 {
+		t.Fatalf("%d tabs carry a state icon", n)
+	}
+	// Every directory tab has a close button, All has none.
+	if n := len(p.texts("nav.tabs .dirs .tab .tab-close")); n != 2 {
+		t.Fatalf("%d close buttons, want 2", n)
+	}
+	p.until(tabOf("All") + ` && !` + tabOf("All") + `.querySelector(".tab-close")`)
+	// Neither the tab nor its close button changes the width of the tab on hover.
+	before := p.width(tabOf("alpha"))
+	p.hover(tabOf("alpha"))
+	p.shot("tab-hover")
+	p.hover(tabOf("alpha") + `.querySelector(".tab-close")`)
+	if after := p.width(tabOf("alpha")); after != before {
+		t.Fatalf("the tab is %.1f px wide on hover, %.1f px at rest", after, before)
+	}
+	p.shot("tab-close-hover")
+
+	// Closing the selected tab by keyboard goes to All and leaves the sessions running.
+	p.dirTab("alpha")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "alpha"`)
+	p.eval(tabOf("alpha")+`.querySelector(".tab-close").focus()`, nil)
+	p.shot("tab-close-focus")
+	p.press("Enter", 13, "\r")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "All" && !(` + tabOf("alpha") + `)`)
+	if !strings.HasPrefix(p.hash(), "#agents//") {
+		t.Fatalf("hash after hiding the selected tab: %s", p.hash())
+	}
+	if c := e.conv(ids["Export invoices"]); c.Closed {
+		t.Fatal("hiding the tab closed a session")
+	}
+	// Closing another tab stays where the user is; the tab itself is not picked.
+	p.click(tabOf("beta") + `.querySelector(".tab-close")`)
+	p.until(`!(` + tabOf("beta") + `)`)
+	// The inbox sessions may bring a tab of their own, so only alpha and beta are checked.
+	shown := func() bool {
+		got := p.texts("nav.tabs .dirs .tab")
+		return slices.Contains(got, "alpha") || slices.Contains(got, "beta")
+	}
+	if shown() {
+		t.Fatalf("tabs after hiding: %q", p.texts("nav.tabs .dirs .tab"))
+	}
+
+	// The tabs stay hidden across a reload, and More lists them.
+	p.call("Page.reload", nil)
+	p.until(`document.querySelector(".sidebar .tile")`)
+	if shown() {
+		t.Fatalf("tabs after a reload: %q", p.texts("nav.tabs .dirs .tab"))
+	}
+	var stored []string
+	p.eval(`JSON.parse(localStorage.getItem("kk.hiddenTabs"))`, &stored)
+	if !slices.Equal(stored, []string{alpha, beta}) {
+		t.Fatalf("kk.hiddenTabs: %q", stored)
+	}
+
+	// A hidden directory that needs the user marks its row and More, and keeps its tab hidden.
+	e.mustKK("send", ids["Rebuild the index"], "ask for permission")
+	e.waitFor("attention", ids["Rebuild the index"], func(c convView) bool { return c.Attention != "" })
+	p.until(`document.querySelector("nav.tabs .more-tab.attention")`)
+	p.click(`document.querySelector("nav.tabs .more-tab")`)
+	p.until(`document.querySelector(".dir-menu")`)
+	if got := p.texts(".dir-menu > *"); !strings.Contains(strings.Join(got, "|"), "Hidden tabs|alpha2|beta1|Only closed sessions|gamma1") {
+		t.Fatalf("More: %q", got)
+	}
+	p.until(fmt.Sprintf(`document.querySelector('.dir-menu .dir-item.attention[title=%q]')`, beta))
+	p.shot("more-hidden")
+	if shown() {
+		t.Fatalf("tabs while beta needs the user: %q", p.texts("nav.tabs .dirs .tab"))
+	}
+
+	// Picking a hidden directory in More brings its tab back.
+	p.click(fmt.Sprintf(`document.querySelector('.dir-menu .dir-item[title=%q]')`, alpha))
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "alpha"`)
+	p.eval(`JSON.parse(localStorage.getItem("kk.hiddenTabs"))`, &stored)
+	if !slices.Equal(stored, []string{beta}) {
+		t.Fatalf("kk.hiddenTabs after bringing alpha back: %q", stored)
+	}
+	p.shot("tab-back")
+}

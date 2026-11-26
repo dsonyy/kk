@@ -114,7 +114,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } }
 
 /* Every tab carries the line under the bar; the active tab drops it and takes the page color, so it flows into what is below. */
-.tabs { flex: none; display: flex; overflow-x: auto; scrollbar-width: none; background: var(--surface); }
+.tabs { flex: none; display: flex; overflow-x: auto; scrollbar-width: none; background: var(--surface); line-height: 20px; }
 .tabs::after { content: ""; flex: 1; border-bottom: 1px solid var(--line); }
 /* The top padding puts the larger text on the baseline of the tabs. */
 .tabs .logo { flex: none; padding: 7px 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--text-strong); font-size: 16px; font-weight: 300; line-height: 20px; }
@@ -130,6 +130,12 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tabs .tab:hover { color: var(--text-strong); }
 .tabs .dirs { flex: 0 1 auto; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; }
 .tabs .tab.unread { color: var(--text-strong); }
+.tabs .tab.attention { color: var(--warn-text); }
+/* The close button always takes its place, so a tab keeps its width on hover. */
+.tabs .tab.dir:has(.tab-close) { display: flex; align-items: center; gap: 6px; padding-right: 7px; }
+.tabs .tab-close { flex: none; display: flex; padding: 2px; border-color: transparent; background: none; color: var(--text-dim); }
+.tabs .tab-close .icon { width: 10px; height: 10px; }
+.tabs .tab-close:hover, .tabs .tab-close:focus-visible { border-color: var(--line-strong); color: var(--text-strong); }
 .tabs .tab.global { order: 1; border: 1px solid var(--line); border-right: 0; }
 .tabs .more { flex: none; display: flex; }
 .tabs .more-tab { display: flex; align-items: center; gap: 6px; }
@@ -372,6 +378,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 
 .composer { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: var(--gap); border-top: 1px solid var(--line); background: var(--surface); }
 .composer textarea { min-height: 38px; max-height: 40vh; scrollbar-width: none; }
+.composer textarea:placeholder-shown { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer button { min-height: 38px; }
 /* A chat is one centered column; the feed scrolls and the composer keeps its bar across the whole panel. */
 .conversation { --chat-width: 800px; }
@@ -397,12 +404,18 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .panel-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 1; }
 .panel-resize:hover, .panel-resize.dragging { background: var(--line-strong); }
 .side-panel .conv-head h1 { font-size: 14px; }
-.konduktor-pick { flex: 1 1 12em; min-width: 0; display: flex; align-items: center; gap: 6px; }
-.konduktor-pick .pin { margin: 0 0 0 -5px; }
-.konduktor-pick h1 { flex: 1; display: flex; }
+/* The title and the way back are items of the head, so the way back takes a row of its own under the title and actions. */
+.konduktor-pick { display: contents; }
+.konduktor-pick h1 { display: flex; }
 .konduktor-name { min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; color: var(--text-strong); font-size: 14px; }
-.konduktor-name .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: 12px; }
-.konduktor-name:hover .mono { color: var(--text); }
+.konduktor-name .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.konduktor-name .muted { flex: none; font-size: 12px; }
+.konduktor-name:hover .what { text-decoration: underline; text-underline-offset: 3px; }
+.konduktor-away { order: 1; flex: 0 0 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--gap); padding: 4px 4px 4px 8px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--text); font-size: 12px; }
+.konduktor-away .mono { font-size: 12px; }
+.side-panel .conv-head .meta { order: 2; }
+.dot.none { background: none; }
+.dir-menu .dir-item.attention .mono { color: var(--warn-text); }
 .konduktor-name .icon-chevron { flex: none; align-self: center; width: 9px; height: 9px; color: var(--text-dim); transform: rotate(90deg); }
 .dir-menu .dir-item > span:first-child { min-width: 0; display: flex; align-items: center; }
 .dir-menu .dir-item.on { background: var(--surface-2); color: var(--text-strong); }
