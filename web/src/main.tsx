@@ -88,6 +88,8 @@ function parsePanels(text: string): Panel[] {
   return out.map((p, i) => ({ ...p, pinned: p.pinned || i !== slot }));
 }
 
+localStorage.removeItem("kk.konduktorPin");
+
 function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
   const [filter, setFilter] = useFilter();
@@ -142,6 +144,7 @@ function App() {
   // Unpinning a panel makes it the reusable one, so the panel that held that place stays open as a pinned one.
   const pin = (id: string, on: boolean) => setOpen(placeRef.current.panels.map((p) => (p.id === id ? { id, pinned: on } : { ...p, pinned: p.pinned || !on })));
   const pick = (d: string) => {
+    setAway(undefined);
     const t = placeRef.current.tab;
     go({ tab: isView(t) ? t : lastView.current, dir: d });
   };
@@ -246,7 +249,21 @@ function App() {
   const inDir = (p: string) => sessions.filter((c) => c.project === p);
   const live = projects.filter((p) => scopes.includes(p) || inDir(p).some((c) => !c.closed));
   const konduktorOf = (d: string) => (konduktors ?? []).find((k) => (d ? k.scope === d : k.id === COORDINATOR));
-  const tabDirs = [...live, ...(dir && !live.includes(dir) ? [dir] : [])].sort((a, b) => byName(label(a), label(b)));
+  // A hidden tab stays in More, and coming back to its directory by any way brings it back.
+  const [hidden, setHidden] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.hiddenTabs") || "[]"));
+  const storeHidden = (next: string[]) => {
+    localStorage.setItem("kk.hiddenTabs", JSON.stringify(next));
+    setHidden(next);
+  };
+  const hideTab = (d: string) => {
+    if (d === placeRef.current.dir) go({ dir: "" });
+    storeHidden([...hidden, d]);
+  };
+  useEffect(() => {
+    if (hidden.includes(dir)) storeHidden(hidden.filter((d) => d !== dir));
+  }, [dir]);
+  const tabDirs = [...live, ...(dir && !live.includes(dir) ? [dir] : [])].filter((d) => d === dir || !hidden.includes(d)).sort((a, b) => byName(label(a), label(b)));
+  const hiddenLive = live.filter((d) => d !== dir && hidden.includes(d)).sort((a, b) => byName(label(a), label(b)));
   const finished = projects.filter((p) => !live.includes(p)).sort((a, b) => byActivity(inDir(a), inDir(b)));
   // Alt with a digit picks All and the directories after it.
   const order = useRef<string[]>([]);
@@ -289,21 +306,26 @@ function App() {
   if (dir) keys.sort((a, b) => Number(a.endsWith("\n")) - Number(b.endsWith("\n")));
 
   const [konduktor, setKonduktor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
-  const [konduktorPin, setKonduktorPin] = useState(() => localStorage.getItem("kk.konduktorPin") || "");
-  const pinKonduktor = (id: string) => {
-    localStorage.setItem("kk.konduktorPin", id);
-    setKonduktorPin(id);
-  };
-  const pinnedKonduktor = konduktors?.find((k) => k.id === konduktorPin);
-  const shownKonduktor = pinnedKonduktor ?? konduktorOf(dir);
+  // The panel shows the konduktor of the directory, or of the one picked in its menu until the directory changes.
+  const [away, setAway] = useState<string>();
+  useEffect(() => setAway(undefined), [dir]);
+  const panelDir = away ?? dir;
+  const shownKonduktor = konduktorOf(panelDir);
   reading.current = konduktor ? shownKonduktor?.id : undefined;
   useEffect(() => {
     if (reading.current) loadDetail(reading.current);
   }, [reading.current]);
   const konduktorName = (k: Conversation) => (k.id === COORDINATOR ? "main" : label(k.scope ?? ""));
   konduktorNames = new Map(konduktors && konduktors.length > 1 ? konduktors.map((k) => [k.id, k.id === COORDINATOR ? "main konduktor" : `konduktor ${konduktorName(k)}`]) : []);
-  const konduktorHead = (title: string) => (
-    <KonduktorPick list={konduktors ?? []} shown={shownKonduktor} name={konduktorName} title={title} pinned={!!pinnedKonduktor} onPick={pinKonduktor} />
+  const konduktorHead = (
+    <KonduktorPick
+      dirs={["", ...[...new Set([...projects, ...tabDirs])].sort((a, b) => byName(label(a), label(b)))]}
+      shown={panelDir}
+      of={konduktorOf}
+      label={label}
+      tab={away === undefined ? undefined : dir}
+      onPick={(d) => setAway(d === dir ? undefined : d)}
+    />
   );
 
   // An object, so that showing the same panel twice scrolls to it again.
@@ -332,10 +354,20 @@ function App() {
         <div class="dirs" ref={dirsRef}>
           <DirTab name="All" title="Every directory" list={sessions} konduktor={konduktorOf("")} on={isView(tab) && !dir} onPick={() => pick("")} />
           {tabDirs.map((d) => (
-            <DirTab key={d} name={label(d)} title={d} mono list={inDir(d)} konduktor={konduktorOf(d)} on={isView(tab) && d === dir} onPick={() => pick(d)} />
+            <DirTab key={d} name={label(d)} title={d} mono list={inDir(d)} konduktor={konduktorOf(d)} on={isView(tab) && d === dir} onPick={() => pick(d)} onClose={() => hideTab(d)} />
           ))}
         </div>
-        {projects.length > 0 && <MoreDirs live={[...live].sort((a, b) => byName(label(a), label(b)))} finished={finished} label={label} count={(d) => inDir(d)} onPick={pick} />}
+        {projects.length > 0 && (
+          <MoreDirs
+            live={live.filter((d) => !hiddenLive.includes(d)).sort((a, b) => byName(label(a), label(b)))}
+            hidden={hiddenLive}
+            finished={finished}
+            label={label}
+            count={(d) => inDir(d)}
+            konduktor={konduktorOf}
+            onPick={pick}
+          />
+        )}
         {globals.map((t) => (
           <a class={t === tab ? "tab global on" : "tab global"} onClick={() => go({ tab: t })}>
             {t}
@@ -456,16 +488,16 @@ function App() {
             <div class="conversation placeholder">konduktor is not running.</div>
           ) : shownKonduktor ? (
             details[shownKonduktor.id] ? (
-              <ConversationView c={details[shownKonduktor.id]} reload={() => loadDetail(shownKonduktor.id)} side head={konduktorHead(konduktorName(shownKonduktor))} />
+              <ConversationView c={details[shownKonduktor.id]} reload={() => loadDetail(shownKonduktor.id)} side head={konduktorHead} />
             ) : (
               <div class="conversation placeholder">Loading…</div>
             )
           ) : (
             <KonduktorStart
-              key={dir}
-              dir={dir}
-              name={label(dir)}
-              head={konduktorHead(label(dir))}
+              key={panelDir}
+              dir={panelDir}
+              name={label(panelDir)}
+              head={konduktorHead}
               onStarted={(k) => {
                 loadList();
                 loadDetail(k.id);
@@ -492,27 +524,52 @@ function App() {
   );
 }
 
-// A directory tab speaks for its sessions like a collapsed group: the one that needs the user first, then one at work,
-// then one konduktor holds.
-type DirTabProps = { name: string; title: string; mono?: boolean; list: Conversation[]; konduktor?: Conversation; on: boolean; onPick: () => void };
+// What a directory asks of the user: attention when one of its sessions needs them, unread when it or its konduktor wrote
+// something they have not read.
+function dirMark(list: Conversation[], konduktor?: Conversation) {
+  if (list.some((c) => !c.closed && c.attention && c.waiting_for !== "conductor")) return "attention";
+  return list.some((c) => c.unread) || konduktor?.unread ? "unread" : "";
+}
 
-// The konduktor of the directory marks the tab when it wrote something the user has not read.
-function DirTab({ name, title, mono, list, konduktor, on, onPick }: DirTabProps) {
+type DirTabProps = { name: string; title: string; mono?: boolean; list: Conversation[]; konduktor?: Conversation; on: boolean; onPick: () => void; onClose?: () => void };
+
+// The tooltip of a directory tab names the state of its loudest session, like a collapsed group.
+function DirTab({ name, title, mono, list, konduktor, on, onPick, onClose }: DirTabProps) {
   const loud = loudest(list);
-  const unread = list.some((c) => c.unread) || !!konduktor?.unread;
-  const cls = ["tab", "dir", on && "on", unread && "unread"];
+  const cls = ["tab", "dir", on && "on", dirMark(list, konduktor)];
   return (
-    <a class={cls.filter(Boolean).join(" ")} title={loud ? `${title}\n${stateLabel(loud)}` : title} onClick={onPick}>
-      {loud && <Dot c={loud} />}
+    <div class={cls.filter(Boolean).join(" ")} title={loud ? `${title}\n${stateLabel(loud)}` : title} onClick={onPick}>
       <span class={mono ? "mono" : undefined}>{name}</span>
-    </a>
+      {onClose && (
+        <button
+          type="button"
+          class="tab-close"
+          aria-label={`Hide the tab of ${name}`}
+          title="Hide this tab, it stays in More and its sessions keep running"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+        >
+          <Icon name="close" />
+        </button>
+      )}
+    </div>
   );
 }
 
-type MoreProps = { live: string[]; finished: string[]; label: (dir: string) => string; count: (dir: string) => Conversation[]; onPick: (dir: string) => void };
+type MoreProps = {
+  live: string[];
+  hidden: string[];
+  finished: string[];
+  label: (dir: string) => string;
+  count: (dir: string) => Conversation[];
+  konduktor: (dir: string) => Conversation | undefined;
+  onPick: (dir: string) => void;
+};
 
 // More lists every directory, so one whose tab is scrolled away or that has only closed sessions is a click away.
-function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
+function MoreDirs({ live, hidden, finished, label, count, konduktor, onPick }: MoreProps) {
   const [at, setAt] = useState<{ top: number; left: number }>();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -535,7 +592,7 @@ function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
       <button
         type="button"
         key={d}
-        class="dir-item"
+        class={["dir-item", hidden.includes(d) && dirMark(list, konduktor(d))].filter(Boolean).join(" ")}
         title={d}
         onClick={() => {
           setAt(undefined);
@@ -547,10 +604,13 @@ function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
       </button>
     );
   };
+  const marks = hidden.map((d) => dirMark(count(d), konduktor(d)));
+  const mark = marks.includes("attention") ? "attention" : marks.includes("unread") ? "unread" : "";
   return (
     <div class="more" ref={ref}>
       <a
-        class={at ? "tab more-tab on" : "tab more-tab"}
+        class={["tab", "more-tab", at && "on", mark].filter(Boolean).join(" ")}
+        title={mark === "attention" ? "A directory with a hidden tab needs you" : undefined}
         aria-expanded={!!at}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
@@ -563,6 +623,8 @@ function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
       {at && (
         <div class="dir-menu" style={{ top: `${at.top}px`, left: `${at.left}px` }}>
           {live.map((d) => item(d, false))}
+          {hidden.length > 0 && <div class="dir-menu-label">Hidden tabs</div>}
+          {hidden.map((d) => item(d, false))}
           {finished.length > 0 && <div class="dir-menu-label">Only closed sessions</div>}
           {finished.map((d) => item(d, true))}
         </div>
@@ -1275,7 +1337,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         onValue={setText}
         skills={skills}
         attachments={attachments}
-        placeholder={c.role === COORDINATOR ? "Message konduktor" : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
+        placeholder={c.role === COORDINATOR ? (c.scope ? `Message the konduktor of ${c.scope.replace(/\/+$/, "").split("/").pop()}` : "Message the main konduktor") : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
             e.preventDefault();
@@ -1312,10 +1374,21 @@ function CoordinatorPanel({ hidden, children }: { hidden: boolean; children: pre
   );
 }
 
-type PickProps = { list: Conversation[]; shown?: Conversation; name: (k: Conversation) => string; title: string; pinned: boolean; onPick: (id: string) => void };
+type PickProps = {
+  dirs: string[];
+  shown: string;
+  of: (dir: string) => Conversation | undefined;
+  label: (dir: string) => string;
+  tab?: string;
+  onPick: (dir: string) => void;
+};
 
-// The head of the konduktor panel: the konduktor shown, a menu of every one, and the pin that keeps one while the directory changes.
-function KonduktorPick({ list, shown, name, title, pinned, onPick }: PickProps) {
+// Which konduktor is shown, in plain words: the main one, or the one of a directory.
+const konduktorTitle = (dir: string, label: (dir: string) => string) => (dir ? <>konduktor of <span class="mono">{label(dir)}</span></> : "main konduktor");
+
+// The head of the konduktor panel: which konduktor it shows, a menu of main and every directory, and while the menu's
+// choice differs from the tab, the way back to the tab's konduktor.
+function KonduktorPick({ dirs, shown, of, label, tab, onPick }: PickProps) {
   const [at, setAt] = useState<{ top: number; left: number }>();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1330,54 +1403,55 @@ function KonduktorPick({ list, shown, name, title, pinned, onPick }: PickProps) 
       document.removeEventListener("keydown", close);
     };
   }, [at]);
+  const k = of(shown);
   return (
     <div class="konduktor-pick" ref={ref}>
-      <button
-        type="button"
-        class={pinned ? "pin on" : "pin"}
-        aria-label={pinned ? "Unpin" : "Pin"}
-        title={pinned ? "Unpin: show the konduktor of the directory you are in" : "Pin: keep this konduktor while you move between directories"}
-        disabled={!shown}
-        onClick={() => shown && onPick(pinned ? "" : shown.id)}
-      >
-        <Icon name="pin" />
-      </button>
       <h1>
         <button
           type="button"
           class="konduktor-name"
           aria-expanded={!!at}
-          title={title}
+          title={shown ? `${shown}\nPick another konduktor` : "Every directory without its own konduktor\nPick another konduktor"}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             setAt(at ? undefined : { top: r.bottom + 2, left: Math.max(0, Math.min(r.left, window.innerWidth - 320)) });
           }}
         >
-          konduktor
-          <span class="mono">{title}</span>
+          <span class="what">{konduktorTitle(shown, label)}</span>
+          {!shown && <span class="muted">for All</span>}
+          {!k && <span class="muted">not started</span>}
           <Icon name="chevron" />
         </button>
       </h1>
+      {tab !== undefined && (
+        <div class="konduktor-away">
+          <span>Picked in the menu, not the {tab ? <>konduktor of <span class="mono">{label(tab)}</span></> : "main konduktor of All"}.</span>
+          <Button label={`Back to ${tab ? label(tab) : "main"}`} class="small" onClick={() => onPick(tab)} />
+        </div>
+      )}
       {at && (
         <div class="dir-menu" style={{ top: `${at.top}px`, left: `${at.left}px` }}>
-          {list.map((k) => (
-            <button
-              type="button"
-              key={k.id}
-              class={["dir-item", k.unread && "unread", k.id === shown?.id && "on"].filter(Boolean).join(" ")}
-              title={k.scope || "Every directory without its own konduktor"}
-              onClick={() => {
-                setAt(undefined);
-                onPick(k.id);
-              }}
-            >
-              <span>
-                <Dot c={k} />
-                <span class="mono">{name(k)}</span>
-              </span>
-              <span class="count">{stateLabel(k)}</span>
-            </button>
-          ))}
+          {dirs.map((d) => {
+            const k = of(d);
+            return (
+              <button
+                type="button"
+                key={d}
+                class={["dir-item", k?.unread && "unread", d === shown && "on"].filter(Boolean).join(" ")}
+                title={d || "Every directory without its own konduktor"}
+                onClick={() => {
+                  setAt(undefined);
+                  onPick(d);
+                }}
+              >
+                <span>
+                  {k ? <Dot c={k} /> : <i class="dot none" />}
+                  <span class="mono">{d ? label(d) : "main"}</span>
+                </span>
+                <span class="count">{k ? stateLabel(k) : "not started"}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
