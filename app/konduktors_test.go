@@ -243,12 +243,13 @@ func TestKonduktorPanel(t *testing.T) {
 	p := e.openPage(1600, 900)
 	head := `document.querySelector(".side-panel .konduktor-name")?.textContent`
 	away := `document.querySelector(".side-panel .konduktor-away")`
+	notStarted := `(document.querySelector(".side-panel .konduktor-pick h1 .muted")?.textContent === "not started")`
 	pickRow := func(name string) {
 		p.click(`document.querySelector(".side-panel .konduktor-name")`)
 		p.click(fmt.Sprintf(`[...document.querySelectorAll(".dir-menu .dir-item")].find((b) => b.querySelector(".mono").textContent === %q)`, name))
 	}
 	// All shows the main konduktor.
-	p.until(head + ` === "main konduktorfor All"`)
+	p.until(head + ` === "All"`)
 	if n := len(p.texts(".side-panel .pin")); n != 0 {
 		t.Fatal("the konduktor panel has a pin")
 	}
@@ -257,7 +258,7 @@ func TestKonduktorPanel(t *testing.T) {
 	// A directory without a konduktor offers to start one with the first message.
 	p.dirTab("alpha")
 	p.until(`document.querySelector(".side-panel .konduktor-hint")?.textContent === "The konduktor of alpha starts with your first message."`)
-	p.until(head + ` === "konduktor of alphanot started"`)
+	p.until(head + ` === "alpha" && ` + notStarted)
 	p.eval(`(() => {
 		const area = document.querySelector(".side-panel textarea")
 		Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(area, "hello alpha")
@@ -272,19 +273,19 @@ func TestKonduktorPanel(t *testing.T) {
 		t.Fatalf("konduktors: %+v", ks)
 	}
 	k := ks[1].ID
-	p.until(head + ` === "konduktor of alpha"`)
+	p.until(head + ` === "alpha" && !` + notStarted)
 	p.shot("konduktor-alpha")
 
 	// It follows the tab.
 	p.dirTab("beta")
-	p.until(head + ` === "konduktor of betanot started" && document.querySelector(".side-panel .konduktor-hint")`)
+	p.until(head + ` === "beta" && ` + notStarted + ` && document.querySelector(".side-panel .konduktor-hint")`)
 	p.dirTab("All")
-	p.until(head + ` === "main konduktorfor All" && !` + away)
+	p.until(head + ` === "All" && !` + away)
 
 	// The menu lists main and every directory, also those whose konduktor has not started: kk is the one of the inbox sessions.
 	p.click(`document.querySelector(".side-panel .konduktor-name")`)
 	p.until(`document.querySelectorAll(".dir-menu .dir-item").length > 0`)
-	if got := p.texts(".dir-menu .dir-item"); !slices.Equal(got, []string{"mainYour turn", "alphaYour turn", "betanot started", "gammanot started", "kknot started"}) {
+	if got := p.texts(".dir-menu .dir-item"); !slices.Equal(got, []string{"AllYour turn", "alphaYour turn", "betanot started", "gammanot started", "kknot started"}) {
 		t.Fatalf("konduktor menu: %q", got)
 	}
 	p.shot("konduktor-menu")
@@ -293,20 +294,20 @@ func TestKonduktorPanel(t *testing.T) {
 
 	// A konduktor picked in the menu holds until the tab changes, and the head offers the way back.
 	pickRow("alpha")
-	p.until(head + ` === "konduktor of alpha" && ` + away + `?.textContent.includes("All")`)
+	p.until(head + ` === "alpha" && !` + notStarted + ` && ` + away + `?.textContent === "Showing alpha, not All.Back to All"`)
 	p.shot("konduktor-away")
 	p.dirTab("beta")
-	p.until(head + ` === "konduktor of betanot started" && !` + away)
+	p.until(head + ` === "beta" && ` + notStarted + ` && !` + away)
 	pickRow("alpha")
-	p.until(head + ` === "konduktor of alpha"`)
+	p.until(head + ` === "alpha" && !` + notStarted)
 	p.click(`[...document.querySelectorAll(".side-panel .konduktor-away button")].find((b) => b.textContent === "Back to beta")`)
-	p.until(head + ` === "konduktor of betanot started" && !` + away)
+	p.until(head + ` === "beta" && ` + notStarted + ` && !` + away)
 	// Picking the tab again also ends it, and a konduktor picked before it starts is the one a message starts.
 	pickRow("gamma")
-	p.until(head + ` === "konduktor of gammanot started" && document.querySelector(".side-panel .konduktor-hint")?.textContent.includes("gamma")`)
+	p.until(head + ` === "gamma" && ` + notStarted + ` && document.querySelector(".side-panel .konduktor-hint")?.textContent.includes("gamma")`)
 	p.shot("konduktor-away-start")
 	p.dirTab("beta")
-	p.until(head + ` === "konduktor of betanot started" && !` + away)
+	p.until(head + ` === "beta" && ` + notStarted + ` && !` + away)
 
 	// A konduktor that wrote while another is shown marks its directory.
 	p.until(`![...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
