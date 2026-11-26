@@ -881,3 +881,109 @@ func TestCardTokensLeaveOutCacheReads(t *testing.T) {
 		}
 	}
 }
+
+// TestSendingKeepsTheScrollPosition sends in every way from a chat scrolled up to an earlier message, in a session and in
+// the konduktor panel: the feed must not move by a pixel, also while the message and the answer arrive. From the bottom,
+// the feed keeps following the answer.
+func TestSendingKeepsTheScrollPosition(t *testing.T) {
+	e := newEnv(t, "KK_COORDINATOR=1")
+	skill := filepath.Join(filepath.Dir(e.home), ".claude/skills/alpha")
+	os.MkdirAll(skill, 0o755)
+	os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("---\nname: alpha\ndescription: A skill\n---\nbody\n"), 0o644)
+	var lines []string
+	for i := range 80 {
+		lines = append(lines, fmt.Sprintf("Line %d of an earlier message.", i))
+	}
+	long := strings.Join(lines, "\n\n")
+	id := e.mustKK("new", "claude", "-C", e.work, long)
+	e.waitFor("answer", id, turnEnded)
+	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
+	e.mustKK("send", coordinatorID, long)
+	e.waitFor("konduktor answer", coordinatorID, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: "+long) })
+
+	p := e.openPage(1600, 900)
+	p.openSession(id)
+	for _, panel := range []struct{ name, root string }{
+		{"session", fmt.Sprintf(`document.getElementById("panel-%s")`, id)},
+		{"konduktor", `document.querySelector(".side-panel .conversation")`},
+	} {
+		feed := panel.root + `.querySelector(".feed")`
+		area := panel.root + `.querySelector(".composer textarea")`
+		if panel.name == "konduktor" {
+			// The panel of the All tab holds the main konduktor.
+			p.click(`document.querySelector('nav.tabs [title^="Every directory"]')`)
+		}
+		p.until(feed + `?.scrollHeight > 3 * ` + feed + `?.clientHeight`)
+		typeText := func(text string) {
+			t.Helper()
+			p.eval(area+".focus()", nil)
+			p.call("Input.insertText", map[string]any{"text": text})
+		}
+		sends := []struct {
+			name, echo string
+			send       func()
+		}{
+			{"the Send button", "echo: by button", func() {
+				typeText("by button")
+				p.tap(panel.root + `.querySelector(".composer button.primary")`)
+			}},
+			{"the Enter key", "echo: by key", func() {
+				typeText("by key")
+				p.press("Enter", 13, "\r")
+			}},
+			{"an attachment", "echo: with a file", func() {
+				typeText("with a file")
+				p.eval(area+`.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: (() => {
+					const d = new DataTransfer(); d.items.add(new File(["notes"], "notes.txt", { type: "text/plain" })); return d })() }))`, nil)
+				p.until(panel.root + `.querySelector(".composer .attachments li") && !` + panel.root + `.querySelector(".composer button.primary").disabled`)
+				p.press("Enter", 13, "\r")
+			}},
+			{"a slash command", "echo: /alpha now", func() {
+				typeText("/alph")
+				p.until(panel.root + `.querySelector(".composer .suggest li")`)
+				p.press("Enter", 13, "\r")
+				p.until(area + `.value === "/alpha "`)
+				typeText("now")
+				p.press("Enter", 13, "\r")
+			}},
+		}
+		answered := func(echo string) {
+			t.Helper()
+			p.until(fmt.Sprintf(`[...%s.querySelectorAll(".msg.assistant")].some((m) => m.textContent.includes(%q)) && !%s.querySelector(".busy, .msg.sending")`, feed, echo, feed))
+			// The answer is revealed word by word after it arrives.
+			time.Sleep(1500 * time.Millisecond)
+		}
+		for i, s := range sends {
+			at := 200 + 100*i
+			p.eval(fmt.Sprintf(`%s.scrollTop = %d`, feed, at), nil)
+			p.until(fmt.Sprintf(`%s.scrollTop === %d`, feed, at))
+			time.Sleep(100 * time.Millisecond)
+			p.eval(fmt.Sprintf(`(() => {
+				const f = %s, seen = window.seen = [f.scrollTop]
+				const tick = () => { seen.push(f.scrollTop); window.frame = requestAnimationFrame(tick) }
+				tick()
+				f.addEventListener("scroll", () => seen.push(f.scrollTop))
+			})()`, feed), nil)
+			s.send()
+			answered(s.echo)
+			var seen []float64
+			p.eval(`cancelAnimationFrame(window.frame), window.seen`, &seen)
+			for _, top := range seen {
+				if top != float64(at) {
+					t.Errorf("%s, sent with %s: the feed moved from %d to %v", panel.name, s.name, at, top)
+					break
+				}
+			}
+		}
+		p.eval(fmt.Sprintf(`%s.scrollTop = %s.scrollHeight`, feed, feed), nil)
+		time.Sleep(100 * time.Millisecond)
+		typeText("at the bottom")
+		p.press("Enter", 13, "\r")
+		answered("echo: at the bottom")
+		var gap float64
+		p.eval(fmt.Sprintf(`(() => { const f = %s; return f.scrollHeight - f.scrollTop - f.clientHeight })()`, feed), &gap)
+		if gap > 1 {
+			t.Errorf("%s: sent from the bottom, the feed stopped %v px above the answer", panel.name, gap)
+		}
+	}
+}
