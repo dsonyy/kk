@@ -1705,7 +1705,7 @@ function NewSession({ initial, dir: here, onClose, onCreated }: { initial: strin
           <div class="row">
             <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />
             <Button label="Cancel" onClick={onClose} />
-            <Button label={resume ? "Resume" : "Start"} icon="play" class="primary" type="submit" disabled={blocked} />
+            <Button label={resume ? (busy ? "Resuming" : "Resume") : busy ? "Starting" : "Start"} icon="play" class="primary" type="submit" disabled={blocked} />
           </div>
           <h1>Earlier sessions</h1>
           <input placeholder={`Filter ${past.length} earlier ${h?.label ?? harness} sessions`} value={filter} onInput={(e) => setFilter(e.currentTarget.value)} />
@@ -1733,7 +1733,9 @@ function NewSession({ initial, dir: here, onClose, onCreated }: { initial: strin
                     </span>
                     <span>Last {when(p.ended)}</span>
                   </div>
-                  {resume?.id === p.id && <Button label="Resume this session" icon="play" class="small primary" type="submit" disabled={blocked} />}
+                  {resume?.id === p.id && (
+                    <Button label={busy ? "Resuming" : "Resume this session"} icon="play" class="small primary" type="submit" disabled={blocked} onClick={(e) => e.stopPropagation()} />
+                  )}
                 </li>
               ))}
           </ul>

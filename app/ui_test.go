@@ -1112,3 +1112,105 @@ func TestSendingKeepsTheScrollPosition(t *testing.T) {
 		}
 	}
 }
+
+func TestResumeEarlierSessionFromItsTile(t *testing.T) {
+	e := newEnv(t)
+	project := filepath.Join(filepath.Dir(e.home), ".claude", "projects", "-work")
+	os.MkdirAll(project, 0o755)
+	write := func(id, title string, messages int) string {
+		var b strings.Builder
+		for i := range messages / 2 {
+			fmt.Fprintf(&b, `{"type":"user","timestamp":"2026-11-20T10:00:00Z","cwd":%q,"message":{"content":"question %d"}}`+"\n", e.work, i)
+			fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-11-20T10:30:00Z","message":{"content":[{"type":"text","text":"answer %d"}]}}`+"\n", i)
+		}
+		fmt.Fprintf(&b, `{"type":"ai-title","aiTitle":%q}`+"\n", title)
+		path := filepath.Join(project, id+".jsonl")
+		os.WriteFile(path, []byte(b.String()), 0o644)
+		return path
+	}
+	large, gone, typed := "11111111-2222-4333-8444-000000000001", "11111111-2222-4333-8444-000000000002", "11111111-2222-4333-8444-000000000003"
+	write(large, "Large session", 800)
+	missing := write(gone, "Gone session", 2)
+	write(typed, "Typed session", 2)
+
+	p := e.openPage(1600, 1100)
+	tile := func(title string) string {
+		return fmt.Sprintf(`[...document.querySelectorAll(".past .tile")].find((t) => t.querySelector(".title").textContent === %q)`, title)
+	}
+	button := func(title string) string {
+		return tile(title) + `?.querySelector("button")`
+	}
+	open := func() {
+		t.Helper()
+		p.click(`document.querySelector(".sidebar-head > button")`)
+		p.until(`document.querySelectorAll(".past .tile").length >= 1`)
+	}
+	resumed := func(session string) {
+		t.Helper()
+		p.until(`!document.querySelector(".new-session")`)
+		var id string
+		for _, c := range e.list() {
+			if c.Session == session {
+				id = c.ID
+			}
+		}
+		if id == "" {
+			t.Fatalf("session %s was not resumed", session)
+		}
+		p.until(fmt.Sprintf(`document.querySelector(".sidebar .tile[data-chain='%s']") && location.hash.includes(%q)`, id, id))
+	}
+	hold := func() {
+		p.eval(`(() => {
+			window.release = null
+			const fetch = window.held ??= window.fetch
+			window.fetch = (url, opts) => url === "/api/conversations" && opts?.method === "POST" ? new Promise((r) => (window.release = r)).then(() => fetch(url, opts)) : fetch(url, opts)
+		})()`, nil)
+	}
+	working := func(title string) {
+		t.Helper()
+		p.until(`window.release`)
+		var got struct {
+			On       bool
+			Disabled bool
+			Label    string
+		}
+		p.eval(fmt.Sprintf(`(() => { const t = %s, b = t?.querySelector("button"); return { on: !!t?.classList.contains("on"), disabled: !!b?.disabled, label: b?.getAttribute("aria-label") } })()`, tile(title)), &got)
+		if !got.On || !got.Disabled || got.Label != "Resuming" {
+			t.Errorf("%s while the request runs: %+v", title, got)
+		}
+		p.shot("resuming " + title)
+		p.eval(`window.release()`, nil)
+	}
+
+	// A session that is gone by the time of the click says so and keeps the window open.
+	open()
+	p.tap(tile("Gone session"))
+	os.Remove(missing)
+	p.tap(button("Gone session"))
+	p.until(`document.getElementById("flash")?.textContent.includes("no claude session")`)
+	var still bool
+	p.eval(`!!(`+tile("Gone session")+`?.classList.contains("on") && document.querySelector(".new-session"))`, &still)
+	if !still {
+		t.Errorf("a failed resume closed the window or cleared the selection")
+	}
+	p.shot("resume failed")
+	p.click(`[...document.querySelectorAll(".new-session button")].find((b) => b.getAttribute("aria-label") === "Cancel")`)
+
+	// A mouse click on the button of a large session resumes it.
+	open()
+	hold()
+	p.tap(tile("Large session"))
+	p.tap(button("Large session"))
+	working("Large session")
+	resumed(large)
+	p.shot("resumed")
+
+	// Enter on the button does the same.
+	open()
+	hold()
+	p.tap(tile("Typed session"))
+	p.eval(button("Typed session")+`.focus()`, nil)
+	p.press("Enter", 13, "\r")
+	working("Typed session")
+	resumed(typed)
+}
