@@ -150,6 +150,10 @@ func (s *Server) handleSchedule(r *http.Request) (any, error) {
 	if c.Closed {
 		return nil, fail(409, "the session is closed")
 	}
+	// A run would start a queued session ahead of its chain, without its prepared prompt.
+	if c.Status == statusQueued {
+		return nil, fail(409, "the session is queued, start it first")
+	}
 	sc := Schedule{Prompt: strings.TrimSpace(in.Prompt), Since: time.Now()}
 	for _, d := range in.Days {
 		if d < 0 || d > 6 {

@@ -57,6 +57,10 @@ type Conversation struct {
 	Schedule *Schedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
 	// LastRun is when the schedule last gave the agent its prompt.
 	LastRun time.Time `yaml:"last_run,omitempty" json:"last_run,omitzero"`
+	// After is the conversation this one follows in a chain. A queued conversation starts only once it has finished.
+	After string `yaml:"after,omitempty" json:"after,omitempty"`
+	// Worktree asks for a worktree of Dir when a queued conversation starts.
+	Worktree bool `yaml:"worktree,omitempty" json:"worktree,omitempty"`
 }
 
 const (
@@ -67,6 +71,8 @@ const (
 	// the next turn by itself when the task ends, so nobody has to act.
 	statusBackground = "background"
 	statusExited     = "exited"
+	// statusQueued is a conversation prepared with its prompt that waits for kk start. No agent runs yet.
+	statusQueued = "queued"
 )
 
 const (
@@ -252,6 +258,9 @@ func logChange(old, c *Conversation) {
 	}
 	if (old.Schedule == nil) != (c.Schedule == nil) {
 		log.Printf("conversation %s: schedule %s", c.ID, map[bool]string{true: "set", false: "removed"}[c.Schedule != nil])
+	}
+	if old.After != c.After {
+		log.Printf("conversation %s: after %s", c.ID, c.After)
 	}
 	if old.Session != c.Session && c.Session != "" {
 		log.Printf("conversation %s: session %s", c.ID, c.Session)

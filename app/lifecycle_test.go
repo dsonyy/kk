@@ -160,3 +160,30 @@ func TestScheduledSession(t *testing.T) {
 		t.Fatalf("closing kept the schedule: %+v", c.Schedule)
 	}
 }
+
+// A queued session never sleeps and cannot be scheduled; a scheduled run of its predecessor leaves it queued for the conductor's handoff.
+func TestScheduleAndSleepInChain(t *testing.T) {
+	e := newCoordinatorEnv(t, "KK_SLEEP_AFTER=2s")
+	pred := e.asConductor("new", "claude", "-C", e.work, "hello")
+	e.waitFor("predecessor idle", pred, func(c convView) bool { return c.Status == statusIdle })
+	next := e.asConductor("new", "claude", "-C", e.work, "-after", pred, "Second step")
+	if code, _ := e.schedule(next, Schedule{Days: []int{0, 1, 2, 3, 4, 5, 6}, Times: []string{"09:00"}, Prompt: "x"}); code != 409 {
+		t.Fatalf("scheduled a queued session: %d", code)
+	}
+
+	e.soon(pred, "nightly check", 2*time.Second)
+	e.waitFor("the scheduled run", pred, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: nightly check") })
+	e.waitNotified(pred, "queued after it: "+next)
+	e.waitFor("the predecessor asleep", pred, func(c convView) bool { return c.Sleeping })
+	time.Sleep(3 * time.Second)
+	if c := e.conv(next); c.Status != statusQueued || c.Sleeping {
+		t.Fatalf("the queued session: %s, sleeping %v", c.Status, c.Sleeping)
+	}
+	if n := countLines(e.notifications(), pred, "exited without"); n != 0 {
+		t.Fatalf("the conductor heard of the sleep: %s", strings.Join(e.notifications(), "\n---\n"))
+	}
+	e.asConductor("start", next, "the nightly build is green")
+	e.waitFor("the successor's answer", next, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindUser, "Second step\n\nHandoff from the session before this one:\n\nthe nightly build is green")
+	})
+}

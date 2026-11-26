@@ -27,9 +27,11 @@ const usage = `kk - web conductor for coding agents in tmux
   kk url                      print the web address
   kk ls                       list conversations
   kk show <id> [-n N]         show the last N events of a conversation
-  kk new <harness> [-m model] [-C dir] [-w] [-g group] <prompt>
+  kk new <harness> [-m model] [-C dir] [-w] [-g group] [-after id] <prompt>
                               start an agent; -w gives it its own git worktree and branch,
-                              -g puts it in a feature group instead of letting kk decide
+                              -g puts it in a feature group instead of letting kk decide,
+                              -after queues it behind another conversation until kk start
+  kk start <id> [handoff|-]   start a queued conversation, the handoff added to its prompt
   kk group                    list the feature groups of every project
   kk group <id> <name>        move a conversation to a feature group
   kk send <id> <text|->       type a message into the agent
@@ -216,7 +218,11 @@ func runCLI(cmd string, args []string) error {
 			if model == "" {
 				model = "default"
 			}
-			fmt.Printf("%s  %-15s  %-9s  %-6s  %-14s  %s  %s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title)
+			after := ""
+			if c.After != "" {
+				after = "  (after " + c.After + ")"
+			}
+			fmt.Printf("%s  %-15s  %-9s  %-6s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
 		}
 	case "show":
 		if err := need(1); err != nil {
@@ -238,6 +244,12 @@ func runCLI(cmd string, args []string) error {
 		}
 		if c.Escalation != "" {
 			fmt.Printf("Escalated to the user: %s\n", c.Escalation)
+		}
+		if c.After != "" {
+			fmt.Printf("After %s\n", c.After)
+		}
+		if c.Status == statusQueued {
+			fmt.Printf("Queued with the prompt:\n%s\n", indent(c.Prompt))
 		}
 		events := c.Events
 		if len(events) > *n {
@@ -264,6 +276,7 @@ func runCLI(cmd string, args []string) error {
 		dir := fs.String("C", ".", "directory")
 		worktree := fs.Bool("w", false, "start in a new git worktree on its own branch")
 		group := fs.String("g", "", "feature group")
+		after := fs.String("after", "", "conversation to queue behind")
 		if err := need(1); err != nil {
 			return err
 		}
@@ -272,7 +285,7 @@ func runCLI(cmd string, args []string) error {
 		}
 		d, _ := filepath.Abs(*dir)
 		var c convView
-		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree, "group": *group}, &c); err != nil {
+		if err := call("POST", "/api/conversations", map[string]any{"harness": args[0], "model": *model, "dir": d, "prompt": strings.Join(fs.Args(), " "), "worktree": *worktree, "group": *group, "after": *after}, &c); err != nil {
 			return err
 		}
 		fmt.Println(c.ID)
@@ -318,6 +331,16 @@ func runCLI(cmd string, args []string) error {
 			return err
 		}
 		return call("POST", "/api/conversations/"+args[0]+"/keys", map[string][]string{"keys": args[1:]}, nil)
+	case "start":
+		if err := need(1); err != nil {
+			return err
+		}
+		handoff := strings.Join(args[1:], " ")
+		if handoff == "-" {
+			data, _ := io.ReadAll(os.Stdin)
+			handoff = string(data)
+		}
+		return call("POST", "/api/conversations/"+args[0]+"/start", map[string]string{"handoff": handoff}, nil)
 	case "resume", "close", "interrupt", "stop", "reset":
 		if err := need(1); err != nil {
 			return err

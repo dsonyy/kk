@@ -61,7 +61,7 @@ func actions(c Conversation) []string {
 	if ok && (c.Status == statusIdle || c.Status == statusBackground) && c.Attention == "" {
 		out = append(out, "reset")
 	}
-	if c.Status != statusExited {
+	if c.Status != statusExited && c.Status != statusQueued {
 		out = append(out, "stop")
 	}
 	return out

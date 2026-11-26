@@ -12,6 +12,7 @@ const states: Record<string, (c: Conversation) => boolean> = {
   "Conductor's turn": (c) => !c.closed && c.waiting_for === "conductor",
   "Action required": (c) => !c.closed && !!c.attention,
   Idle: (c) => !c.closed && c.status === "idle",
+  Queued: (c) => !c.closed && c.status === "queued",
   Exited: (c) => !c.closed && c.status === "exited" && !c.sleeping,
   Sleeping: (c) => !c.closed && !!c.sleeping,
   Scheduled: (c) => !!c.schedule,
@@ -69,12 +70,13 @@ export const byActivity = (a: Conversation[], b: Conversation[]) => Number(inPro
 const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
 export const byName = (a: string, b: string) => collator.compare(a, b);
 
-// Needs action first, then the user's turn, at work, at work in the background, the conductor's turn, exited, sleeping and closed.
+// Needs action first, then the user's turn, at work, at work in the background, the conductor's turn, queued, exited, sleeping and closed.
 function stateRank(c: Conversation) {
-  if (c.closed) return 7;
-  if (c.sleeping) return 6;
+  if (c.closed) return 8;
+  if (c.sleeping) return 7;
   if (c.attention || c.run_done) return 0;
-  if (c.status === "exited") return 5;
+  if (c.status === "exited") return 6;
+  if (c.status === "queued") return 5;
   if (c.status === "working" || c.status === "starting") return 2;
   if (c.status === "background") return 3;
   return c.waiting_for === "conductor" ? 4 : 1;
