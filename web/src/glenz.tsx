@@ -98,15 +98,15 @@ function size(canvas: HTMLCanvasElement) {
   return { w, h, dpr, floor: (canvas.nextElementSibling as HTMLElement).offsetTop };
 }
 
-// The face colour: the dark tone takes a little of the light one where it faces the light, so it still reads on a near
-// black background.
+// The face colour: light faces stay near white and dark faces near black, so the checker of the faces shows at a glance. The
+// dark tone takes a little of the light one where it faces the light, so it still reads on a near black background.
 function shade(style: Style, tone: number, n: V): V {
   const lit = Math.max(0, -(n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]));
-  const f = tone === 0 ? 0.6 + 0.4 * lit : 0.1 + 0.25 * lit;
+  const f = tone === 0 ? 0.92 + 0.08 * lit : 0.03 + 0.12 * lit;
   return style.dark.map((c, i) => c + (style.light[i] - c) * f) as V;
 }
 
-const fillAlpha = (tone: number, front: boolean) => (tone === 0 ? (front ? 0.72 : 0.32) : front ? 0.5 : 0.35);
+const fillAlpha = (tone: number, front: boolean) => (tone === 0 ? (front ? 0.95 : 0.3) : front ? 0.9 : 0.35);
 const edgeAlpha = (front: boolean) => (front ? 0.4 : 0.1);
 
 function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
@@ -234,8 +234,8 @@ void main() {
   }
   bool front = vKind.y > 0.5;
   float lit = max(0.0, -dot(vNormal, lightDir));
-  vec3 c = mix(dark, light, vKind.x < 0.5 ? 0.6 + 0.4 * lit : 0.1 + 0.25 * lit);
-  float a = vKind.x < 0.5 ? (front ? 0.72 : 0.32) : (front ? 0.5 : 0.35);
+  vec3 c = mix(dark, light, vKind.x < 0.5 ? 0.92 + 0.08 * lit : 0.03 + 0.12 * lit);
+  float a = vKind.x < 0.5 ? (front ? 0.95 : 0.3) : (front ? 0.9 : 0.35);
   color = vec4(c * a, a);
   vec3 near = smoothstep(vec3(0), fwidth(vBary) * 1.5, vBary);
   float e = (1.0 - min(min(near.x, near.y), near.z)) * (front ? 0.4 : 0.1);
@@ -248,7 +248,7 @@ void main() {
     vec2 uv = anchor + ray.xy * reach + vRot.xy * spread;
     float fresnel = 0.75 + 0.25 * pow(1.0 - abs(dot(view, vNormal)), 2.0);
     float m = smoothstep(0.12, 0.55, texture(page, uv).r);
-    color = mix(color, vec4(1), m * 0.85 * fresnel);
+    color = mix(color, vec4(1), m * 0.3 * fresnel);
   }
 }`;
 
