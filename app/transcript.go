@@ -24,7 +24,9 @@ type Event struct {
 	Failed bool   `json:"failed,omitempty"`
 	// Attachments are the files of a user message, filled in when the conversation is served.
 	Attachments []Attachment `json:"attachments,omitempty"`
-	Time        time.Time    `json:"time"`
+	// Images are the local pictures the text names, filled in when the conversation is served.
+	Images []Attachment `json:"images,omitempty"`
+	Time   time.Time    `json:"time"`
 }
 
 const (
