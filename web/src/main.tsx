@@ -783,7 +783,7 @@ function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: 
           </>
         )}
       </div>
-      <AgentsFold c={c} n={chains.folded.get(c.id)} />
+      <AgentsFold c={c} hidden={chains.folded.get(c.id)} />
     </li>
   );
 }
@@ -1151,7 +1151,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, 
             </span>
             {sub && <span title={usageTitle(sub.usage, c.harness)}>{usageLabel(sub.usage)}</span>}
             {sub?.branch && (
-              <span class="mono" title={sub.worktree}>
+              <span class="branch mono" title={sub.worktree}>
                 <Icon name="worktree" />
                 {sub.branch}
               </span>

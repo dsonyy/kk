@@ -285,8 +285,8 @@ type agentRow struct {
 }
 
 // agentTree orders subagents as a tree, each below the one that started it. Unless all is set, it keeps only the
-// running ones and those that started a running one, and counts the others.
-func agentTree(list []subagentView, all bool) ([]agentRow, int) {
+// running ones, the failed ones while their session is open, and those that started one of these, and returns the others.
+func agentTree(list []subagentView, all, closed bool) ([]agentRow, []subagentView) {
 	kids := map[string][]subagentView{}
 	for _, a := range list {
 		parent := a.Parent
@@ -297,7 +297,7 @@ func agentTree(list []subagentView, all bool) ([]agentRow, int) {
 	}
 	var shown func(a subagentView) bool
 	shown = func(a subagentView) bool {
-		return all || a.State == agentRunning || slices.ContainsFunc(kids[a.ID], shown)
+		return all || a.State == agentRunning || a.State == agentFailed && !closed || slices.ContainsFunc(kids[a.ID], shown)
 	}
 	var out []agentRow
 	var walk func(parent string, depth int)
@@ -310,12 +310,29 @@ func agentTree(list []subagentView, all bool) ([]agentRow, int) {
 		}
 	}
 	walk("", 0)
-	return out, len(list) - len(out)
+	var folded []subagentView
+	for _, a := range list {
+		if !slices.ContainsFunc(out, func(r agentRow) bool { return r.ID == a.ID }) {
+			folded = append(folded, a)
+		}
+	}
+	return out, folded
+}
+
+// foldLabel says what a fold of subagents hides, by state: "2 done, 1 stopped subagents".
+func foldLabel(folded []subagentView) string {
+	var parts []string
+	for _, state := range []string{agentDone, agentFailed, agentStopped} {
+		if n := len(slices.DeleteFunc(slices.Clone(folded), func(a subagentView) bool { return a.State != state })); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, state))
+		}
+	}
+	return strings.Join(parts, ", ") + " " + plural(len(folded), "subagent", "subagents")
 }
 
 // printAgents prints the subagents of a conversation, indented under it.
-func printAgents(list []subagentView, all bool) {
-	rows, folded := agentTree(list, all)
+func printAgents(list []subagentView, all, closed bool) {
+	rows, folded := agentTree(list, all, closed)
 	for _, a := range rows {
 		model := a.Model
 		if model == "" {
@@ -327,8 +344,8 @@ func printAgents(list []subagentView, all bool) {
 		}
 		fmt.Println(line)
 	}
-	if folded > 0 {
-		fmt.Printf("  %d finished %s\n", folded, plural(folded, "subagent", "subagents"))
+	if len(folded) > 0 {
+		fmt.Printf("  %s\n", foldLabel(folded))
 	}
 }
 

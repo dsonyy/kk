@@ -26,9 +26,9 @@ export function useUnfolded(): [(c: Conversation) => boolean, (c: Conversation, 
 }
 
 // AgentsFold sits on a session's card and folds its finished subagents away or brings them back.
-export function AgentsFold({ c, n }: { c: Conversation; n?: number }) {
+export function AgentsFold({ c, hidden }: { c: Conversation; hidden?: Subagent[] }) {
   const [isOpen, setOpen] = useUnfolded();
-  if (!n) return null;
+  if (!hidden?.length) return null;
   const on = isOpen(c);
   const toggle = (e: Event) => {
     e.stopPropagation();
@@ -40,14 +40,12 @@ export function AgentsFold({ c, n }: { c: Conversation; n?: number }) {
       role="button"
       tabIndex={0}
       aria-expanded={on}
-      title={on ? "Hide the finished subagents" : "Show the finished subagents"}
+      title={on ? "Fold these subagents away" : "Show these subagents"}
       onClick={toggle}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggle(e)}
     >
       <i class="icon icon-agent" />
-      <span>
-        {n} finished {n === 1 ? "subagent" : "subagents"}
-      </span>
+      <span>{foldLabel(hidden)}</span>
       <i class="icon icon-chevron" />
     </div>
   );
@@ -82,3 +80,12 @@ export function AgentTile({ row, on, onOpen }: { row: Row; on: boolean; onOpen: 
 }
 
 export const agentState = (a: Subagent) => STATES[a.state];
+
+// foldLabel says what a fold hides, by state: "2 done, 1 stopped subagents".
+function foldLabel(hidden: Subagent[]) {
+  const parts = (["done", "failed", "stopped"] as const).flatMap((s) => {
+    const n = hidden.filter((a) => a.state === s).length;
+    return n ? [`${n} ${s}`] : [];
+  });
+  return `${parts.join(", ")} ${hidden.length === 1 ? "subagent" : "subagents"}`;
+}

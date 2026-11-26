@@ -245,7 +245,7 @@ func runCLI(cmd string, args []string) error {
 				after = "  (after " + c.After + ")"
 			}
 			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
-			printAgents(c.Subagents, false)
+			printAgents(c.Subagents, false, c.Closed)
 		}
 	case "show":
 		if err := need(1); err != nil {
@@ -287,7 +287,7 @@ func runCLI(cmd string, args []string) error {
 		}
 		if len(c.Subagents) > 0 {
 			fmt.Println("Subagents:")
-			printAgents(c.Subagents, true)
+			printAgents(c.Subagents, true, c.Closed)
 		}
 		events := c.Events
 		if len(events) > *n {

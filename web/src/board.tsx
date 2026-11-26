@@ -125,7 +125,7 @@ export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen
                                 </span>
                               </div>
                               {c.attention && <div class="attention-text">{c.attention}</div>}
-                              <AgentsFold c={c} n={chains.folded.get(c.id)} />
+                              <AgentsFold c={c} hidden={chains.folded.get(c.id)} />
                             </li>
                           );
                         })}

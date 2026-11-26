@@ -21,15 +21,15 @@ export type Chains = {
   // The chain neighbours of a session that are not in the list, such as filtered out, folded or in another group.
   before: Map<string, Conversation>;
   after: Map<string, Conversation[]>;
-  // How many finished subagents of a session fold away, whether they are folded or not.
-  folded: Map<string, number>;
+  // The subagents of a session that fold away, whether they are folded or not.
+  folded: Map<string, Subagent[]>;
 };
 
 // The trunk of an edge: the lines to a card's subagents leave it apart from those to the sessions that follow it.
 const trunk = (e: Edge) => (e.agent ? `${e.from}>` : e.from);
 
 // shownAgents lists the subagents of a session as a tree, each below the one that started it. Folded, it keeps the
-// running ones and those that started a running one.
+// running ones, the failed ones while the session is open, and those that started one of these.
 function shownAgents(c: Conversation, all: boolean): Map<string, Subagent[]> {
   const list = c.subagents ?? [];
   const ids = new Set(list.map((a) => a.id));
@@ -38,7 +38,7 @@ function shownAgents(c: Conversation, all: boolean): Map<string, Subagent[]> {
     const p = a.parent && ids.has(a.parent) ? a.parent : c.id;
     kids.set(p, [...(kids.get(p) ?? []), a]);
   }
-  const shown = (a: Subagent): boolean => all || a.state === "running" || (kids.get(a.id) ?? []).some(shown);
+  const shown = (a: Subagent): boolean => all || a.state === "running" || (a.state === "failed" && !c.closed) || (kids.get(a.id) ?? []).some(shown);
   for (const [p, k] of kids) kids.set(p, k.filter(shown));
   return kids;
 }
@@ -72,7 +72,7 @@ export function arrange(list: Conversation[], all: Conversation[], unfolded: (c:
   const order: Row[] = [];
   const edges: Edge[] = [];
   const lane = new Map<string, number>();
-  const folded = new Map<string, number>();
+  const folded = new Map<string, Subagent[]>();
   const placed = new Set<string>();
   // A line keeps clear of the lines of the cards below it, which lie inside its span.
   const branch = (c: Conversation, agents: Map<string, Subagent[]>, from: string, depth: number): number => {
@@ -90,10 +90,11 @@ export function arrange(list: Conversation[], all: Conversation[], unfolded: (c:
   const walk = (c: Conversation): number => {
     placed.add(c.id);
     order.push({ id: c.id, c, depth: 0 });
-    const running = shownAgents(c, false);
-    const hidden = (c.subagents?.length ?? 0) - [...running.values()].reduce((n, k) => n + k.length, 0);
-    if (hidden) folded.set(c.id, hidden);
-    const agents = hidden && unfolded(c) ? shownAgents(c, true) : running;
+    const kept = shownAgents(c, false);
+    const shown = new Set([...kept.values()].flat().map((a) => a.id));
+    const hidden = (c.subagents ?? []).filter((a) => !shown.has(a.id));
+    if (hidden.length) folded.set(c.id, hidden);
+    const agents = hidden.length && unfolded(c) ? shownAgents(c, true) : kept;
     let outer = branch(c, agents, c.id, 0);
     for (const k of kids.get(c.id) ?? []) {
       edges.push({ from: c.id, to: k.id, skip: k.after !== c.id });

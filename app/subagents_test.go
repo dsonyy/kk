@@ -90,10 +90,16 @@ func TestClaudeSubagentsTracked(t *testing.T) {
 		s := states(c)
 		return s["Agent task 1"] == "done" && s["Agent task 3"] == "failed" && s["Agent task 2"] == "running"
 	})
-	// A finished subagent stays listed while one it started still runs.
+	// A finished subagent stays listed while one it started still runs, and a failed one stays while its session is open.
 	ls = e.mustKK("ls")
-	if !strings.Contains(ls, "  "+first.ID+" ") || !strings.Contains(ls, "    "+nested.ID+" ") || strings.Contains(ls, second.ID) || !strings.Contains(ls+"\n", "\n  1 finished subagent\n") {
+	if !strings.Contains(ls, "  "+first.ID+" ") || !strings.Contains(ls, "    "+nested.ID+" ") || !strings.Contains(ls, "  "+second.ID+"  failed") || strings.Contains(ls, " subagent") {
 		t.Errorf("kk ls after two subagents ended:\n%s", ls)
+	}
+	e.finishAgent(2, false)
+	e.waitFor("the nested subagent done", id, func(c convView) bool { return states(c)["Agent task 2"] == "done" })
+	ls = e.mustKK("ls")
+	if strings.Contains(ls, first.ID) || strings.Contains(ls, nested.ID) || !strings.Contains(ls, "  "+second.ID+"  failed") || !strings.Contains(ls+"\n", "\n  2 done subagents\n") {
+		t.Errorf("kk ls with only a failed subagent left:\n%s", ls)
 	}
 	show := e.mustKK("show", id)
 	for _, want := range []string{"Subagents:", first.ID, "done", nested.ID, second.ID, "failed", first.Branch} {
@@ -110,12 +116,20 @@ func TestClaudeSubagentsTracked(t *testing.T) {
 		t.Errorf("send to a subagent: %d, want 404", code)
 	}
 
-	// Closing the session ends the subagent that still ran.
 	e.mustKK("close", id)
-	c = e.waitFor("subagents of a closed session", id, func(c convView) bool { return c.Closed && states(c)["Agent task 2"] == "stopped" })
-	if s := states(c); s["Agent task 1"] != "done" || s["Agent task 3"] != "failed" {
+	c = e.waitFor("a closed session", id, func(c convView) bool { return c.Closed })
+	if s := states(c); s["Agent task 1"] != "done" || s["Agent task 2"] != "done" || s["Agent task 3"] != "failed" {
 		t.Errorf("states after close: %v", s)
 	}
+}
+
+// Closing a session ends the subagents that still ran.
+func TestClosingStopsSubagents(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "start 1 agent")
+	e.waitFor("a running subagent", id, func(c convView) bool { return states(c)["Agent task 1"] == "running" })
+	e.mustKK("close", id)
+	e.waitFor("a stopped subagent", id, func(c convView) bool { return c.Closed && states(c)["Agent task 1"] == "stopped" })
 }
 
 func TestCodexSubagentsTracked(t *testing.T) {
@@ -141,27 +155,27 @@ func tileOf(part, id string) string {
 func TestSubagentCards(t *testing.T) {
 	e := newEnv(t)
 	writeImage(t, filepath.Join(e.fake, "shot.png"), func(b *bytes.Buffer, i image.Image) error { return png.Encode(b, i) })
-	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "start 2 agents nested image worktree")
-	c := e.waitFor("three running subagents", id, func(c convView) bool { return len(c.Subagents) == 3 && (turnEnded(c) || c.Status == statusBackground) })
+	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "start 3 agents nested image worktree")
+	c := e.waitFor("four running subagents", id, func(c convView) bool { return len(c.Subagents) == 4 && (turnEnded(c) || c.Status == statusBackground) })
 	next := e.mustKK("new", "claude", "-C", e.work, "--after", id, "then this")
-	first, nested, second := subagent(c, "Agent task 1"), subagent(c, "Agent task 2"), subagent(c, "Agent task 3")
+	first, nested, second, third := subagent(c, "Agent task 1"), subagent(c, "Agent task 2"), subagent(c, "Agent task 3"), subagent(c, "Agent task 4")
 
 	p := e.openPage(1600, 900)
-	for _, a := range []subagentView{first, nested, second} {
+	for _, a := range []subagentView{first, nested, second, third} {
 		p.until(tileOf(".sidebar", a.ID))
 	}
 	// Each subagent hangs below its parent, its nested one below it, and the queued successor after them.
 	var order []string
 	p.eval(`[...document.querySelectorAll(".sidebar .tile")].map((t) => t.dataset.chain)`, &order)
-	if want := []string{id, first.ID, nested.ID, second.ID, next}; !slices.Equal(order, want) {
+	if want := []string{id, first.ID, nested.ID, second.ID, third.ID, next}; !slices.Equal(order, want) {
 		t.Errorf("sidebar order %v, want %v", order, want)
 	}
 	var edges struct{ Agent, Chain int }
 	edgeCount := `(() => { const legs = [...document.querySelectorAll(".sidebar .chain-links .leg")]; return { agent: legs.filter((l) => l.classList.contains("agent")).length, chain: legs.filter((l) => !l.classList.contains("agent")).length } })()`
-	p.until(`document.querySelectorAll(".sidebar .chain-links .leg").length === 4`)
+	p.until(`document.querySelectorAll(".sidebar .chain-links .leg").length === 5`)
 	p.eval(edgeCount, &edges)
-	if edges.Agent != 3 || edges.Chain != 1 {
-		t.Errorf("edges: %+v, want 3 to subagents and 1 to the successor", edges)
+	if edges.Agent != 4 || edges.Chain != 1 {
+		t.Errorf("edges: %+v, want 4 to subagents and 1 to the successor", edges)
 	}
 	if text := p.texts(fmt.Sprintf(`.sidebar .tile[data-chain="%s"] .title`, first.ID)); len(text) != 1 || text[0] != "Agent task 1" {
 		t.Errorf("subagent title: %v", text)
@@ -171,16 +185,18 @@ func TestSubagentCards(t *testing.T) {
 	p.shot("subagents-narrow")
 	p.resize(1600, 900)
 
-	// Finished subagents fold behind a count on the parent, unless one they started still runs.
+	// Finished subagents fold behind a count on the parent, unless one they started still runs. Failed ones stay.
 	e.finishAgent(1, false)
 	e.finishAgent(3, true)
-	p.until(fmt.Sprintf(`!%s`, tileOf(".sidebar", second.ID)))
+	e.finishAgent(4, false)
+	p.until(fmt.Sprintf(`!%s`, tileOf(".sidebar", third.ID)))
+	p.until(fmt.Sprintf(`%s?.classList.contains("failed")`, tileOf(".sidebar", second.ID)))
 	p.until(tileOf(".sidebar", first.ID))
 	fold := fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".sidebar", id))
-	p.until(fmt.Sprintf(`%s?.textContent.includes("1 finished subagent")`, fold))
+	p.until(fmt.Sprintf(`%s?.textContent === "1 done subagent"`, fold))
 	p.shot("subagents-folded")
 	p.click(fold)
-	p.until(tileOf(".sidebar", second.ID))
+	p.until(tileOf(".sidebar", third.ID))
 	p.shot("subagents-unfolded")
 
 	// A subagent opens read-only: its transcript without a reply box or controls, and a way back to its parent.
@@ -195,6 +211,12 @@ func TestSubagentCards(t *testing.T) {
 			t.Errorf("a subagent's panel offers %q: %v", c, controls)
 		}
 	}
+	// The branch sits as far from its icon as the directory does.
+	var gaps []string
+	p.eval(fmt.Sprintf(`[".branch", ".dir"].map((s) => { const e = %s.querySelector(".conv-head " + s); return e && getComputedStyle(e).display + " " + getComputedStyle(e).columnGap })`, panel), &gaps)
+	if len(gaps) != 2 || gaps[0] != "flex 5px" || gaps[1] != gaps[0] {
+		t.Errorf("branch and directory in the header: %v", gaps)
+	}
 	p.shot("subagent-transcript")
 	p.click(fmt.Sprintf(`%s.querySelector(".subagent-of")`, panel))
 	p.until(fmt.Sprintf(`document.getElementById("panel-%s")`, id))
@@ -203,7 +225,7 @@ func TestSubagentCards(t *testing.T) {
 	p.until(tileOf(".board", nested.ID))
 	p.until(fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".board", id)))
 	// The finished subagents stay unfolded as they were in the sidebar.
-	p.until(`document.querySelectorAll(".board .chain-links .leg.agent").length === 3`)
+	p.until(`document.querySelectorAll(".board .chain-links .leg.agent").length === 4`)
 	p.shot("subagents-board")
 
 	// A closed parent takes its subagents with it.
@@ -213,7 +235,7 @@ func TestSubagentCards(t *testing.T) {
 	p.until(fmt.Sprintf(`%s?.classList.contains("closed") && document.querySelectorAll(".sidebar .tile.closed").length === 2`, tileOf(".sidebar", id)))
 	p.eval(`document.querySelector(".sidebar .group").open || document.querySelector(".sidebar .group > summary").click()`, nil)
 	p.until(`document.querySelector(".sidebar .group").open`)
-	p.until(fmt.Sprintf(`%s?.querySelector(".agents-fold")?.textContent.includes("3 finished subagents")`, tileOf(".sidebar", id)))
+	p.until(fmt.Sprintf(`%s?.querySelector(".agents-fold")?.textContent === "2 done, 1 failed, 1 stopped subagents"`, tileOf(".sidebar", id)))
 	if p.until(tileOf(".sidebar", id)); len(p.texts(".sidebar .tile.subagent")) != 0 {
 		t.Error("a closed session shows its subagents unfolded")
 	}
