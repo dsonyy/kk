@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -261,23 +260,12 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("the inbox did not survive a restart: %+v", v)
 	}
 
-	writeFile(t, filepath.Join(e.fake, "slack-error"), "API Error: 401 authentication_error")
+	writeFile(t, filepath.Join(e.fake, "slack-error"), "")
 	v = e.refreshInbox("slack")
-	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "401") || s.Setup != "" {
+	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "API error") || s.Setup != "" {
 		t.Fatalf("a failed Slack run is an error, not a missing connector: %+v", s)
 	}
 	os.Remove(filepath.Join(e.fake, "slack-error"))
-	writeFile(t, filepath.Join(e.fake, "slack-connector"), "failed")
-	v = e.refreshInbox("slack")
-	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "connector is failed") || s.Setup != "" {
-		t.Fatalf("a Slack connector that fails to connect is an error: %+v", s)
-	}
-
-	writeFile(t, filepath.Join(e.fake, "slack-connector"), "not loaded")
-	v = e.refreshInbox("slack")
-	if s := sourceOf(v, "slack"); !strings.Contains(s.Error, "did not load") || s.Setup != "" {
-		t.Fatalf("connectors that did not load in time are an error: %+v", s)
-	}
 
 	writeFile(t, filepath.Join(e.fake, "slack-connector"), "none")
 	writeFile(t, filepath.Join(gh, "logged-out"), "")
@@ -348,18 +336,16 @@ func TestInboxGmail(t *testing.T) {
 		}
 	}
 
-	writeFile(t, filepath.Join(e.fake, "gmail-error"), "API Error: 500 overloaded")
+	writeFile(t, filepath.Join(e.fake, "gmail-error"), "")
 	v = e.refreshInbox("gmail")
-	if s := sourceOf(v, "gmail"); !strings.Contains(s.Error, "Gmail run failed") || s.Setup != "" || len(v.Items) != 2 {
+	if s := sourceOf(v, "gmail"); !strings.Contains(s.Error, "Gmail run ended on an API error") || s.Setup != "" || len(v.Items) != 2 {
 		t.Fatalf("a failed Gmail run is an error and keeps the items: %+v", s)
 	}
 	os.Remove(filepath.Join(e.fake, "gmail-error"))
-	for _, status := range []string{"none", "needs-auth"} {
-		writeFile(t, filepath.Join(e.fake, "gmail-connector"), status)
-		v = e.refreshInbox("gmail")
-		if s := sourceOf(v, "gmail"); !strings.Contains(s.Setup, "Connect Gmail") || s.Error != "" || len(v.Items) != 0 {
-			t.Fatalf("gmail with connector %s: %+v %d", status, s, len(v.Items))
-		}
+	writeFile(t, filepath.Join(e.fake, "gmail-connector"), "none")
+	v = e.refreshInbox("gmail")
+	if s := sourceOf(v, "gmail"); !strings.Contains(s.Setup, "Connect Gmail") || s.Error != "" || len(v.Items) != 0 {
+		t.Fatalf("gmail without the connector: %+v %d", s, len(v.Items))
 	}
 }
 
@@ -490,7 +476,7 @@ func (s blockingSource) fetch(context.Context) ([]InboxItem, error) {
 
 func testInbox(t *testing.T, checked time.Time) (*Inbox, blockingSource) {
 	src := blockingSource{&atomic.Int32{}, make(chan struct{})}
-	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{}, ctx: context.Background(),
+	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{}, cancels: map[string]context.CancelFunc{}, ctx: context.Background(),
 		settings: func() map[string]InboxSettings { return map[string]InboxSettings{"github": {IntervalMinutes: 15, Methods: on("gh")}} },
 		state:    inboxState{Sources: map[string]*sourceState{"github": {Checked: checked}}, Status: map[string]itemStatus{}}}
 	return in, src
@@ -527,25 +513,3 @@ func waitFor(t *testing.T, ok func() bool) {
 	}
 }
 
-// A connector run that outlives the server keeps writing where the server no longer looks, and here into a test's removed directory.
-func TestInboxStopsRunsWithServer(t *testing.T) {
-	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\necho $$ > \"$FAKE_HOME/run.$$\"\nexec sleep 600\n"), 0o755)
-	e := newEnv(t, "PATH="+bin+":"+fakeBin+":"+os.Getenv("PATH"))
-	e.post("/api/inbox/tick", struct{}{})
-	var runs []string
-	for deadline := time.Now().Add(10 * time.Second); len(runs) < 2; time.Sleep(50 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("connector runs started: %v, want slack and gmail", runs)
-		}
-		runs, _ = filepath.Glob(filepath.Join(e.fake, "run.*"))
-	}
-	e.stop()
-	for _, run := range runs {
-		pid, _ := strconv.Atoi(strings.TrimPrefix(filepath.Ext(run), "."))
-		if syscall.Kill(pid, 0) == nil {
-			syscall.Kill(pid, syscall.SIGKILL)
-			t.Errorf("connector run %d outlived the server", pid)
-		}
-	}
-}

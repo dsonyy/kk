@@ -44,6 +44,7 @@ const usage = `kk - web conductor for coding agents in tmux
   kk close <id>               stop the agent and close the conversation, resume reopens it
   kk escalate <id> <reason>   hand a waiting agent from the conductor to the user, with a one-line reason
   kk hook <event>             hook endpoint for agents (payload on stdin)
+  kk guard <tool,...>         hook that refuses an agent every tool not listed
 `
 
 func main() {
@@ -119,7 +120,8 @@ func serve() error {
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	s.inbox = openInbox(store.dir, func() map[string]InboxSettings { return s.cfg().Inbox })
+	s.inbox = openInbox(store.dir, func() map[string]InboxSettings { return s.cfg().Inbox }, s.runIntegration)
+	s.syncIntegrations()
 	mux := s.routes()
 	go watchStats()
 	go s.groupLoop()
@@ -353,6 +355,8 @@ func runCLI(cmd string, args []string) error {
 		return call("POST", "/api/conversations/"+args[0]+"/escalate", map[string]string{"reason": strings.Join(args[1:], " ")}, nil)
 	case "hook":
 		return hook(args)
+	case "guard":
+		guard(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

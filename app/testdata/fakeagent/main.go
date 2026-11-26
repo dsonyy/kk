@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	mode       string
-	hooks      = map[string]string{}
+	mode string
+	// hooks holds the commands of each hook event, in order.
+	hooks      = map[string][]string{}
 	session    string
 	transcript string
 	keys       = make(chan byte, 1<<16)
@@ -43,6 +44,11 @@ var (
 	model string
 	// total is the running token count of a codex thread, which codex carries over a resume and a revert.
 	total counts
+	// connector is the inbox source of kk's integration session, from the connector tools it may use.
+	connector string
+	// allowed are the tools of --allowedTools.
+	allowed []string
+	argv    []string
 )
 
 type counts struct {
@@ -70,13 +76,10 @@ func main() {
 		return
 	}
 	if mode == "claude" && len(args) > 0 && args[0] == "-p" {
-		if slices.Contains(args, "dontAsk") {
-			printConnector(args)
-			return
-		}
 		printGroup(args[len(args)-1])
 		return
 	}
+	argv = args
 	logArgs(args)
 	prompt, resume := parseArgs(args)
 	// Real agents read the terminal raw, so Escape and Ctrl-C arrive as bytes instead of being held or turned into a signal.
@@ -264,49 +267,6 @@ func fakeGH(args []string) {
 	os.Stdout.Write(data)
 }
 
-// printConnector answers a connector run in stream-json. The run's source, slack or gmail, comes from its allowed tools.
-// It keeps the arguments in FAKE_HOME/<source>-args.json and prints FAKE_HOME/<source>.out as the answer.
-// FAKE_HOME/<source>-connector holds the connector's status, "none" when it is not linked, "not loaded" when no connector loaded in time.
-// FAKE_HOME/<source>-error makes the run fail. Like the real claude -p, the init event lists no connector unless
-// MCP_CONNECTION_NONBLOCKING=false makes the run wait for them.
-func printConnector(args []string) {
-	source, server := "slack", "claude.ai Slack"
-	if i := slices.Index(args, "--allowedTools"); i >= 0 && strings.HasPrefix(args[i+1], "mcp__claude_ai_Gmail__") {
-		source, server = "gmail", "claude.ai Gmail"
-	}
-	home := os.Getenv("FAKE_HOME")
-	data, _ := json.Marshal(args)
-	os.WriteFile(filepath.Join(home, source+"-args.json"), data, 0o644)
-	status := "connected"
-	if b, err := os.ReadFile(filepath.Join(home, source+"-connector")); err == nil {
-		status = strings.TrimSpace(string(b))
-	}
-	servers := []map[string]string{}
-	if os.Getenv("MCP_CONNECTION_NONBLOCKING") != "false" || status == "not loaded" {
-		status = "none"
-	} else {
-		servers = append(servers, map[string]string{"name": "claude.ai Linear", "status": "connected", "source": "claudeai"})
-	}
-	if status != "none" {
-		servers = append(servers, map[string]string{"name": server, "status": status, "source": "claudeai"})
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.Encode(map[string]any{"type": "system", "subtype": "init", "mcp_servers": servers})
-	if b, err := os.ReadFile(filepath.Join(home, source+"-error")); err == nil {
-		enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": true, "result": string(b)})
-		os.Exit(1)
-	}
-	answer := "I have no tools for this connector."
-	if status == "connected" {
-		out, err := os.ReadFile(filepath.Join(home, source+".out"))
-		if err != nil {
-			out = []byte(`{"items":[]}`)
-		}
-		answer = string(out)
-	}
-	enc.Encode(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": answer})
-}
-
 func logArgs(args []string) {
 	if dir := os.Getenv("FAKE_HOME"); dir != "" {
 		f, _ := os.OpenFile(filepath.Join(dir, "argv.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -332,10 +292,25 @@ func parseArgs(args []string) (prompt string, resume bool) {
 					Hooks []struct{ Command string } `json:"hooks"`
 				} `json:"hooks"`
 			}
-			data, _ := os.ReadFile(next())
+			// The value is a file or the settings themselves.
+			data := []byte(next())
+			if !strings.HasPrefix(string(data), "{") {
+				data, _ = os.ReadFile(string(data))
+			}
 			json.Unmarshal(data, &s)
-			for e, v := range s.Hooks {
-				hooks[e] = v[0].Hooks[0].Command
+			for e, groups := range s.Hooks {
+				for _, g := range groups {
+					for _, h := range g.Hooks {
+						hooks[e] = append(hooks[e], h.Command)
+					}
+				}
+			}
+		case a == "--allowedTools":
+			allowed = strings.Split(next(), ",")
+			for source, prefix := range map[string]string{"gmail": "mcp__claude_ai_Gmail__", "slack": "mcp__claude_ai_Slack__"} {
+				if strings.HasPrefix(allowed[0], prefix) {
+					connector = source
+				}
 			}
 		case a == "--plugin-dir":
 			var p struct {
@@ -346,12 +321,13 @@ func parseArgs(args []string) (prompt string, resume bool) {
 			// Cursor CLI 2026.11 fires only these plugin hooks.
 			for _, e := range []string{"sessionStart", "preToolUse", "postToolUse"} {
 				if v := p.Hooks[e]; len(v) > 0 {
-					hooks[strings.ToUpper(e[:1])+e[1:]] = v[0].Command
+					hooks[strings.ToUpper(e[:1])+e[1:]] = []string{v[0].Command}
 				}
 			}
 		case a == "-c":
 			if m := codexHook.FindStringSubmatch(next()); m != nil {
-				hooks[m[1]], _ = strconv.Unquote(m[2])
+				cmd, _ := strconv.Unquote(m[2])
+				hooks[m[1]] = []string{cmd}
 			}
 		case a == "--session-id":
 			session = next()
@@ -359,7 +335,8 @@ func parseArgs(args []string) (prompt string, resume bool) {
 			session, resume = next(), true
 		case a == "--model" || a == "-m":
 			model = next()
-		case a == "--append-system-prompt-file" || a == "--name":
+		case a == "--append-system-prompt-file" || a == "--name" || a == "--system-prompt" || a == "--setting-sources" || a == "--tools" ||
+			a == "--permission-mode" || a == "--disallowedTools":
 			next()
 		}
 	}
@@ -549,11 +526,8 @@ func backtrack() {
 	}
 }
 
-func hook(event string, extra map[string]any) {
-	cmd, ok := hooks[event]
-	if !ok {
-		return
-	}
+// hook runs the commands of a hook event and tells whether one refused it with exit code 2, and why.
+func hook(event string, extra map[string]any) (bool, string) {
 	payload := map[string]any{"session_id": session, "transcript_path": transcript, "hook_event_name": event}
 	if mode == "cursor-agent" && event == "SessionStart" {
 		payload["transcript_path"] = nil
@@ -562,11 +536,18 @@ func hook(event string, extra map[string]any) {
 		payload[k] = v
 	}
 	data, _ := json.Marshal(payload)
-	c := exec.Command("sh", "-c", cmd)
-	c.Stdin = strings.NewReader(string(data))
-	if out, err := c.CombinedOutput(); err != nil || len(out) > 0 {
-		fmt.Printf("hook %s: %v %s\n", event, err, out)
+	for _, cmd := range hooks[event] {
+		c := exec.Command("sh", "-c", cmd)
+		c.Stdin = strings.NewReader(string(data))
+		out, err := c.CombinedOutput()
+		if c.ProcessState != nil && c.ProcessState.ExitCode() == 2 {
+			return true, strings.TrimSpace(string(out))
+		}
+		if err != nil || len(out) > 0 {
+			fmt.Printf("hook %s: %v %s\n", event, err, out)
+		}
 	}
+	return false, ""
 }
 
 func write(v map[string]any) {
@@ -583,6 +564,10 @@ func write(v map[string]any) {
 
 func handle(prompt string) {
 	fmt.Printf("you: %s\n", prompt)
+	if connector != "" {
+		integrationTurn(prompt)
+		return
+	}
 	if mode == "cursor-agent" {
 		if prompt == "exit" {
 			os.Exit(0)
@@ -868,4 +853,58 @@ func uuid() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// integrationTurn answers a turn of kk's inbox session like a model that has only its connector's tools. A prompt
+// "use <tool>" calls that tool; any other prompt collects the inbox: it keeps the arguments in FAKE_HOME/<source>-args.json,
+// reads with the first allowed tool and answers with FAKE_HOME/<source>.out. FAKE_HOME/<source>-connector "none" leaves the
+// connector out, and FAKE_HOME/<source>-error ends the turn on an API error. Tools that ran are listed in FAKE_HOME/<source>-tools.log.
+func integrationTurn(prompt string) {
+	home := os.Getenv("FAKE_HOME")
+	hook("UserPromptSubmit", map[string]any{"prompt": prompt})
+	userLine(prompt)
+	// Claude Code names the session after what it read, which kk must not take over.
+	write(map[string]any{"type": "ai-title", "aiTitle": "Mail from Gus about a contract"})
+	if tool, ok := strings.CutPrefix(prompt, "use "); ok {
+		useTool(tool)
+		answer("done", 1000)
+		hook("Stop", nil)
+		return
+	}
+	data, _ := json.Marshal(argv)
+	os.WriteFile(filepath.Join(home, connector+"-args.json"), data, 0o644)
+	if _, err := os.Stat(filepath.Join(home, connector+"-error")); err == nil {
+		write(map[string]any{"type": "assistant", "isApiErrorMessage": true, "apiError": "overloaded", "error": "server_error", "message": map[string]any{"role": "assistant", "model": "<synthetic>", "content": []any{map[string]any{"type": "text", "text": "API Error: 529 Overloaded"}}}})
+		return
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, connector+"-connector")); strings.TrimSpace(string(b)) == "none" {
+		answer(`{"connector":"missing"}`, 1000)
+		hook("Stop", nil)
+		return
+	}
+	useTool(allowed[0])
+	out, err := os.ReadFile(filepath.Join(home, connector+".out"))
+	if err != nil {
+		out = []byte(`{"items":[]}`)
+	}
+	answer(string(out), 1000)
+	fmt.Println("agent: answered")
+	hook("Stop", nil)
+}
+
+// useTool calls a tool the way Claude Code does: a PreToolUse hook that exits with 2 refuses it, and then it does not run.
+func useTool(name string) {
+	id := "toolu_" + uuid()[:8]
+	write(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{}},
+	}}})
+	if refused, why := hook("PreToolUse", map[string]any{"tool_name": name}); refused {
+		write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "is_error": true, "content": "PreToolUse hook error: " + why}}}})
+		return
+	}
+	f, _ := os.OpenFile(filepath.Join(os.Getenv("FAKE_HOME"), connector+"-tools.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	fmt.Fprintln(f, name)
+	f.Close()
+	write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "ok"}}}})
+	hook("PostToolUse", map[string]any{"tool_name": name})
 }

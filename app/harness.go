@@ -58,7 +58,8 @@ func actions(c Conversation) []string {
 	if ok && (c.Status == statusWorking || ct.blind && c.Status == statusIdle) {
 		out = append(out, "interrupt")
 	}
-	if ok && (c.Status == statusIdle || c.Status == statusBackground) && c.Attention == "" {
+	// An integration's slash commands are off, and its next run starts over anyway.
+	if ok && (c.Status == statusIdle || c.Status == statusBackground) && c.Attention == "" && c.Integration == "" {
 		out = append(out, "reset")
 	}
 	if c.Status != statusExited && c.Status != statusQueued {
@@ -146,11 +147,17 @@ func newUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-func (s *Server) claudeSettings() (string, error) {
-	hooks := map[string]any{}
+// claudeHooks are the hooks through which Claude Code reports to kk.
+func (s *Server) claudeHooks() map[string][]any {
+	hooks := map[string][]any{}
 	for _, e := range hookEvents {
 		hooks[e] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellJoin([]string{s.bin, "hook", e})}}}}
 	}
+	return hooks
+}
+
+func (s *Server) claudeSettings() (string, error) {
+	hooks := s.claudeHooks()
 	data, _ := json.MarshalIndent(map[string]any{"hooks": hooks}, "", "  ")
 	path := filepath.Join(s.store.dir, "hooks", "claude.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -161,6 +168,9 @@ func (s *Server) claudeSettings() (string, error) {
 
 // command builds the argv that starts or resumes the agent of c.
 func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
+	if c.Integration != "" {
+		return s.integrationCommand(c, resume)
+	}
 	switch c.Harness {
 	case "claude":
 		settings, err := s.claudeSettings()

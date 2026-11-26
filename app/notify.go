@@ -66,7 +66,8 @@ func shorten(s string, max int) string { return firstLine(strings.Join(strings.F
 // observe compares c with what the notifier last knew and queues the events the conductor should hear about.
 // The first tick only takes note: a restart is no news.
 func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.Time) {
-	if c.Role == coordinatorID {
+	// The integrations are kk's own; their runs are no news to the conductor.
+	if c.Role == coordinatorID || c.Integration != "" {
 		return
 	}
 	w := s.watches[c.ID]

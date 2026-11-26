@@ -61,6 +61,8 @@ type Conversation struct {
 	After string `yaml:"after,omitempty" json:"after,omitempty"`
 	// Worktree asks for a worktree of Dir when a queued conversation starts.
 	Worktree bool `yaml:"worktree,omitempty" json:"worktree,omitempty"`
+	// Integration is the inbox source the conversation checks for kk, such as gmail. kk starts its runs and limits its tools.
+	Integration string `yaml:"integration,omitempty" json:"integration,omitempty"`
 }
 
 const (
@@ -81,7 +83,11 @@ const (
 )
 
 // Waiting reports whether the agent has stopped and someone has to act: its turn ended, it needs input, or it exited.
+// An integration waits only when a run failed or needs input.
 func (c *Conversation) Waiting() bool {
+	if c.Integration != "" {
+		return !c.Closed && c.Attention != ""
+	}
 	return !c.Closed && !c.Sleeping && (c.Attention != "" || c.Status == statusIdle || c.Status == statusExited)
 }
 
@@ -91,14 +97,14 @@ func (c *Conversation) WaitingFor(conductor bool) string {
 	switch {
 	case !c.Waiting():
 		return ""
-	case c.Role != "" || c.Escalation != "" || !c.ByAgent || !conductor:
+	case c.Role != "" || c.Integration != "" || c.Escalation != "" || !c.ByAgent || !conductor:
 		return waitingUser
 	}
 	return waitingConductor
 }
 
 func (c *Conversation) Unread() bool {
-	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+	return c.Integration == "" && !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
 }
 
 // RunDone reports whether a scheduled run has finished and the user has not seen it yet, also after the agent fell asleep.
@@ -272,7 +278,7 @@ func (s *Store) recentDirs() []string {
 	var dirs []string
 	for _, c := range s.list() {
 		dir := c.Project()
-		if c.Role == "" && !seen[dir] {
+		if c.Role == "" && c.Integration == "" && !seen[dir] {
 			seen[dir] = true
 			dirs = append(dirs, dir)
 		}

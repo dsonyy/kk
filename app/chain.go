@@ -35,6 +35,8 @@ func (s *Server) queue(c Conversation, after string, worktree bool) (Conversatio
 		return c, fail(400, "no conversation %s to follow", after)
 	case pred.Role != "":
 		return c, fail(400, "a session cannot follow the conductor")
+	case pred.Integration != "":
+		return c, fail(400, "a session cannot follow the %s session", pred.Integration)
 	case pred.Closed:
 		return c, fail(400, "conversation %s is closed", after)
 	}

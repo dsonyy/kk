@@ -236,6 +236,7 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	if keys := changedSettings(old, st); len(keys) > 0 {
 		log.Printf("settings changed: %s", strings.Join(keys, ", "))
 	}
+	s.syncIntegrations()
 	if st.coordinator() {
 		if err := s.ensureCoordinator(); err != nil {
 			return nil, err

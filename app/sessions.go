@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -161,5 +162,6 @@ func (s *Server) handleSessions(r *http.Request) (any, error) {
 		return nil, fail(400, "unknown harness %q", harness)
 	}
 	dir, _ := expandDir(r.URL.Query().Get("dir"))
-	return pastSessions(harness, dir), nil
+	own := s.integrationSessions()
+	return slices.DeleteFunc(pastSessions(harness, dir), func(p PastSession) bool { return own[p.ID] }), nil
 }

@@ -83,6 +83,8 @@ type Inbox struct {
 	mu       sync.Mutex
 	state    inboxState
 	running  map[string]bool
+	// cancels end the running fetch of each source.
+	cancels map[string]context.CancelFunc
 	// ctx ends the running fetches when the server stops, and wait waits for them.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -96,10 +98,10 @@ const (
 	inboxFetchLimit = 5 * time.Minute
 )
 
-func openInbox(dir string, settings func() map[string]InboxSettings) *Inbox {
-	in := &Inbox{dir: dir, settings: settings, running: map[string]bool{}, state: inboxState{Sources: map[string]*sourceState{}}}
+func openInbox(dir string, settings func() map[string]InboxSettings, run connectorRunner) *Inbox {
+	in := &Inbox{dir: dir, settings: settings, running: map[string]bool{}, cancels: map[string]context.CancelFunc{}, state: inboxState{Sources: map[string]*sourceState{}}}
 	in.ctx, in.cancel = context.WithCancel(context.Background())
-	in.sources = []inboxSource{githubSource{}, linearSource{dir: dir}, slackSource{dir: dir}, gmailSource{dir: dir}}
+	in.sources = []inboxSource{githubSource{}, linearSource{dir: dir}, slackSource{run}, gmailSource{run}}
 	if data, err := os.ReadFile(in.path()); err == nil {
 		yaml.Unmarshal(data, &in.state)
 	}
@@ -188,6 +190,15 @@ func (in *Inbox) stop() {
 	in.wait.Wait()
 }
 
+// cancelRun ends the running fetch of a source.
+func (in *Inbox) cancelRun(name string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if cancel := in.cancels[name]; cancel != nil {
+		cancel()
+	}
+}
+
 // refresh fetches one source in the background unless it already runs.
 func (in *Inbox) refresh(s inboxSource) {
 	in.mu.Lock()
@@ -197,17 +208,19 @@ func (in *Inbox) refresh(s inboxSource) {
 	}
 	in.running[s.name()] = true
 	in.wait.Add(1)
+	ctx, cancel := context.WithTimeout(in.ctx, inboxFetchLimit)
+	in.cancels[s.name()] = cancel
 	in.mu.Unlock()
 	go func() {
 		defer in.wait.Done()
-		ctx, cancel := context.WithTimeout(in.ctx, inboxFetchLimit)
 		defer cancel()
 		items, err := s.fetch(ctx)
 		in.mu.Lock()
 		defer in.mu.Unlock()
 		delete(in.running, s.name())
-		// A fetch cut short by the server stopping did not check the source.
-		if in.ctx.Err() != nil {
+		delete(in.cancels, s.name())
+		// A fetch cut short by the server stopping or by the source being switched off did not check the source.
+		if in.ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return
 		}
 		st := in.state.Sources[s.name()]

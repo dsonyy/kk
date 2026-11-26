@@ -73,6 +73,9 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 		return nil, err
 	}
 	h, _ := findHarness(c.Harness)
+	if c.Integration != "" {
+		return nil, fail(400, "the %s session starts over with every check", c.Integration)
+	}
 	if h.Rewind == nil {
 		return nil, fail(400, "%s cannot go back to an earlier message", h.Label)
 	}

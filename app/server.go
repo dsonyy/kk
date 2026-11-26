@@ -342,6 +342,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		if in.Worktree {
 			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
 		}
+		if s.integrationSessions()[in.Session] {
+			return nil, fail(400, "session %s checks the inbox for kk and resumes only from its own panel", in.Session)
+		}
 		for _, c := range s.store.list() {
 			if c.Harness == in.Harness && c.Session == in.Session && !c.Closed {
 				return s.view(c, false), nil
@@ -418,6 +421,10 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 		return err
 	}
 	env := map[string]string{"KK_CONVERSATION": c.ID, "KK_HOME": s.store.dir}
+	if c.Integration != "" {
+		// Claude Code takes the first prompt before the claude.ai connectors have connected, unless told to wait for them.
+		env["MCP_CONNECTION_NONBLOCKING"], env["MCP_CONNECT_TIMEOUT_MS"] = "false", "30000"
+	}
 	alive, _ := windows()
 	if _, ok := alive[c.Window]; ok && c.Window != "" {
 		err = respawnWindow(c.Window, c.Dir, env, argv)
@@ -594,6 +601,9 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	if c.Integration != "" && c.Closed {
+		return nil, fail(409, "switch %s on in Settings, its next check opens the session", c.Integration)
+	}
 	if c.Status == statusQueued {
 		if !c.Closed {
 			return nil, fail(409, "the session is queued, start it instead")
@@ -631,6 +641,9 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	}
 	if c.Role != "" {
 		return nil, fail(400, "the conductor cannot be closed")
+	}
+	if c.Integration != "" {
+		return nil, fail(400, "switch %s off in Settings to stop its checks", c.Integration)
 	}
 	s.controlled(c.ID)
 	if c.Window != "" {
@@ -887,7 +900,8 @@ func (s *Server) tick() {
 				c.Attention, changed = fmt.Sprintf("The agent has not started its session after %s and may be waiting for input", startTimeout), true
 			}
 			if t := events; t != nil {
-				if t.Title != "" && t.Title != c.Title {
+				// An integration keeps its name: a title made up from its transcript can repeat the mail it read.
+				if t.Title != "" && t.Title != c.Title && c.Integration == "" {
 					c.Title, changed = t.Title, true
 					tmux("", "rename-window", "-t", c.Window, firstLine(t.Title, 40))
 				}
