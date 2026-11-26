@@ -191,7 +191,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .chain-ref { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-dim); font-size: 11px; }
 .chain-ref .icon { flex: none; width: 11px; height: 11px; }
 .chain-ref bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.glenz { position: absolute; inset: 0; z-index: 2; display: block; width: 100%; height: 100%; opacity: .8; pointer-events: none; }
+.glenz { position: absolute; inset: 0; z-index: 2; display: block; width: 100%; height: 100%; pointer-events: none; }
 .load { flex: none; padding: var(--gap); border-top: 1px solid var(--line); }
 .load svg { display: block; width: 100%; height: 64px; border: 1px solid var(--line); background: var(--bg); }
 .load polyline { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
@@ -406,17 +406,16 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .side-panel .conv-head h1 { font-size: 14px; }
 /* The title and the way back are items of the head, so the way back takes a row of its own under the title and actions. */
 .konduktor-pick { display: contents; }
-.konduktor-pick h1 { display: flex; }
-.konduktor-name { min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; color: var(--text-strong); font-size: 14px; }
-.konduktor-name .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.konduktor-name .muted { flex: none; font-size: 12px; }
-.konduktor-name:hover .what { text-decoration: underline; text-underline-offset: 3px; }
+.konduktor-pick h1 { display: flex; align-items: center; gap: 8px; }
+.konduktor-name { min-width: 0; max-width: 100%; }
+.konduktor-name .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.konduktor-pick h1 .muted { flex: none; font-size: 12px; }
 .konduktor-away { order: 1; flex: 0 0 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--gap); padding: 4px 4px 4px 8px; border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--text); font-size: 12px; }
 .konduktor-away .mono { font-size: 12px; }
 .side-panel .conv-head .meta { order: 2; }
 .dot.none { background: none; }
 .dir-menu .dir-item.attention .mono { color: var(--warn-text); }
-.konduktor-name .icon-chevron { flex: none; align-self: center; width: 9px; height: 9px; color: var(--text-dim); transform: rotate(90deg); }
+.konduktor-name .icon-chevron { width: 9px; height: 9px; color: var(--text-dim); transform: rotate(90deg); }
 .dir-menu .dir-item > span:first-child { min-width: 0; display: flex; align-items: center; }
 .dir-menu .dir-item.on { background: var(--surface-2); color: var(--text-strong); }
 .dir-menu .dir-item.unread .mono { color: var(--text-strong); font-weight: 600; }

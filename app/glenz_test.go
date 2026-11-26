@@ -236,6 +236,27 @@ func litRows(img image.Image, height float64) (top, bottom float64) {
 	return float64(first-img.Bounds().Min.Y) / scale, float64(last-img.Bounds().Min.Y+1) / scale
 }
 
+// tones returns the shares of a canvas shot's drawn pixels that are near white and near black.
+func tones(img image.Image) (light, dark float64) {
+	bg, drawn := img.At(0, 0), 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if img.At(x, y) == bg {
+				continue
+			}
+			r, g, b, _ := img.At(x, y).RGBA()
+			l := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 257
+			drawn++
+			if l > 190 {
+				light++
+			} else if l < 60 {
+				dark++
+			}
+		}
+	}
+	return light / float64(drawn), dark / float64(drawn)
+}
+
 func same(a, b image.Image) bool {
 	for y := a.Bounds().Min.Y; y < a.Bounds().Max.Y; y++ {
 		for x := a.Bounds().Min.X; x < a.Bounds().Max.X; x++ {
@@ -325,6 +346,10 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	}
 	if now, _ := b.glenzShot(); !same(still, now) {
 		t.Fatal("the still frame changed under reduced motion")
+	}
+	// The light faces are near white and the dark ones near black, each a large part of the solid.
+	if light, dark := tones(still); light < 0.25 || dark < 0.25 {
+		t.Fatalf("%.0f%% of the solid is near white and %.0f%% near black, want at least 25%% each", light*100, dark*100)
 	}
 	b.eval(measure, &size)
 	if top, bottom := litRows(still, size.Height); bottom >= size.Chart || top < size.Floor-130 {
