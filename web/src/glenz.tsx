@@ -20,9 +20,11 @@ for (let a = 0; a < 3; a++)
       }
 
 const FPS = 30;
-const BOUNCE = 3.4;
+const BOUNCE = 6.8;
+// The height of a bounce in pixels, the one the solid had in its own 110 px strip.
+const LIFT = 36;
 const SIZE = 18;
-// The still frame rests on the floor at the far right, where the pane has the least text.
+// The still frame rests on the floor at the far right, just above the system load chart.
 const STILL = 14 * BOUNCE - 0.01;
 const CAMERA = 7;
 const LIGHT = norm([-0.5, -0.8, -0.6]);
@@ -51,8 +53,8 @@ function readStyle(canvas: HTMLCanvasElement): Style {
   return { light: rgb("--glenz-light"), dark: rgb("--glenz-dark"), edge: rgb("--glenz-edge"), shadow: rgb("--glenz-shadow") };
 }
 
-function frame(t: number, w: number, h: number): Frame {
-  const [ax, ay, az] = [t * 0.21, t * 0.33 + 0.6, t * 0.13 + 0.3];
+function frame(t: number, w: number, floor: number): Frame {
+  const [ax, ay, az] = [t * 0.105, t * 0.165 + 0.6, t * 0.065 + 0.3];
   const rot = ([x, y, z]: V): V => {
     [y, z] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
     [x, z] = [x * Math.cos(ay) + z * Math.sin(ay), -x * Math.sin(ay) + z * Math.cos(ay)];
@@ -63,7 +65,7 @@ function frame(t: number, w: number, h: number): Frame {
   // The bounce is a parabola. Each landing squashes the solid, and it wobbles like jelly until the wobble dies out.
   const since = t % BOUNCE;
   const u = since / BOUNCE;
-  const lift = (h - SIZE * 4.2) * 4 * u * (1 - u);
+  const lift = LIFT * 4 * u * (1 - u);
   const sy = 1 - 0.22 * Math.exp(-since / 0.32) * Math.cos(since * 13);
   const sx = 1 / Math.sqrt(sy);
 
@@ -80,11 +82,12 @@ function frame(t: number, w: number, h: number): Frame {
   tris.sort((a, b) => b.depth - a.depth);
   const bottom = Math.max(...tris.flatMap((tr) => tr.p.map((p) => p[1])));
   const margin = SIZE * 2.2;
-  const cx = w / 2 + (w / 2 - margin) * (0.75 * Math.sin(t * 0.17) + 0.25 * Math.sin(t * 0.41 + 1));
-  const near = 1 - lift / h;
-  return { tris, cx, cy: h - 1 - bottom - lift, shadow: { x: cx, rx: SIZE * 1.7 * sx * (0.6 + 0.4 * near), alpha: 0.25 + 0.55 * near } };
+  const cx = w / 2 + (w / 2 - margin) * (0.75 * Math.sin(t * 0.085) + 0.25 * Math.sin(t * 0.205 + 1));
+  const near = 1 - lift / (3 * LIFT);
+  return { tris, cx, cy: floor - 1 - bottom - lift, shadow: { x: cx, rx: SIZE * 1.7 * sx * (0.6 + 0.4 * near), alpha: 0.25 + 0.55 * near } };
 }
 
+// The floor is the top of the system load, the element after the canvas.
 function size(canvas: HTMLCanvasElement) {
   const dpr = window.devicePixelRatio || 1;
   const [w, h] = [canvas.clientWidth, canvas.clientHeight];
@@ -92,7 +95,7 @@ function size(canvas: HTMLCanvasElement) {
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
   }
-  return { w, h, dpr };
+  return { w, h, dpr, floor: (canvas.nextElementSibling as HTMLElement).offsetTop };
 }
 
 // The face colour: the dark tone takes a little of the light one where it faces the light, so it still reads on a near
@@ -108,21 +111,21 @@ const edgeAlpha = (front: boolean) => (front ? 0.4 : 0.1);
 
 function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
   const ctx = canvas.getContext("2d")!;
-  const { w, h, dpr } = size(canvas);
+  const { w, h, dpr, floor } = size(canvas);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const { tris, cx, cy, shadow } = frame(t, w, h);
+  const { tris, cx, cy, shadow } = frame(t, w, floor);
 
-  const gradient = ctx.createRadialGradient(shadow.x, h, 0, shadow.x, h, shadow.rx);
+  const gradient = ctx.createRadialGradient(shadow.x, floor, 0, shadow.x, floor, shadow.rx);
   gradient.addColorStop(0, `rgb(${style.shadow.join(" ")})`);
   gradient.addColorStop(1, "transparent");
   ctx.save();
-  ctx.translate(0, h);
+  ctx.translate(0, floor);
   ctx.scale(1, 0.16);
-  ctx.translate(0, -h);
+  ctx.translate(0, -floor);
   ctx.fillStyle = gradient;
   ctx.globalAlpha = shadow.alpha;
-  ctx.fillRect(shadow.x - shadow.rx, h - shadow.rx, shadow.rx * 2, shadow.rx);
+  ctx.fillRect(shadow.x - shadow.rx, floor - shadow.rx, shadow.rx * 2, shadow.rx);
   ctx.restore();
 
   ctx.lineJoin = "round";
@@ -302,8 +305,8 @@ function webgl(canvas: HTMLCanvasElement) {
       gl.generateMipmap(gl.TEXTURE_2D);
     },
     draw(t: number, box: DOMRect) {
-      const { w, h, dpr } = size(canvas);
-      const { tris, cx, cy, shadow } = frame(t, w, h);
+      const { w, h, dpr, floor } = size(canvas);
+      const { tris, cx, cy, shadow } = frame(t, w, floor);
       let i = 0;
       const put = (...v: number[]) => {
         data.set(v, i);
@@ -311,7 +314,7 @@ function webgl(canvas: HTMLCanvasElement) {
       };
       const ry = shadow.rx * 0.16;
       for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]])
-        put(shadow.x + x * shadow.rx, h + y * ry, 0, 0, 0, 0, 0, 0, x, y, shadow.alpha, 2, 0);
+        put(shadow.x + x * shadow.rx, floor + y * ry, 0, 0, 0, 0, 0, 0, x, y, shadow.alpha, 2, 0);
       for (const { p, r, n, tone, front } of tris)
         for (let k = 0; k < 3; k++) put(cx + p[k][0], cy + p[k][1], ...r[k], ...n, ...bary[k], tone, front ? 1 : 0);
       gl.viewport(0, 0, w * dpr, h * dpr);

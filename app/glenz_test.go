@@ -204,6 +204,24 @@ func (b *browser) glenzShot() (image.Image, int) {
 	return img, lit
 }
 
+// litRows returns the first and last rows of a canvas shot that hold drawn pixels, in CSS pixels from the canvas top.
+func litRows(img image.Image, height float64) (top, bottom float64) {
+	bg, scale := img.At(0, 0), float64(img.Bounds().Dy())/height
+	first, last := -1, -1
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if img.At(x, y) != bg {
+				if first < 0 {
+					first = y
+				}
+				last = y
+				break
+			}
+		}
+	}
+	return float64(first-img.Bounds().Min.Y) / scale, float64(last-img.Bounds().Min.Y+1) / scale
+}
+
 func same(a, b image.Image) bool {
 	for y := a.Bounds().Min.Y; y < a.Bounds().Max.Y; y++ {
 		for x := a.Bounds().Min.X; x < a.Bounds().Max.X; x++ {
@@ -227,10 +245,13 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	var webgl bool
 	b.eval(`!!document.querySelector("canvas.glenz").getContext("webgl2")`, &webgl)
 
-	var size struct{ Width, Height, CanvasWidth, CanvasHeight, SidebarWidth, SidebarHeight, Groups, Below float64 }
-	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect(); const s = document.querySelector("aside.sidebar");
+	var size struct{ Width, Height, CanvasWidth, CanvasHeight, SidebarWidth, SidebarHeight, Groups, Below, Floor, Chart float64 }
+	measure := `(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect(); const s = document.querySelector("aside.sidebar");
+		const below = document.querySelector(".load").getBoundingClientRect().top;
 		return { width: r.width, height: r.height, canvasWidth: c.width, canvasHeight: c.height, sidebarWidth: s.clientWidth, sidebarHeight: s.clientHeight,
-			groups: document.querySelector(".groups").getBoundingClientRect().bottom, below: document.querySelector(".load").getBoundingClientRect().top }; })()`, &size)
+			groups: document.querySelector(".groups").getBoundingClientRect().bottom, below, floor: below - r.top,
+			chart: document.querySelector(".load svg").getBoundingClientRect().top - r.top }; })()`
+	b.eval(measure, &size)
 	near := func(a, b float64) bool { return math.Abs(a-b) <= 1 }
 	if !near(size.Width, size.SidebarWidth) || !near(size.Height, size.SidebarHeight) || !near(size.CanvasWidth, 2*size.Width) || !near(size.CanvasHeight, 2*size.Height) {
 		t.Fatalf("the canvas does not cover the sidebar at the device pixel ratio: %+v", size)
@@ -246,6 +267,17 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	}
 	if now, _ := b.glenzShot(); lit < 500 || same(first, now) {
 		t.Fatalf("the solid is not drawn or does not move: %d pixels drawn", lit)
+	}
+	// Over one 6.8 s bounce the solid stays in a low band just above the system load chart: the floor plus 36 px of
+	// travel and the solid's own height.
+	high, low := size.Height, 0.0
+	for end := time.Now().Add(7200 * time.Millisecond); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
+		img, _ := b.glenzShot()
+		top, bottom := litRows(img, size.Height)
+		high, low = math.Min(high, top), math.Max(low, bottom)
+	}
+	if low >= size.Chart || high < size.Floor-130 {
+		t.Fatalf("the solid reaches from %.0f to %.0f px, want within 130 px above the floor at %.0f and above the chart at %.0f", high, low, size.Floor, size.Chart)
 	}
 	if n := b.counter("maps") - maps; n != 0 {
 		t.Fatalf("the page map was drawn %d times while nothing changed", n)
@@ -279,6 +311,10 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	}
 	if now, _ := b.glenzShot(); !same(still, now) {
 		t.Fatal("the still frame changed under reduced motion")
+	}
+	b.eval(measure, &size)
+	if top, bottom := litRows(still, size.Height); bottom >= size.Chart || top < size.Floor-130 {
+		t.Fatalf("the still frame spans %.0f to %.0f px, want above the chart at %.0f and near the floor at %.0f", top, bottom, size.Chart, size.Floor)
 	}
 
 	b.open(e.url, 1400, 900, false)
