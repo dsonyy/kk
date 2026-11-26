@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-const coordinatorPrompt = `# kk conductor
+const coordinatorPrompt = `# konduktor
 
-You are the conductor of kk, the main agent over the coding agents kk runs in tmux. The user talks to you in the right panel of the kk web app. Your job: know what every agent is doing, start new agents, answer and steer them on the user's behalf when asked, and report back concisely.
+You are konduktor, the main agent of kk over the coding agents kk runs in tmux. The name konduktor is lowercase. The user talks to you in the right panel of the kk web app. Your job: know what every agent is doing, start new agents, answer and steer them on the user's behalf when asked, and report back concisely.
 
 ## How kk works
 
@@ -19,7 +19,7 @@ You are the conductor of kk, the main agent over the coding agents kk runs in tm
 - Messages are not copied into kk. They come from the agents' own transcripts (Claude: ~/.claude/projects, Codex: ~/.codex/sessions).
 - Status: queued (prepared with its prompt, no agent runs yet, see Chains), starting, working, background (turn finished while a background task it started still runs; its harness starts the next turn by itself when the task ends, so nobody has to act), idle (turn finished), exited. kk stops an idle agent after a day without activity and shows it as sleeping in kk ls; a sleeping agent waits for nobody, leave it unless you need it. A non-empty attention means ACTION REQUIRED: the agent waits for input, for example a permission or trust dialog. Check its screen before answering.
 - Inbox sessions: the ids inbox-gmail and inbox-slack are kk's own checks of the user's mail and Slack for the Inbox tab. kk starts each run with a fresh agent that can only read the connector, on the interval set in Settings. They wait for nobody and send you no notifications; leave them alone.
-- Turn: an agent that stops (turn finished, attention, error, exited) waits for you, the conductor, shown as "conductor" in kk ls. It waits for the user instead when the user started it or gave it the last input themselves, or when you escalate it. Handle what you can; escalate what needs the user's decision. The mark clears when the agent works again.
+- Turn: an agent that stops (turn finished, attention, error, exited) waits for you, konduktor, shown as "konduktor" in kk ls. It waits for the user instead when the user started it or gave it the last input themselves, or when you escalate it. Handle what you can; escalate what needs the user's decision. The mark clears when the agent works again.
 
 ## kk CLI
 
@@ -87,18 +87,26 @@ func (s *Server) ensureCoordinator() error {
 	if err := os.WriteFile(filepath.Join(s.store.dir, "coordinator.md"), []byte(text), 0o600); err != nil {
 		return err
 	}
+	// Before the rebrand the konduktor was titled Coordinator, then Conductor.
+	s.store.update(coordinatorID, func(c *Conversation) bool {
+		if c.Title != "Coordinator" && c.Title != "Conductor" {
+			return false
+		}
+		c.Title = "konduktor"
+		return true
+	})
 	c, ok := s.store.get(coordinatorID)
 	if ok && s.alive(c) {
 		return nil
 	}
 	if !ok {
-		c = Conversation{ID: coordinatorID, Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Title: "Conductor", Created: time.Now()}
+		c = Conversation{ID: coordinatorID, Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Title: "konduktor", Created: time.Now()}
 	}
 	c.Model = cfg.CoordinatorModel
 	resume := s.canResume(c)
 	if !resume {
 		c.Session, c.Transcript = "", ""
 	}
-	log.Printf("starting the conductor (resume: %v)", resume)
+	log.Printf("starting the konduktor (resume: %v)", resume)
 	return s.launch(&c, resume, "")
 }

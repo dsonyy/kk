@@ -93,7 +93,7 @@ func TestBackgroundTimeout(t *testing.T) {
 
 func TestBackgroundNotice(t *testing.T) {
 	e := newCoordinatorEnv(t)
-	id := e.asConductor("new", "claude", "-C", e.work, "run the tests in the background")
+	id := e.asKonduktor("new", "claude", "-C", e.work, "run the tests in the background")
 	e.waitFor("background", id, inBackground)
 	time.Sleep(4 * time.Second)
 	if n := countLines(e.notifications(), id, ""); n != 0 {

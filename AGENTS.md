@@ -1,6 +1,6 @@
 # AGENTS.md
 
-kk is a web conductor for coding agents. The server starts Claude Code, Codex and Cursor CLI in windows of the tmux session `kk`, reads their hooks and transcripts, and shows the conversations in a single-page app. The conductor, a long-running Claude Code agent, runs in the window `coordinator`. Internal names keep the word coordinator so a running conductor and `~/.kk` carry over.
+kk is konduktor, a web app for coding agents; the two k's of konduktor give kk its name. The server starts Claude Code, Codex and Cursor CLI in windows of the tmux session `kk`, reads their hooks and transcripts, and shows the conversations in a single-page app. konduktor, the main agent, is a long-running Claude Code agent in the window `coordinator`. Internal names keep the word coordinator, and the API and saved state keep the value conductor, so a running konduktor and `~/.kk` carry over.
 
 Design and plan: `~/brain/projects/kk/`.
 

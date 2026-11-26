@@ -106,37 +106,37 @@ func TestChainWorktreeAtStart(t *testing.T) {
 	}
 }
 
-func TestChainNotifiesConductor(t *testing.T) {
+func TestChainNotifiesKonduktor(t *testing.T) {
 	e := newCoordinatorEnv(t)
-	// The user's own agent: its turns go to the user, its handoff to the conductor.
+	// The user's own agent: its turns go to the user, its handoff to the konduktor.
 	mine := e.mustKK("new", "claude", "-C", e.work, "hello")
 	e.waitFor("idle", mine, func(c convView) bool { return c.Status == statusIdle })
-	a := e.asConductor("new", "claude", "-C", e.work, "-after", mine, "Step A")
-	b := e.asConductor("new", "claude", "-C", e.work, "-after", mine, "Step B")
+	a := e.asKonduktor("new", "claude", "-C", e.work, "-after", mine, "Step A")
+	b := e.asKonduktor("new", "claude", "-C", e.work, "-after", mine, "Step B")
 	e.mustKK("send", mine, "again")
 	e.waitNotified(mine, fmt.Sprintf(`(idle): finished its turn; queued after it: %s "Step A", %s "Step B". Look: kk screen %s`, a, b, mine))
 	if c := e.conv(mine); c.WaitingFor != waitingUser {
-		t.Fatalf("the user's predecessor went to the conductor: %+v", c.Conversation)
+		t.Fatalf("the user's predecessor went to the konduktor: %+v", c.Conversation)
 	}
 	if !isQueued(e.conv(a)) || !isQueued(e.conv(b)) {
 		t.Fatal("a successor started without kk start")
 	}
-	e.asConductor("start", a, "Done in commit abc.")
-	c := e.waitFor("successor answer", a, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
+	e.asKonduktor("start", a, "Done in commit abc.")
+	c := e.waitFor("successor answer", a, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
 	if !hasEvent(c, kindUser, "Step A\n\nHandoff from the session before this one:\n\nDone in commit abc.") {
 		t.Fatalf("successor prompt: %+v", c.Events)
 	}
 
-	// A predecessor the user needs to answer is not the conductor's, and its close is news.
+	// A predecessor the user needs to answer is not the konduktor's, and its close is news.
 	asks := e.mustKK("new", "claude", "-C", e.work, "hello")
 	e.waitFor("idle", asks, func(c convView) bool { return c.Status == statusIdle })
-	waits := e.asConductor("new", "claude", "-C", e.work, "-after", asks, "Waits")
+	waits := e.asKonduktor("new", "claude", "-C", e.work, "-after", asks, "Waits")
 	e.mustKK("send", asks, "ask for permission")
 	e.waitFor("dialog", asks, func(c convView) bool { return c.Attention != "" })
 	e.mustKK("close", asks)
 	e.waitNotified(asks, fmt.Sprintf(`was closed; queued after it: %s "Waits"`, waits))
 	if n := countLines(e.notifications(), asks, "needs action"); n != 0 {
-		t.Fatalf("the user's dialog went to the conductor: %q", e.notifications())
+		t.Fatalf("the user's dialog went to the konduktor: %q", e.notifications())
 	}
 	if !isQueued(e.conv(waits)) {
 		t.Fatal("the successor of a closed conversation started")

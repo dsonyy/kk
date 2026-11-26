@@ -44,11 +44,11 @@ func (s *Server) controlled(id string) {
 	s.mu.Unlock()
 }
 
-// conductorsTurn tells whether the conductor, not the user, has to act when c stops: an agent started or last
+// konduktorsTurn tells whether the konduktor, not the user, has to act when c stops: an agent started or last
 // driven through the kk CLI and not escalated. The user sees their own agents in the web app.
-func conductorsTurn(c Conversation) bool { return c.ByAgent && c.Escalation == "" }
+func konduktorsTurn(c Conversation) bool { return c.ByAgent && c.Escalation == "" }
 
-// handOver tells the conductor about a conversation the user started and handed to it. With no conductor running, nobody hears of it.
+// handOver tells the konduktor about a conversation the user started and handed to it. With no konduktor running, nobody hears of it.
 func (s *Server) handOver(id string) {
 	if !s.cfg().coordinator() {
 		return
@@ -63,10 +63,10 @@ var nonLetters = regexp.MustCompile(`[^\pL]+`)
 // shorten puts s on one line of at most max characters.
 func shorten(s string, max int) string { return firstLine(strings.Join(strings.Fields(s), " "), max) }
 
-// observe compares c with what the notifier last knew and queues the events the conductor should hear about.
+// observe compares c with what the notifier last knew and queues the events the konduktor should hear about.
 // The first tick only takes note: a restart is no news.
 func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.Time) {
-	// The integrations are kk's own; their runs are no news to the conductor.
+	// The integrations are kk's own; their runs are no news to the konduktor.
 	if c.Role == coordinatorID || c.Integration != "" {
 		return
 	}
@@ -102,8 +102,8 @@ func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.T
 	if s.ticks == 1 {
 		w.raises = raises
 	}
-	// The conductor owns the handoff to queued successors, also of an agent that waits for the user.
-	mine := conductorsTurn(c)
+	// The konduktor owns the handoff to queued successors, also of an agent that waits for the user.
+	mine := konduktorsTurn(c)
 	var reason string
 	switch {
 	case c.Closed || c.Sleeping || !mine && !chain:
@@ -130,8 +130,8 @@ func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.T
 	}
 }
 
-// flushNotices types the gathered events into the conductor as one message, like kk send does. Claude Code
-// queues a message that arrives mid-turn. Nothing is typed while the conductor is not ready for a message,
+// flushNotices types the gathered events into the konduktor as one message, like kk send does. Claude Code
+// queues a message that arrives mid-turn. Nothing is typed while the konduktor is not ready for a message,
 // because the Enter would answer its own dialog.
 func (s *Server) flushNotices(now time.Time) {
 	if len(s.notices) == 0 {
@@ -164,7 +164,7 @@ func (s *Server) flushNotices(now time.Time) {
 		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer
 		// news, unless queued successors wait for it.
 		next := queued[id]
-		if !ok || c.Closed && n.reason != closedReason || !conductorsTurn(c) && len(next) == 0 {
+		if !ok || c.Closed && n.reason != closedReason || !konduktorsTurn(c) && len(next) == 0 {
 			continue
 		}
 		if n.reason == "needs action" && c.Attention == "" {
@@ -200,10 +200,10 @@ func (s *Server) flushNotices(now time.Time) {
 		return
 	}
 	text := strings.Join(lines, "\n")
-	log.Printf("notify the conductor about %s", strings.Join(told, ", "))
+	log.Printf("notify the konduktor about %s", strings.Join(told, ", "))
 	go func() {
 		if err := pasteText(co.Window, text); err != nil {
-			log.Printf("notify the conductor: %v", err)
+			log.Printf("notify the konduktor: %v", err)
 		}
 	}()
 }

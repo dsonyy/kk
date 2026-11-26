@@ -12,7 +12,7 @@ import (
 
 func TestSleepingSession(t *testing.T) {
 	e := newCoordinatorEnv(t, "KK_SLEEP_AFTER=2s")
-	quiet := e.asConductor("new", "claude", "-C", e.work, "hello")
+	quiet := e.asKonduktor("new", "claude", "-C", e.work, "hello")
 	busy := e.mustKK("new", "claude", "-C", e.work, "slow task")
 	e.waitFor("the quiet agent's turn", quiet, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hello") })
 	c := e.waitFor("sleep", quiet, func(c convView) bool { return c.Sleeping })
@@ -27,10 +27,10 @@ func TestSleepingSession(t *testing.T) {
 		t.Fatalf("a working agent: %s, sleeping %v", c.Status, c.Sleeping)
 	}
 	if c := e.conv(coordinatorID); c.Status != statusIdle || c.Sleeping {
-		t.Fatalf("the conductor: %s, sleeping %v", c.Status, c.Sleeping)
+		t.Fatalf("the konduktor: %s, sleeping %v", c.Status, c.Sleeping)
 	}
 	if n := countLines(e.notifications(), quiet, "exited without"); n != 0 {
-		t.Fatalf("the conductor heard of the sleep: %s", strings.Join(e.notifications(), "\n---\n"))
+		t.Fatalf("the konduktor heard of the sleep: %s", strings.Join(e.notifications(), "\n---\n"))
 	}
 
 	e.mustKK("resume", quiet)
@@ -75,8 +75,8 @@ func count(c convView, kind, text string) int {
 
 func TestScheduledSession(t *testing.T) {
 	e := newCoordinatorEnv(t)
-	id := e.asConductor("new", "claude", "-C", e.work, "first")
-	e.waitFor("the first turn", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingConductor })
+	id := e.asKonduktor("new", "claude", "-C", e.work, "first")
+	e.waitFor("the first turn", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
 
 	for _, bad := range []Schedule{
 		{Days: []int{7}, Times: []string{"09:00"}, Prompt: "x"},
@@ -90,7 +90,7 @@ func TestScheduledSession(t *testing.T) {
 		}
 	}
 	if code, _ := e.schedule(coordinatorID, Schedule{Days: []int{1}, Times: []string{"09:00"}, Prompt: "x"}); code != 400 {
-		t.Fatalf("scheduled the conductor: %d", code)
+		t.Fatalf("scheduled the konduktor: %d", code)
 	}
 	code, c := e.schedule(id, Schedule{Days: []int{5, 1, 1}, Times: []string{"18:00", "09:30"}, Prompt: " check "})
 	if code != 200 || c.Schedule == nil || c.Schedule.Prompt != "check" || len(c.Schedule.Days) != 2 || c.Schedule.Times[0] != "09:30" || c.NextRun.IsZero() {
@@ -161,12 +161,12 @@ func TestScheduledSession(t *testing.T) {
 	}
 }
 
-// A queued session never sleeps and cannot be scheduled; a scheduled run of its predecessor leaves it queued for the conductor's handoff.
+// A queued session never sleeps and cannot be scheduled; a scheduled run of its predecessor leaves it queued for the konduktor's handoff.
 func TestScheduleAndSleepInChain(t *testing.T) {
 	e := newCoordinatorEnv(t, "KK_SLEEP_AFTER=2s")
-	pred := e.asConductor("new", "claude", "-C", e.work, "hello")
+	pred := e.asKonduktor("new", "claude", "-C", e.work, "hello")
 	e.waitFor("predecessor idle", pred, func(c convView) bool { return c.Status == statusIdle })
-	next := e.asConductor("new", "claude", "-C", e.work, "-after", pred, "Second step")
+	next := e.asKonduktor("new", "claude", "-C", e.work, "-after", pred, "Second step")
 	if code, _ := e.schedule(next, Schedule{Days: []int{0, 1, 2, 3, 4, 5, 6}, Times: []string{"09:00"}, Prompt: "x"}); code != 409 {
 		t.Fatalf("scheduled a queued session: %d", code)
 	}
@@ -180,9 +180,9 @@ func TestScheduleAndSleepInChain(t *testing.T) {
 		t.Fatalf("the queued session: %s, sleeping %v", c.Status, c.Sleeping)
 	}
 	if n := countLines(e.notifications(), pred, "exited without"); n != 0 {
-		t.Fatalf("the conductor heard of the sleep: %s", strings.Join(e.notifications(), "\n---\n"))
+		t.Fatalf("the konduktor heard of the sleep: %s", strings.Join(e.notifications(), "\n---\n"))
 	}
-	e.asConductor("start", next, "the nightly build is green")
+	e.asKonduktor("start", next, "the nightly build is green")
 	e.waitFor("the successor's answer", next, func(c convView) bool {
 		return c.Status == statusIdle && hasEvent(c, kindUser, "Second step\n\nHandoff from the session before this one:\n\nthe nightly build is green")
 	})

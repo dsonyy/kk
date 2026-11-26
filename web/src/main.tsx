@@ -175,7 +175,7 @@ function App() {
   if (sort === "title") projects.sort((a, b) => byName(names.get(a)!, names.get(b)!));
   if (sort === "active") projects.sort((a, b) => byActivity(groups.get(a)!, groups.get(b)!));
 
-  const [conductor, setConductor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
+  const [konduktor, setKonduktor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
 
   // An object, so that showing the same panel twice scrolls to it again.
   const [focus, setFocus] = useState<{ id: string }>();
@@ -201,17 +201,17 @@ function App() {
           </a>
         ))}
         <Button
-          class={conductor ? "conductor-toggle on" : "conductor-toggle"}
-          label="Conductor"
-          aria-pressed={conductor}
-          title={conductor ? "Hide the conductor panel" : "Show the conductor panel"}
+          class={konduktor ? "konduktor-toggle on" : "konduktor-toggle"}
+          label="konduktor"
+          aria-pressed={konduktor}
+          title={konduktor ? "Hide the konduktor panel" : "Show the konduktor panel"}
           onClick={() => {
-            localStorage.setItem("kk.conductor", conductor ? "hidden" : "");
-            setConductor(!conductor);
+            localStorage.setItem("kk.conductor", konduktor ? "hidden" : "");
+            setKonduktor(!konduktor);
           }}
         />
       </nav>
-      {/* The coordinator panel stays mounted on the right of every tab; each tab's view goes before it. */}
+      {/* The konduktor panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
         {tab === "Inbox" && <Inbox onStart={create} />}
@@ -265,7 +265,7 @@ function App() {
               );
             })}
           </div>
-          <Glenz page={`${tab} ${conductor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
+          <Glenz page={`${tab} ${konduktor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
           <Load />
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>
@@ -287,7 +287,7 @@ function App() {
             ),
           )}
         </div>
-        <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!conductor} />
+        <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!konduktor} />
       </div>
       {creating !== undefined && (
         <NewSession
@@ -310,7 +310,7 @@ function stateLabel(c: Conversation) {
   if (c.closed) return "Closed";
   if (c.sleeping) return "Sleeping";
   if (c.status === "queued") return "Queued";
-  if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
+  if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · konduktor's turn" : "konduktor's turn";
   if (c.attention) return "Action required";
   if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
   if (c.integration && c.status === "idle") return "Idle";
@@ -326,7 +326,7 @@ function attention(c: Conversation) {
   return c.run_done ? "called" : "";
 }
 
-// A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work, then one the conductor holds.
+// A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work, then one konduktor holds.
 function loudness(c: Conversation) {
   if (c.waiting_for === "user") return c.attention || c.run_done ? 0 : 1;
   if (c.status === "working" || c.status === "starting" || c.status === "background") return 2;
@@ -703,7 +703,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
               <Icon name="pin" />
             </button>
           )}
-          <h1>{side ? "Conductor" : c.title || "Untitled"}</h1>
+          <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>
           <div class="actions">
             {!c.closed && !queued && (
               <div class="modes">
@@ -788,7 +788,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
               <div class="box-warn">
                 <p>
                   <Icon name="alert" />
-                  The conductor hands this to you: {c.escalation}
+                  konduktor hands this to you: {c.escalation}
                 </p>
               </div>
             )}
@@ -897,7 +897,7 @@ function Queued({ c, before, onShow, reload }: { c: Conversation; before?: Conve
         )}
       </header>
       <p class="hint">
-        Nothing starts by itself. When the session before it has finished, the conductor checks the work and starts this one with a handoff added to the prompt. You can
+        Nothing starts by itself. When the session before it has finished, konduktor checks the work and starts this one with a handoff added to the prompt. You can
         start it yourself any time.
       </p>
       <Field label="Prepared prompt">
@@ -987,7 +987,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         onValue={setText}
         skills={skills}
         attachments={attachments}
-        placeholder={c.role === COORDINATOR ? "Message the conductor" : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
+        placeholder={c.role === COORDINATOR ? "Message konduktor" : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
             e.preventDefault();
@@ -1019,7 +1019,7 @@ function CoordinatorPanel({ c, reload, hidden }: { c?: Conversation; reload: () 
   return (
     <aside class="side-panel" hidden={hidden} style={{ "--panel-width": `${width}px` }}>
       <div class={dragging ? "panel-resize dragging" : "panel-resize"} onPointerDown={() => setDragging(true)} />
-      {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">The conductor is not running.</div>}
+      {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">konduktor is not running.</div>}
     </aside>
   );
 }
@@ -1160,8 +1160,8 @@ function NewSession({ initial, onClose, onCreated }: { initial: string; onClose:
             </span>
           </div>
           <div class="field">
-            <Check label="Hand over to conductor" checked={managed} onChange={(e) => setManaged(e.currentTarget.checked)} />
-            <span class="hint">The conductor drives the session when it stops, until you write into it yourself.</span>
+            <Check label="Hand over to konduktor" checked={managed} onChange={(e) => setManaged(e.currentTarget.checked)} />
+            <span class="hint">konduktor drives the session when it stops, until you write into it yourself.</span>
           </div>
           <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput

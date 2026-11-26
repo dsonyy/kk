@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const usage = `kk - web conductor for coding agents in tmux
+const usage = `kk - konduktor, run and steer coding agents in tmux from the web
 
   kk                          start the server
   kk url                      print the web address
@@ -42,7 +42,7 @@ const usage = `kk - web conductor for coding agents in tmux
   kk reset <id>               start the conversation over with a clean context
   kk resume <id>              restart an exited agent
   kk close <id>               stop the agent and close the conversation, resume reopens it
-  kk escalate <id> <reason>   hand a waiting agent from the conductor to the user, with a one-line reason
+  kk escalate <id> <reason>   hand a waiting agent from the konduktor to the user, with a one-line reason
   kk hook <event>             hook endpoint for agents (payload on stdin)
   kk guard <tool,...>         hook that refuses an agent every tool not listed
 `
@@ -131,7 +131,7 @@ func serve() error {
 	s.tick()
 	if s.cfg().coordinator() {
 		if err := s.ensureCoordinator(); err != nil {
-			log.Printf("conductor: %v", err)
+			log.Printf("konduktor: %v", err)
 		}
 	}
 	log.Printf("kk started on %s", addr())
@@ -212,7 +212,7 @@ func runCLI(cmd string, args []string) error {
 			if c.Attention != "" {
 				state = "ACTION REQUIRED"
 			}
-			waiting := c.WaitingFor
+			waiting := waitingName(c.WaitingFor)
 			if waiting == "" {
 				waiting = "-"
 			}
@@ -242,7 +242,7 @@ func runCLI(cmd string, args []string) error {
 			fmt.Printf("ACTION REQUIRED: %s\n", c.Attention)
 		}
 		if c.WaitingFor != "" {
-			fmt.Printf("Waiting for the %s\n", c.WaitingFor)
+			fmt.Printf("Waiting for the %s\n", waitingName(c.WaitingFor))
 		}
 		if c.Escalation != "" {
 			fmt.Printf("Escalated to the user: %s\n", c.Escalation)
@@ -395,4 +395,11 @@ func clip(s string, n int) string {
 
 func indent(s string) string {
 	return "  " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n  ")
+}
+
+func waitingName(w string) string {
+	if w == waitingKonduktor {
+		return "konduktor"
+	}
+	return w
 }

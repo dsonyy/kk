@@ -40,7 +40,7 @@ func TestLogs(t *testing.T) {
 	e.waitFor("second answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: secret follow up") })
 	exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "-X", "PUT", "-d", `{"start_timeout_seconds":9}`, "http://kk/api/settings").Run()
 	e.post("/api/logs", map[string]string{"error": "TypeError: x is undefined\nat main.js:1"})
-	e.asConductor("group", id, "Log tab")
+	e.asKonduktor("group", id, "Log tab")
 	log := e.waitLog("events", func(l string) bool {
 		for _, want := range []string{
 			"kk started on " + e.addr,
