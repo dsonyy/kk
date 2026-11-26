@@ -31,10 +31,14 @@ type Server struct {
 	mu       sync.Mutex
 	settings Settings
 	tails    map[string]*Tail
-	// subagents holds the tails of the transcripts of agents' subagents, by path.
+	// subagents holds the tails of the transcripts of agents' subagents, by path. They keep only the usage.
 	subagents map[string]*Tail
-	grouping  chan string
-	subs      map[chan string]bool
+	// metas holds the meta files of Claude Code subagents, by path.
+	metas map[string]metaFile
+	// peeks holds the full tails of the subagents someone looks at, by path.
+	peeks    map[string]*peek
+	grouping chan string
+	subs     map[chan string]bool
 	// asked counts, per conversation without a group, the user messages the last question about its group covered.
 	asked map[string]int
 	ticks int
@@ -80,6 +84,10 @@ type convView struct {
 	NextRun time.Time `json:"next_run,omitzero"`
 	// Usage covers every transcript of the conversation. It is nil for a harness that does not report usage.
 	Usage *Usage `json:"usage"`
+	// Subagents are the agents the conversation's agent started, oldest first.
+	Subagents []subagentView `json:"subagents"`
+	// Subagent is set when the view shows a subagent, which is read only.
+	Subagent *subagentView `json:"subagent,omitempty"`
 }
 
 type apiError struct {
@@ -260,6 +268,7 @@ func (s *Server) view(c Conversation, events bool) convView {
 		u := c.TotalActivity().Usage
 		v.Usage = &u
 	}
+	v.Subagents = subagentViews(c)
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -290,6 +299,9 @@ func (s *Server) handleList(r *http.Request) (any, error) {
 }
 
 func (s *Server) handleShow(r *http.Request) (any, error) {
+	if id := r.PathValue("id"); strings.Contains(id, ":") {
+		return s.showSubagent(id)
+	}
 	c, err := s.conv(r)
 	if err != nil {
 		return nil, err
@@ -1059,7 +1071,7 @@ func (s *Server) tick() {
 			continue
 		}
 		events := s.readTail(c)
-		activity := s.activity(c)
+		activity, agents := s.activity(c)
 		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
@@ -1109,6 +1121,9 @@ func (s *Server) tick() {
 					c.Transcripts[path], changed = a, true
 				}
 			}
+			if mergeSubagents(c, agents) {
+				changed = true
+			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
 				if name := codexThreadName(c.Session); name != "" && name != c.Title {
 					c.Title, changed = name, true
@@ -1137,6 +1152,7 @@ func (s *Server) tick() {
 	}
 	s.lifecycle(now)
 	s.flushNotices(now)
+	s.forget(now)
 }
 
 // readTail returns the tail of c's transcript when it has new lines.
@@ -1154,16 +1170,17 @@ func (s *Server) readTail(c Conversation) *Tail {
 	return &cp
 }
 
-// activity returns the activity of c's current transcript and of the transcripts of its subagents, by file. It counts
-// the lines of the transcript that were read.
-func (s *Server) activity(c Conversation) map[string]Activity {
+// activity returns the activity of c's current transcript and of the transcripts of its subagents, by file, and what
+// those subagents are. It counts the lines of the transcript that were read.
+func (s *Server) activity(c Conversation) (map[string]Activity, []Subagent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.tail(c)
 	if t == nil {
-		return nil
+		return nil, nil
 	}
 	out := map[string]Activity{c.Transcript: t.Activity.clone()}
+	var agents []Subagent
 	if list := subagents[c.Harness]; list != nil {
 		for _, p := range list(c) {
 			sub := s.subagents[p]
@@ -1173,9 +1190,12 @@ func (s *Server) activity(c Conversation) map[string]Activity {
 			}
 			sub.read(usageParser[c.Harness])
 			out[p] = sub.Activity.clone()
+			if a, ok := s.describe(c, p, sub, t); ok {
+				agents = append(agents, a)
+			}
 		}
 	}
-	return out
+	return out, agents
 }
 
 // tail returns the tail of c's transcript, or nil when kk cannot read it. The caller holds s.mu.

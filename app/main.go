@@ -107,7 +107,7 @@ func serve() error {
 	}
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
-		tails: map[string]*Tail{}, subagents: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
+		tails: map[string]*Tail{}, subagents: map[string]*Tail{}, metas: map[string]metaFile{}, peeks: map[string]*peek{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
 		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{}, handovers: map[string]string{}, roster: map[string][]string{}, answers: map[string]runAnswer{},
 	}
 	os.Remove(sockPath())
@@ -245,6 +245,7 @@ func runCLI(cmd string, args []string) error {
 				after = "  (after " + c.After + ")"
 			}
 			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
+			printAgents(c.Subagents, false)
 		}
 	case "show":
 		if err := need(1); err != nil {
@@ -257,7 +258,11 @@ func runCLI(cmd string, args []string) error {
 		if err := call("GET", "/api/conversations/"+args[0], nil, &c); err != nil {
 			return err
 		}
-		fmt.Printf("%s · %s · %s · %s\n", c.Title, c.Harness, c.Dir, c.Status)
+		status := c.Status
+		if c.Subagent != nil {
+			status = "subagent of " + c.Subagent.Of + " · " + c.Subagent.State
+		}
+		fmt.Printf("%s · %s · %s · %s\n", c.Title, c.Harness, c.Dir, status)
 		if c.Attention != "" {
 			fmt.Printf("ACTION REQUIRED: %s\n", c.Attention)
 		}
@@ -279,6 +284,10 @@ func runCLI(cmd string, args []string) error {
 		}
 		if c.Status == statusQueued {
 			fmt.Printf("Queued with the prompt:\n%s\n", indent(c.Prompt))
+		}
+		if len(c.Subagents) > 0 {
+			fmt.Println("Subagents:")
+			printAgents(c.Subagents, true)
 		}
 		events := c.Events
 		if len(events) > *n {

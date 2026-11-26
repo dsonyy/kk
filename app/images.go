@@ -98,9 +98,14 @@ func withImages(id string, e Event) Event {
 
 // handleImage serves a picture that a message of the conversation names, so the server reads no other file.
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Query().Get("path")
-	c, ok := s.store.get(r.PathValue("id"))
-	if !ok || !s.names(c, path) {
+	path, id := r.URL.Query().Get("path"), r.PathValue("id")
+	c, ok := s.store.get(id)
+	if strings.Contains(id, ":") {
+		ok = s.subagentNames(id, path)
+	} else if ok {
+		ok = s.names(c, path)
+	}
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}

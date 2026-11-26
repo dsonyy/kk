@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -274,6 +275,23 @@ func parseClaudeUsage(t *Tail, raw []byte) {
 		if l.Type == "assistant" && l.Message.Usage != nil {
 			t.Context = l.Message.Usage.context()
 		}
+		if l.Type == "assistant" && l.Message.Model != "" && l.Message.Model != "<synthetic>" {
+			t.model = l.Message.Model
+		}
+		t.clock(l.Timestamp)
+	}
+}
+
+// clock keeps the times of the first and the last line of a subagent's transcript.
+func (t *Tail) clock(at time.Time) {
+	if at.IsZero() {
+		return
+	}
+	if t.first.IsZero() {
+		t.first = at
+	}
+	if at.After(t.Last) {
+		t.Last = at
 	}
 }
 
@@ -332,25 +350,28 @@ func meterCodex(t *Tail, at time.Time, total, last codexCount) {
 	t.Activity.meter(at, t.model, u)
 }
 
-// codexChildren maps the rollouts of Codex subagents to the thread that spawned them. A rollout's parent never
-// changes, so each file is read once.
-var codexChildren = struct {
-	parent map[string]string
-}{parent: map[string]string{}}
+// codexSpawns holds how the thread of each rollout was spawned, empty for a thread nobody spawned. A rollout's spawn
+// never changes, so each file is read once.
+var codexSpawns = struct {
+	sync.Mutex
+	of map[string]codexSpawn
+}{of: map[string]codexSpawn{}}
+
+// codexSpawn is the thread that spawned a subagent's thread, and the name and role Codex gave the subagent.
+type codexSpawn struct {
+	Parent   string `json:"parent_thread_id"`
+	Nickname string `json:"agent_nickname"`
+	Role     string `json:"agent_role"`
+}
 
 // codexSubagents lists the rollouts of the subagents of a Codex thread, theirs included, next to the thread's rollout
-// or anywhere in Codex's history. The caller holds s.mu.
+// or anywhere in Codex's history.
 func codexSubagents(thread, rollout string) []string {
 	near, _ := filepath.Glob(filepath.Join(filepath.Dir(rollout), "*.jsonl"))
 	all, _ := filepath.Glob(filepath.Join(codexHome(), "sessions", "*", "*", "*", "rollout-*.jsonl"))
 	children := map[string][]string{}
 	for _, p := range append(near, all...) {
-		parent, ok := codexChildren.parent[p]
-		if !ok {
-			parent = codexParent(p)
-			codexChildren.parent[p] = parent
-		}
-		if parent != "" && !slices.Contains(children[parent], p) {
+		if parent := codexSpawnOf(p).Parent; parent != "" && !slices.Contains(children[parent], p) {
 			children[parent] = append(children[parent], p)
 		}
 	}
@@ -364,26 +385,30 @@ func codexSubagents(thread, rollout string) []string {
 	return out
 }
 
-// codexParent reads the thread that spawned a rollout's thread from its first line.
-func codexParent(path string) string {
+// codexSpawnOf reads how a rollout's thread was spawned from its first line.
+func codexSpawnOf(path string) codexSpawn {
+	codexSpawns.Lock()
+	defer codexSpawns.Unlock()
+	if spawn, ok := codexSpawns.of[path]; ok {
+		return spawn
+	}
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return codexSpawn{}
 	}
 	defer f.Close()
 	var meta struct {
 		Payload struct {
 			Source struct {
 				Subagent struct {
-					Spawn struct {
-						Parent string `json:"parent_thread_id"`
-					} `json:"thread_spawn"`
+					Spawn codexSpawn `json:"thread_spawn"`
 				} `json:"subagent"`
 			} `json:"source"`
 		} `json:"payload"`
 	}
 	json.NewDecoder(f).Decode(&meta)
-	return meta.Payload.Source.Subagent.Spawn.Parent
+	codexSpawns.of[path] = meta.Payload.Source.Subagent.Spawn
+	return meta.Payload.Source.Subagent.Spawn
 }
 
 // codexThread is the thread id at the end of a rollout's name.
@@ -409,6 +434,13 @@ func parseCodexUsage(t *Tail, raw []byte) {
 	var l codexLine
 	if json.Unmarshal(raw, &l) == nil {
 		meterCodexLine(t, &l)
+		t.clock(l.Timestamp)
+		switch l.Payload.Type {
+		case "task_started":
+			t.busy = true
+		case "task_complete", "turn_aborted":
+			t.busy = false
+		}
 	}
 }
 

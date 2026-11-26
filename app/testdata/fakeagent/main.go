@@ -664,6 +664,18 @@ func handle(prompt string) {
 		hook("Stop", nil)
 		return
 	}
+	if m := agentCount.FindStringSubmatch(prompt); m != nil && mode != "cursor-agent" {
+		n, _ := strconv.Atoi(m[1])
+		for i := range n {
+			startAgent(prompt, i == 0)
+		}
+		answer(fmt.Sprintf("started %d agents", n), 1000)
+		if mode == "codex" {
+			write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "task_complete"}})
+		}
+		hook("Stop", nil)
+		return
+	}
 	if mode == "claude" && strings.Contains(prompt, "stop task") && len(tasks) > 0 {
 		stopTask()
 		answer("stopped the task", 1000)
@@ -895,10 +907,143 @@ func subagent(advisor bool) {
 	if advisor {
 		usage["iterations"] = []any{call("message", 1000, 0, 0, 0, 100), advisorCall(2000, 100)}
 	}
-	appendLines(filepath.Join(dir, "agent-a"+uuid()[:8]+".jsonl"), []map[string]any{{"type": "assistant", "isSidechain": true, "message": map[string]any{
+	id := "a" + strings.ReplaceAll(uuid(), "-", "")[:16]
+	appendLines(filepath.Join(dir, "agent-"+id+".jsonl"), []map[string]any{{"type": "assistant", "isSidechain": true, "agentId": id, "message": map[string]any{
 		"id": "msg_" + uuid()[:8], "model": "claude-haiku-5-5", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "found it"}},
 		"usage": usage,
 	}}})
+	writeMeta(dir, id, map[string]any{"agentType": "Explore", "description": "Find the files", "toolUseId": "toolu_" + uuid()[:8], "spawnDepth": 1, "requestShape": "foreground", "model": "haiku", "finished": true})
+}
+
+// agentCount asks for background subagents: "start 2 agents". With "nested" the first one starts one of its own, with
+// "worktree" it works in a worktree, and with "image" it names FAKE_HOME/shot.png. Agent n of the run is titled
+// "Agent task n" and finishes when FAKE_HOME/finish-agent-n appears, or failed with FAKE_HOME/fail-agent-n.
+var (
+	agentCount = regexp.MustCompile(`\b(\d+) agents?\b`)
+	spawned    int
+)
+
+// startAgent launches a background subagent the way Claude Code 2.1 does: an Agent tool call whose result says
+// async_launched, the subagent's transcript and meta file next to the session's, and a task notification in a turn of
+// the harness's own when it ends. Codex keeps a subagent in a rollout of its own that names the parent thread.
+func startAgent(prompt string, first bool) {
+	spawned++
+	n := spawned
+	desc := fmt.Sprintf("Agent task %d", n)
+	var path, id string
+	lines := []map[string]any{}
+	if mode == "codex" {
+		id = uuid()
+		path = filepath.Join(filepath.Dir(transcript), "rollout-"+time.Now().Format("2006-01-02T15-04-05")+"-"+id+".jsonl")
+		spawn := map[string]any{"thread_spawn": map[string]any{"parent_thread_id": session, "depth": 1, "agent_nickname": desc, "agent_role": "worker"}}
+		usage := counts{1000, 0, 100, 1100}
+		lines = append(lines,
+			map[string]any{"type": "session_meta", "payload": map[string]any{"id": id, "source": map[string]any{"subagent": spawn}}},
+			map[string]any{"type": "turn_context", "payload": map[string]any{"model": model}},
+			map[string]any{"type": "event_msg", "payload": map[string]any{"type": "task_started"}},
+			map[string]any{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": "Work on " + desc}}}}},
+			map[string]any{"type": "event_msg", "payload": map[string]any{"type": "token_count", "info": map[string]any{"total_token_usage": usage, "last_token_usage": usage}}},
+		)
+		appendLines(path, lines)
+		go finishAgent(n, func(failed bool) {
+			appendLines(path, []map[string]any{
+				{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "AgentMessage", "content": []any{map[string]any{"type": "Text", "text": "done with " + desc}}}}},
+				{"type": "event_msg", "payload": map[string]any{"type": "task_complete"}},
+			})
+		})
+		return
+	}
+	dir := filepath.Join(strings.TrimSuffix(transcript, ".jsonl"), "subagents")
+	os.MkdirAll(dir, 0o755)
+	id = "a" + strings.ReplaceAll(uuid(), "-", "")[:16]
+	path = filepath.Join(dir, "agent-"+id+".jsonl")
+	ref := "toolu_" + uuid()[:8]
+	write(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "tool_use", "id": ref, "name": "Agent", "input": map[string]any{"description": desc, "prompt": "Work on " + desc, "subagent_type": "general-purpose", "run_in_background": true}},
+	}}})
+	meta := map[string]any{"agentType": "general-purpose", "description": desc, "toolUseId": ref, "spawnDepth": 1, "requestShape": "background", "model": "claude-sonnet-5-5"}
+	if first && strings.Contains(prompt, "worktree") {
+		meta["worktreePath"] = filepath.Join(os.Getenv("FAKE_HOME"), "worktrees", "agent-"+id)
+		meta["worktreeBranch"] = "worktree-agent-" + id
+		meta["spawnedWithWorktree"] = true
+	}
+	writeMeta(dir, id, meta)
+	text := "Looking into it."
+	if first && strings.Contains(prompt, "image") {
+		text = "Screenshot: " + filepath.Join(os.Getenv("FAKE_HOME"), "shot.png")
+	}
+	agentLines(path, id, "Work on "+desc, text)
+	write(map[string]any{"type": "user", "toolUseResult": map[string]any{"isAsync": true, "status": "async_launched", "agentId": id, "description": desc, "prompt": "Work on " + desc},
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": ref, "content": "Async agent launched successfully.\nagentId: " + id}}}})
+	tasks = append(tasks, id)
+	if first && strings.Contains(prompt, "nested") {
+		spawned++
+		child := "a" + strings.ReplaceAll(uuid(), "-", "")[:16]
+		childDesc := fmt.Sprintf("Agent task %d", spawned)
+		writeMeta(dir, child, map[string]any{"agentType": "Explore", "description": childDesc, "toolUseId": "toolu_" + uuid()[:8], "parentAgentId": id, "spawnDepth": 2, "requestShape": "background", "model": "claude-haiku-5-5"})
+		agentLines(filepath.Join(dir, "agent-"+child+".jsonl"), child, "Work on "+childDesc, "Searching.")
+		go finishAgent(spawned, func(failed bool) {
+			appendLines(filepath.Join(dir, "agent-"+child+".jsonl"), []map[string]any{{"type": "assistant", "isSidechain": true, "agentId": child, "message": map[string]any{"role": "assistant", "model": "claude-haiku-5-5", "content": []any{map[string]any{"type": "text", "text": "done with " + childDesc}}}}})
+			meta := map[string]any{"agentType": "Explore", "description": childDesc, "parentAgentId": id, "spawnDepth": 2, "requestShape": "background", "model": "claude-haiku-5-5", "finished": true}
+			writeMeta(dir, child, meta)
+		})
+	}
+	go finishAgent(n, func(failed bool) {
+		appendLines(path, []map[string]any{{"type": "assistant", "isSidechain": true, "agentId": id, "message": map[string]any{"role": "assistant", "model": "claude-sonnet-5-5", "content": []any{map[string]any{"type": "text", "text": "done with " + desc}}}}})
+		meta["finished"] = true
+		writeMeta(dir, id, meta)
+		turnMu.Lock()
+		defer turnMu.Unlock()
+		tasks = slices.DeleteFunc(tasks, func(t string) bool { return t == id })
+		status, summary := "completed", "Agent \""+desc+"\" completed"
+		if failed {
+			status, summary = "failed", "Agent \""+desc+"\" failed: the model gave up"
+		}
+		note := "<task-notification>\n<task-id>" + id + "</task-id>\n<tool-use-id>" + ref + "</tool-use-id>\n<status>" + status + "</status>\n<summary>" + summary + "</summary>\n</task-notification>"
+		write(map[string]any{"type": "queue-operation", "operation": "enqueue", "content": note})
+		write(map[string]any{"type": "queue-operation", "operation": "dequeue"})
+		hook("UserPromptSubmit", map[string]any{"prompt": note})
+		write(map[string]any{"type": "user", "origin": map[string]any{"kind": "task-notification"}, "message": map[string]any{"role": "user", "content": note}})
+		answer("the agent finished", 1000)
+		hook("Stop", nil)
+	})
+}
+
+// agentLines writes the start of a Claude Code subagent's transcript: its prompt, a tool call and a first answer.
+func agentLines(path, id, prompt, text string) {
+	ref := "toolu_" + uuid()[:8]
+	side := func(l map[string]any) map[string]any {
+		l["isSidechain"], l["agentId"], l["uuid"] = true, id, uuid()
+		return l
+	}
+	usage := map[string]any{"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 100}
+	appendLines(path, []map[string]any{
+		side(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}}),
+		side(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg_" + uuid()[:8], "model": "claude-sonnet-5-5", "role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": ref, "name": "Grep", "input": map[string]any{"pattern": "TODO"}}}, "usage": usage}}),
+		side(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": ref, "content": "a.go:1: TODO"}}}}),
+		side(map[string]any{"type": "assistant", "message": map[string]any{"id": "msg_" + uuid()[:8], "model": "claude-sonnet-5-5", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}}}),
+	})
+}
+
+func writeMeta(dir, id string, meta map[string]any) {
+	data, _ := json.Marshal(meta)
+	os.WriteFile(filepath.Join(dir, "agent-"+id+".meta.json"), data, 0o644)
+}
+
+// finishAgent waits for FAKE_HOME/finish-agent-n or FAKE_HOME/fail-agent-n and then ends agent n.
+func finishAgent(n int, end func(failed bool)) {
+	home := os.Getenv("FAKE_HOME")
+	for {
+		time.Sleep(100 * time.Millisecond)
+		if os.Remove(filepath.Join(home, fmt.Sprintf("finish-agent-%d", n))) == nil {
+			end(false)
+			return
+		}
+		if os.Remove(filepath.Join(home, fmt.Sprintf("fail-agent-%d", n))) == nil {
+			end(true)
+			return
+		}
+	}
 }
 
 func appendLines(path string, lines []map[string]any) {

@@ -79,7 +79,13 @@ type Tail struct {
 	tasks map[string]time.Time
 	// settled is when the last background task ended.
 	settled time.Time
-	stamp   time.Time
+	// agents holds how each background agent ended, by its id, as its task notification says.
+	agents map[string]string
+	// first is the time of the first line, for the transcripts of subagents.
+	first time.Time
+	// busy is true while a Codex subagent's turn runs.
+	busy  bool
+	stamp time.Time
 	// Activity counts what the models used, the turns and the tool calls in this transcript.
 	Activity Activity
 	// metered holds the usage counted for each Claude Code message.
@@ -90,7 +96,7 @@ type Tail struct {
 }
 
 func newTail(path string) *Tail {
-	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}, metered: map[string]metered{}}
+	return &Tail{path: path, tools: map[string]int{}, forks: map[string]int{}, tasks: map[string]time.Time{}, metered: map[string]metered{}, agents: map[string]string{}}
 }
 
 func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
@@ -210,6 +216,9 @@ func (t *Tail) background(since time.Time) int {
 }
 
 func (t *Tail) endTasks(text string, at time.Time) {
+	for _, m := range taskStatus.FindAllStringSubmatch(text, -1) {
+		t.agents[m[1]] = m[2]
+	}
 	for _, m := range taskID.FindAllStringSubmatch(text, -1) {
 		if _, ok := t.tasks[m[1]]; ok {
 			delete(t.tasks, m[1])
