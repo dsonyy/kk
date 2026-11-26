@@ -288,7 +288,7 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 		t.Fatalf("%d animation frames while the sidebar is hidden", n)
 	}
 	maps = b.counter("maps")
-	b.tab("Agents")
+	b.tab("All")
 	if n := b.countIn("draws", time.Second); n == 0 {
 		t.Fatal("the animation did not come back with the Agents tab")
 	}

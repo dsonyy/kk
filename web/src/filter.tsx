@@ -147,14 +147,15 @@ export function Menu({ label, options, selected, mono, single, plain, onChange }
   );
 }
 
-type FiltersProps = { sessions: Conversation[]; shown: number; filter: Filter; onChange: (f: Filter) => void; sort: Sort; onSort: (s: Sort) => void };
+// dirs shows the directory menu, which only All needs.
+type FiltersProps = { sessions: Conversation[]; shown: number; filter: Filter; dirs: boolean; onChange: (f: Filter) => void; sort: Sort; onSort: (s: Sort) => void };
 
-export function Filters({ sessions, shown, filter, onChange, sort, onSort }: FiltersProps) {
+export function Filters({ sessions, shown, filter, dirs, onChange, sort, onSort }: FiltersProps) {
   const projects = [...new Set([...sessions.map((c) => c.project), ...filter.dirs])].sort();
   const active = filter.dirs.length + filter.states.length > 0;
   return (
     <div class="filters">
-      <Menu label="Directory" mono options={projects.map((p) => [p, shortName(p, projects)])} selected={filter.dirs} onChange={(dirs) => onChange({ ...filter, dirs })} />
+      {dirs && <Menu label="Directory" mono options={projects.map((p) => [p, shortName(p, projects)])} selected={filter.dirs} onChange={(d) => onChange({ ...filter, dirs: d })} />}
       <Menu label="State" options={Object.keys(states).map((s) => [s, s])} selected={filter.states} onChange={(s) => onChange({ ...filter, states: s })} />
       <Menu label="Sort" single options={Object.entries(sorts)} selected={[sort]} onChange={([s]) => onSort(s as Sort)} />
       {active && <Button label="Clear" class="small" title="Show all sessions" onClick={() => onChange({ dirs: [], states: [] })} />}

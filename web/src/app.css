@@ -126,6 +126,27 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tabs .konduktor-toggle.on::before { border-color: var(--text-strong); background: var(--text-strong); }
 .tabs .konduktor-toggle:hover { color: var(--text-strong); }
 .tabs .tab.on { background: var(--bg); color: var(--text-strong); border-bottom-color: var(--bg); }
+.tabs .tab { cursor: pointer; }
+.tabs .tab:hover { color: var(--text-strong); }
+.tabs .dirs { flex: 0 1 auto; min-width: 0; display: flex; overflow-x: auto; scrollbar-width: none; }
+.tabs .tab.unread { color: var(--text-strong); }
+.tabs .tab.global { order: 1; border: 1px solid var(--line); border-right: 0; }
+.tabs .more { flex: none; display: flex; }
+.tabs .more-tab { display: flex; align-items: center; gap: 6px; }
+.tabs .more-tab .icon-chevron { width: 9px; height: 9px; transform: rotate(90deg); }
+.dir-menu { position: fixed; z-index: 4; min-width: 220px; max-width: 320px; max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--line-strong); background: var(--surface); }
+.dir-menu .dir-item { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 4px 8px; border: 0; background: none; color: var(--text); text-align: left; }
+.dir-menu .dir-item:hover { background: var(--surface-2); color: var(--text-strong); }
+.dir-menu .dir-item .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dir-menu .dir-item .count { flex: none; color: var(--text-dim); font-size: 12px; }
+.dir-menu-label { margin-top: 6px; padding: 8px 8px 4px; border-top: 1px solid var(--line); color: var(--text-dim); font-size: 12px; }
+.view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.view-body { flex: 1; min-height: 0; display: flex; }
+.views { flex: none; display: flex; align-items: center; gap: var(--gap); padding: 6px var(--gap); border-bottom: 1px solid var(--line); }
+.views button { padding: 2px 12px; }
+.views button + button { margin-left: calc(-1px - var(--gap)); }
+.views button.on { background: var(--surface-2); border-color: var(--text-strong); color: var(--text-strong); position: relative; }
+.views .where { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--text-dim); font-size: 12px; }
 
 .workspace { flex: 1; min-height: 0; display: flex; }
 
@@ -141,6 +162,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .group > summary .icon-chevron { flex: none; width: 9px; height: 9px; transition: transform .12s; }
 .group[open] > summary .icon-chevron { transform: rotate(90deg); }
 .group .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
+.group .name.muted { color: var(--text-dim); }
 .group > summary:hover .name, .group.unread .name { color: var(--text-strong); }
 .group.unread .name::before { content: "● "; font-size: 10px; vertical-align: 1px; }
 .group .state, .group .count { flex: none; font-size: 11px; }
@@ -226,7 +248,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .menu-list .check > span { overflow: hidden; text-overflow: ellipsis; }
 .menu-list.mono .check { font-family: var(--font-mono); }
 .sessions { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.sessions > .filters { flex: none; padding: var(--gap) var(--gap) 0; }
+.sessions-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: var(--gap) var(--gap) 0; }
 
 /* The board: one section per day, its columns wrapped into rows so the page scrolls only down. */
 .board { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); padding: 8px var(--gap) var(--gap); overflow-y: auto; }
