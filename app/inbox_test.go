@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -211,23 +212,40 @@ func TestInbox(t *testing.T) {
 		t.Fatalf("the Slack run must deny the write tools: %s", line)
 	}
 
-	if code, _ := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": "done"}); code != 400 {
-		t.Fatalf("an unknown status should be refused: %d", code)
+	for _, status := range []string{"done", "todo"} {
+		if code, _ := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": status}); code != 400 {
+			t.Fatalf("status %q should be refused: %d", status, code)
+		}
 	}
-	if code, out := e.post("/api/inbox/status", map[string]string{"source": "github", "id": "https://github.com/acme/kk/issues/3", "status": "closed"}); code != 200 {
-		t.Fatalf("close: %d %s", code, out)
+	for _, m := range []struct{ source, id, status string }{
+		{"github", "https://github.com/acme/kk/issues/3", "in_progress"},
+		{"github", "https://github.com/acme/kk/pull/7", "dismissed"},
+		{"github", "https://github.com/acme/kk/issues/2", "closed"},
+		{"linear", "issue:ENG-1", "in_progress"},
+	} {
+		if code, out := e.post("/api/inbox/status", map[string]string{"source": m.source, "id": m.id, "status": m.status}); code != 200 {
+			t.Fatalf("move to %s: %d %s", m.status, code, out)
+		}
 	}
-	if code, out := e.post("/api/inbox/status", map[string]string{"source": "linear", "id": "issue:ENG-1", "status": "in_progress"}); code != 200 {
-		t.Fatalf("move: %d %s", code, out)
-	}
+
 	writeFile(t, filepath.Join(gh, "assigned.json"), `[]`)
-	if v = e.refreshInbox("github"); statusOf(v, "Crash on start") != "" {
-		t.Fatalf("an item the source no longer returns should leave the inbox: %+v", v.Items)
+	writeFile(t, filepath.Join(gh, "notifications.json"), `[]`)
+	v = e.refreshInbox("github")
+	if statusOf(v, "Crash on start") != "closed" || statusOf(v, "Old issue") != "closed" || statusOf(v, "Add the inbox") != "dismissed" || len(v.Items) != 7 {
+		t.Fatalf("items out of the backlog should stay when the source no longer returns them, and those in progress close: %+v", v.Items)
 	}
+	writeFile(t, filepath.Join(e.fake, "slack.out"), strings.Replace(slackAnswer, "https://acme.slack.com/archives/D2", "http://evil.example/D2", 1))
+	if v = e.refreshInbox("slack"); statusOf(v, "Dan: quick question") != "" || len(v.Items) != 6 {
+		t.Fatalf("a backlog item the source no longer returns should leave the inbox: %+v", v.Items)
+	}
+	writeFile(t, filepath.Join(e.fake, "slack.out"), slackAnswer)
+
 	writeFile(t, filepath.Join(gh, "assigned.json"), assigned)
+	writeFile(t, filepath.Join(gh, "review.json"), `[{"title":"Add the inbox","body":"New push","url":"https://github.com/acme/kk/pull/7","updatedAt":"2026-11-25T08:00:00Z","author":{"login":"eve"},"repository":{"nameWithOwner":"acme/kk"}}]`)
 	v = e.refreshInbox("")
-	if statusOf(v, "Crash on start") != "closed" || statusOf(v, "ENG-1 Fix the export") != "in_progress" || statusOf(v, "ENG-2 Search is slow") != "backlog" || len(v.Items) != 7 {
-		t.Fatalf("a refresh should keep the statuses: %+v", v.Items)
+	if statusOf(v, "Crash on start") != "in_progress" || statusOf(v, "Add the inbox") != "dismissed" || statusOf(v, "Old issue") != "closed" ||
+		statusOf(v, "ENG-1 Fix the export") != "in_progress" || statusOf(v, "ENG-2 Search is slow") != "backlog" || len(v.Items) != 7 {
+		t.Fatalf("an item kk closed should reopen when it comes back, and a dismissed one stay dismissed after new activity: %+v", v.Items)
 	}
 
 	writeFile(t, filepath.Join(e.fake, "slack.out"), "Here are your messages: none worth noting.")
@@ -239,7 +257,7 @@ func TestInbox(t *testing.T) {
 	e.stop()
 	e.start()
 	v = e.inbox()
-	if len(v.Items) != 7 || sourceOf(v, "slack").Error == "" || statusOf(v, "Crash on start") != "closed" {
+	if len(v.Items) != 7 || sourceOf(v, "slack").Error == "" || statusOf(v, "Crash on start") != "in_progress" {
 		t.Fatalf("the inbox did not survive a restart: %+v", v)
 	}
 
@@ -270,8 +288,16 @@ func TestInbox(t *testing.T) {
 	if s := sourceOf(v, "github"); !strings.Contains(s.Setup, "gh auth login") {
 		t.Fatalf("gh logged out: %+v", s)
 	}
-	if len(v.Items) != 2 || v.Items[0].Source != "linear" {
-		t.Fatalf("only linear items should be left: %+v", v.Items)
+	var left []string
+	for _, it := range v.Items {
+		left = append(left, it.Source+" "+it.Status)
+	}
+	if want := []string{"github dismissed", "linear backlog", "linear in_progress", "github in_progress", "github closed"}; !slices.Equal(left, want) || statusOf(v, "Crash on start") != "in_progress" {
+		t.Fatalf("a source that is not set up should hide its backlog and keep the rest as it was: %v", left)
+	}
+	os.Remove(filepath.Join(e.fake, "slack-connector"))
+	if v = e.refreshInbox("slack"); len(v.Items) != 7 {
+		t.Fatalf("the backlog should come back once the source is set up again: %+v", v.Items)
 	}
 
 	e.request("PUT", "/api/inbox/linear-key", strings.NewReader(`{"key":""}`))
@@ -343,80 +369,108 @@ func TestInboxMigratesDismissed(t *testing.T) {
 	writeFile(t, filepath.Join(e.home, "inbox.yaml"), `items:
   - {source: github, id: a, kind: comment, title: Dismissed, url: "https://github.com/acme/kk/issues/1", time: 2026-11-20T10:00:00Z}
   - {source: github, id: b, kind: comment, title: Kept, url: "https://github.com/acme/kk/issues/2", time: 2026-11-21T10:00:00Z}
+  - {source: github, id: c, kind: comment, title: To do, url: "https://github.com/acme/kk/issues/3", time: 2026-11-22T10:00:00Z}
+  - {source: github, id: d, kind: comment, title: Closed earlier, url: "https://github.com/acme/kk/issues/4", time: 2026-11-22T10:00:00Z}
+  - {source: github, id: e, kind: comment, title: Closed, url: "https://github.com/acme/kk/issues/5", time: 2026-11-22T10:00:00Z}
 sources:
   github: {checked: 2099-01-01T00:00:00Z}
+status:
+  "github:c": {status: todo, changed: 2026-11-22T11:00:00Z}
+  "github:d": {status: closed}
+  "github:e": {status: closed, changed: 2026-11-22T11:00:00Z}
 dismissed: ["github:a", "github:gone"]
 `)
 	for range 2 {
 		e.start()
 		v := e.inbox()
-		if statusOf(v, "Dismissed") != "closed" || statusOf(v, "Kept") != "backlog" || len(v.Items) != 2 {
-			t.Fatalf("dismissed items should be closed: %+v", v.Items)
+		if statusOf(v, "Dismissed") != "dismissed" || statusOf(v, "Closed earlier") != "dismissed" || statusOf(v, "Closed") != "closed" ||
+			statusOf(v, "Kept") != "backlog" || statusOf(v, "To do") != "backlog" || len(v.Items) != 5 {
+			t.Fatalf("dismissed items should be dismissed and to do the backlog: %+v", v.Items)
 		}
 		e.stop()
 	}
 	data, _ := os.ReadFile(filepath.Join(e.home, "inbox.yaml"))
-	if strings.Contains(string(data), "dismissed") || !strings.Contains(string(data), "github:gone") {
+	if strings.Contains(string(data), "\ndismissed:") || strings.Contains(string(data), "todo") || !strings.Contains(string(data), "github:gone") {
 		t.Fatalf("the dismissed list should become status records:\n%s", data)
 	}
 }
+
+func on(m string) map[string]bool { return map[string]bool{m: true} }
 
 func TestInboxSettings(t *testing.T) {
 	e := newEnv(t)
 	_, out := e.request("GET", "/api/settings", nil)
 	var view settingsView
 	json.Unmarshal(out, &view)
-	for _, name := range []string{"github", "linear", "slack", "gmail"} {
-		if view.Settings.Inbox[name] != (InboxSettings{true, 15, 60}) {
+	for name, m := range map[string]string{"github": "gh", "linear": "api_key", "slack": "connector", "gmail": "connector"} {
+		if s := view.Settings.Inbox[name]; s.IntervalMinutes != 15 || !maps.Equal(s.Methods, on(m)) {
 			t.Fatalf("defaults: %+v", view.Settings.Inbox)
 		}
 	}
-	view.Settings.Inbox["slack"] = InboxSettings{false, 30, 120}
+	view.Settings.Inbox["slack"] = InboxSettings{IntervalMinutes: 30, Methods: map[string]bool{"connector": false}}
 	data, _ := json.Marshal(view.Settings)
 	if resp, out := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 200 {
 		t.Fatalf("save: %s", out)
 	}
-	if s := sourceOf(e.inbox(), "slack"); s.Enabled || s.Work != 30 || s.Off != 120 {
+	if s := sourceOf(e.inbox(), "slack"); s.Enabled || s.Interval != 30 || !maps.Equal(s.Methods, map[string]bool{"connector": false}) {
 		t.Fatalf("slack settings: %+v", s)
 	}
-	for _, bad := range []InboxSettings{{true, 0, 60}, {true, 15, 0}} {
+	for _, bad := range []InboxSettings{{IntervalMinutes: 0, Methods: on("gh")}, {IntervalMinutes: 15, Methods: on("api_key")}} {
 		view.Settings.Inbox["github"] = bad
 		data, _ = json.Marshal(view.Settings)
 		if resp, _ := e.request("PUT", "/api/settings", strings.NewReader(string(data))); resp.StatusCode != 400 {
-			t.Fatalf("intervals %+v should be refused", bad)
+			t.Fatalf("settings %+v should be refused", bad)
 		}
 	}
-	if s := sourceOf(e.inbox(), "github"); s.Work != 15 || s.Off != 60 {
+	if s := sourceOf(e.inbox(), "github"); s.Interval != 15 || !s.Enabled {
 		t.Fatalf("a refused save changed the settings: %+v", s)
 	}
-}
-
-func TestInboxSettingsAddGmail(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, settingsPath(dir), "inbox:\n  slack: {enabled: false, interval_minutes: 30}\n")
-	in := loadSettings(dir).Inbox
-	if in["slack"] != (InboxSettings{false, 15, 60}) || in["gmail"] != (InboxSettings{true, 15, 60}) {
-		t.Fatalf("settings saved before Gmail and working hours should keep enabled and get the default intervals: %+v", in)
+	data, _ = os.ReadFile(settingsPath(e.home))
+	if strings.Contains(string(data), "enabled") {
+		t.Fatalf("settings.yaml keeps the old key:\n%s", data)
 	}
 }
 
-func at(hour, minute int) time.Time { return time.Date(2026, 11, 25, hour, minute, 0, 0, time.Local) }
+func TestInboxSettingsEarlierVersions(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, settingsPath(dir), "inbox:\n  slack: {enabled: false, work_minutes: 30, off_minutes: 90}\n  github: {enabled: true, interval_minutes: 5}\n")
+	in := loadSettings(dir).Inbox
+	if s := in["slack"]; s.IntervalMinutes != 15 || !maps.Equal(s.Methods, map[string]bool{"connector": false}) || s.Enabled != nil {
+		t.Fatalf("slack from working hours: %+v", s)
+	}
+	if s := in["github"]; s.IntervalMinutes != 5 || !maps.Equal(s.Methods, on("gh")) {
+		t.Fatalf("github from interval: %+v", s)
+	}
+	if s := in["gmail"]; s.IntervalMinutes != 15 || !maps.Equal(s.Methods, on("connector")) {
+		t.Fatalf("a source missing from the file should get the defaults: %+v", s)
+	}
+}
 
 func TestInboxInterval(t *testing.T) {
-	c := InboxSettings{true, 15, 60}
-	for _, tc := range []struct {
-		now  time.Time
-		want time.Duration
-	}{
-		{at(7, 59), time.Hour},
-		{at(8, 0), 15 * time.Minute},
-		{at(19, 59), 15 * time.Minute},
-		{at(20, 0), time.Hour},
-		{at(0, 0), time.Hour},
-	} {
-		if got := c.interval(tc.now); got != tc.want {
-			t.Errorf("interval at %s = %s, want %s", tc.now.Format("15:04"), got, tc.want)
+	checked := time.Date(2026, 11, 25, 7, 30, 0, 0, time.Local)
+	for _, at := range []time.Time{checked.Add(14 * time.Minute), checked.Add(15 * time.Minute), checked.Add(10 * time.Hour)} {
+		in, src := testInbox(t, checked)
+		in.tick(at)
+		if want := at.Sub(checked) >= 15*time.Minute; running(in) != want {
+			t.Fatalf("checked at %s, tick at %s: running %v", checked.Format("15:04"), at.Format("15:04"), running(in))
 		}
+		close(src.release)
+		waitFor(t, func() bool { return !running(in) })
+	}
+}
+
+func TestInboxKeepsBounded(t *testing.T) {
+	in, _ := testInbox(t, time.Time{})
+	var items []InboxItem
+	for i := range keptMax + 50 {
+		id := strconv.Itoa(i)
+		items = append(items, InboxItem{ID: id, Title: id, URL: "https://github.com/acme/kk/issues/" + id})
+		in.state.Status["github:"+id] = itemStatus{Status: statusDismissed, Changed: time.Now().Add(time.Duration(i) * time.Minute)}
+	}
+	in.setItems("github", items)
+	in.setItems("github", nil)
+	if len(in.state.Items) != keptMax || in.state.Items[0].ID != strconv.Itoa(keptMax+49) {
+		t.Fatalf("kept %d items, the first %s", len(in.state.Items), in.state.Items[0].ID)
 	}
 }
 
@@ -437,33 +491,9 @@ func (s blockingSource) fetch(context.Context) ([]InboxItem, error) {
 func testInbox(t *testing.T, checked time.Time) (*Inbox, blockingSource) {
 	src := blockingSource{&atomic.Int32{}, make(chan struct{})}
 	in := &Inbox{dir: t.TempDir(), sources: []inboxSource{src}, running: map[string]bool{}, ctx: context.Background(),
-		settings: func() map[string]InboxSettings { return map[string]InboxSettings{"github": {true, 15, 60}} },
+		settings: func() map[string]InboxSettings { return map[string]InboxSettings{"github": {IntervalMinutes: 15, Methods: on("gh")}} },
 		state:    inboxState{Sources: map[string]*sourceState{"github": {Checked: checked}}, Status: map[string]itemStatus{}}}
 	return in, src
-}
-
-func TestInboxCrossesWorkingHours(t *testing.T) {
-	for _, tc := range []struct {
-		checked     time.Time
-		early, late time.Time
-	}{
-		{at(7, 30), at(7, 59), at(8, 0)},
-		{at(7, 59), at(8, 13), at(8, 14)},
-		{at(19, 50), at(20, 49), at(20, 50)},
-		{at(23, 30), at(0, 29).AddDate(0, 0, 1), at(0, 30).AddDate(0, 0, 1)},
-	} {
-		in, src := testInbox(t, tc.checked)
-		in.tick(tc.early)
-		if running(in) {
-			t.Fatalf("checked at %s: a check started at %s", tc.checked.Format("15:04"), tc.early.Format("15:04"))
-		}
-		in.tick(tc.late)
-		if !running(in) {
-			t.Fatalf("checked at %s: no check started at %s", tc.checked.Format("15:04"), tc.late.Format("15:04"))
-		}
-		close(src.release)
-		waitFor(t, func() bool { return !running(in) })
-	}
 }
 
 func running(in *Inbox) bool {
@@ -474,9 +504,9 @@ func running(in *Inbox) bool {
 
 func TestInboxOneRunPerSource(t *testing.T) {
 	in, src := testInbox(t, time.Time{})
-	in.tick(at(9, 0))
+	in.tick(time.Now())
 	waitFor(t, func() bool { return src.fetches.Load() == 1 })
-	in.tick(at(9, 30))
+	in.tick(time.Now().Add(time.Hour))
 	in.refresh(src)
 	if n := src.fetches.Load(); n != 1 {
 		t.Fatalf("%d runs of one source at once", n)

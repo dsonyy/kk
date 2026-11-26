@@ -43,7 +43,7 @@ func (linearSource) name() string { return "linear" }
 
 func (l linearSource) ready() error {
 	if l.key() == "" {
-		return errors.New("Paste a personal API key from Linear, Settings, Security and access, in Settings below.")
+		return errors.New("Paste a personal API key from Linear, Settings, Security and access, in Settings, Inbox.")
 	}
 	return nil
 }

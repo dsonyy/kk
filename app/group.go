@@ -125,7 +125,8 @@ func (s *Server) queueGroup(id string) {
 func (s *Server) groupLoop() {
 	for id := range s.grouping {
 		c, ok := s.store.get(id)
-		if !ok || c.Role != "" || c.Group != "" {
+		// A queued conversation takes its predecessor's group.
+		if !ok || c.Role != "" || c.Group != "" || c.Status == statusQueued {
 			continue
 		}
 		log.Printf("grouping %s", id)
@@ -142,6 +143,7 @@ func (s *Server) groupLoop() {
 			return true
 		}); changed {
 			s.publish(id)
+			s.inheritGroup(id, name)
 		}
 	}
 }
@@ -177,6 +179,7 @@ func (s *Server) handleSetGroup(r *http.Request) (any, error) {
 		return true
 	})
 	s.publish(c.ID)
+	s.inheritGroup(c.ID, name)
 	return s.view(c, false), nil
 }
 

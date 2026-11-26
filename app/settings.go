@@ -29,16 +29,29 @@ type Settings struct {
 	StartTimeoutSeconds int      `yaml:"start_timeout_seconds" json:"start_timeout_seconds"`
 	CompactAfterMinutes int      `yaml:"compact_after_minutes" json:"compact_after_minutes"`
 	CompactTokens       int      `yaml:"compact_tokens" json:"compact_tokens"`
-	// Inbox holds, per inbox source, whether kk checks it and how often.
+	// Inbox holds, per inbox source, the ways kk reads it and how often it checks.
 	Inbox map[string]InboxSettings `yaml:"inbox" json:"inbox"`
 }
 
-// InboxSettings replaced interval_minutes with work_minutes and off_minutes; a saved interval_minutes is ignored.
+// InboxSettings switches each way of integrating a source on or off. The work_minutes and off_minutes of an earlier
+// version are ignored, and its enabled key carries over to the methods once.
 type InboxSettings struct {
-	Enabled     bool `yaml:"enabled" json:"enabled"`
-	WorkMinutes int  `yaml:"work_minutes" json:"work_minutes"`
-	OffMinutes  int  `yaml:"off_minutes" json:"off_minutes"`
+	IntervalMinutes int             `yaml:"interval_minutes" json:"interval_minutes"`
+	Methods         map[string]bool `yaml:"methods" json:"methods"`
+	Enabled         *bool           `yaml:"enabled,omitempty" json:"-"`
 }
+
+func (c InboxSettings) enabled() bool {
+	for _, on := range c.Methods {
+		if on {
+			return true
+		}
+	}
+	return false
+}
+
+// inboxMethods lists the ways of integrating each source.
+var inboxMethods = map[string][]string{"github": {"gh"}, "linear": {"api_key"}, "slack": {"connector"}, "gmail": {"connector"}}
 
 // settingsEnv maps a setting to the environment variable that overrides it.
 var settingsEnv = map[string]string{
@@ -48,9 +61,18 @@ var settingsEnv = map[string]string{
 
 func settingsPath(dir string) string { return filepath.Join(dir, "settings.yaml") }
 
+const inboxInterval = 15
+
 func inboxDefaults() map[string]InboxSettings {
-	d := InboxSettings{true, 15, 60}
-	return map[string]InboxSettings{"github": d, "linear": d, "slack": d, "gmail": d}
+	out := map[string]InboxSettings{}
+	for name, methods := range inboxMethods {
+		on := map[string]bool{}
+		for _, m := range methods {
+			on[m] = true
+		}
+		out[name] = InboxSettings{IntervalMinutes: inboxInterval, Methods: on}
+	}
+	return out
 }
 
 func loadSettings(dir string) Settings {
@@ -63,13 +85,21 @@ func loadSettings(dir string) Settings {
 	if data, err := os.ReadFile(settingsPath(dir)); err == nil {
 		yaml.Unmarshal(data, &st)
 	}
-	// A source saved before an interval existed loads with it at zero, which would check on every tick.
+	// A source saved without an interval loads with it at zero, which would check on every tick.
 	for name, in := range st.Inbox {
-		if d, ok := inboxDefaults()[name]; ok {
-			in.WorkMinutes = cmp.Or(max(in.WorkMinutes, 0), d.WorkMinutes)
-			in.OffMinutes = cmp.Or(max(in.OffMinutes, 0), d.OffMinutes)
-			st.Inbox[name] = in
+		d, ok := inboxDefaults()[name]
+		if !ok {
+			continue
 		}
+		in.IntervalMinutes = cmp.Or(max(in.IntervalMinutes, 0), d.IntervalMinutes)
+		if in.Methods == nil {
+			in.Methods = d.Methods
+			for m := range in.Methods {
+				in.Methods[m] = in.Enabled == nil || *in.Enabled
+			}
+		}
+		in.Enabled = nil
+		st.Inbox[name] = in
 	}
 	return st
 }
@@ -160,8 +190,14 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 		return nil, fail(400, "timeouts and the token limit must be positive")
 	}
 	for name, in := range st.Inbox {
-		if _, ok := inboxDefaults()[name]; !ok || in.WorkMinutes < 1 || in.OffMinutes < 1 {
-			return nil, fail(400, "inbox source %q needs a known name and intervals of at least a minute", name)
+		methods, ok := inboxMethods[name]
+		if !ok || in.IntervalMinutes < 1 {
+			return nil, fail(400, "inbox source %q needs a known name and an interval of at least a minute", name)
+		}
+		for m := range in.Methods {
+			if !slices.Contains(methods, m) {
+				return nil, fail(400, "inbox source %q has no method %q", name, m)
+			}
 		}
 	}
 	claude, _ := findHarness("claude")

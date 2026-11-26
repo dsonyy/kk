@@ -8,10 +8,12 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -29,8 +31,10 @@ type Server struct {
 	mu       sync.Mutex
 	settings Settings
 	tails    map[string]*Tail
-	grouping chan string
-	subs     map[chan string]bool
+	// subagents holds the tails of the transcripts of agents' subagents, by path.
+	subagents map[string]*Tail
+	grouping  chan string
+	subs      map[chan string]bool
 	// asked counts, per conversation without a group, the user messages the last question about its group covered.
 	asked map[string]int
 	ticks int
@@ -57,6 +61,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// Usage covers every transcript of the conversation. It is nil for a harness that does not report usage.
+	Usage *Usage `json:"usage"`
 }
 
 type apiError struct {
@@ -111,12 +117,15 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
 	api("POST /api/conversations/{id}/group", s.handleSetGroup)
+	api("POST /api/conversations/{id}/start", s.handleStart)
+	api("POST /api/conversations/{id}/prompt", s.handlePrompt)
 	api("GET /api/groups", s.handleGroups)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
 	api("GET /api/skills", s.handleSkills)
 	api("GET /api/sessions", s.handleSessions)
 	api("GET /api/stats", s.handleStats)
+	api("GET /api/activity", s.handleActivity)
 	api("GET /api/repo", handleRepo)
 	api("GET /api/browse", handleBrowse)
 	api("POST /api/pick", handlePick)
@@ -135,7 +144,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/inbox/refresh", s.handleInboxRefresh)
 	api("POST /api/inbox/tick", func(*http.Request) (any, error) { s.inbox.tick(time.Now()); return s.inbox.view(), nil })
 	api("POST /api/inbox/status", s.handleInboxStatus)
-	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) { return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil })
+	api("GET /api/inbox/linear-key", func(*http.Request) (any, error) {
+		return map[string]bool{"set": linearSource{s.store.dir}.key() != ""}, nil
+	})
 	api("PUT /api/inbox/linear-key", s.handleLinearKey)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/conversations/{id}/terminal", s.handleTerminal)
@@ -218,6 +229,10 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 
 func (s *Server) view(c Conversation, events bool) convView {
 	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	if usageParser[c.Harness] != nil {
+		u := c.TotalActivity().Usage
+		v.Usage = &u
+	}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -290,6 +305,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Group string `json:"group"`
 		// Conductor hands a conversation the user starts to the conductor, as if the conductor had started it.
 		Conductor bool `json:"conductor"`
+		// After queues the conversation behind another one. It waits with its prompt until kk start.
+		After string `json:"after"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -311,6 +328,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	now := time.Now()
 	byAgent := !byUser(r) || in.Conductor
 	if in.Session != "" {
+		if in.After != "" {
+			return nil, fail(400, "an earlier session resumes now and cannot wait for another")
+		}
 		if in.Worktree {
 			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
 		}
@@ -340,6 +360,14 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "prompt is empty")
 	}
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: byAgent}
+	if in.After != "" {
+		c.Group = s.groupName(c.Project(), in.Group)
+		c, err := s.queue(c, in.After, in.Worktree)
+		if err != nil {
+			return nil, err
+		}
+		return s.view(c, false), nil
+	}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -422,6 +450,9 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, fail(400, "text is empty")
+	}
+	if c.Status == statusQueued {
+		return nil, fail(409, "the session is queued, start it first")
 	}
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running, resume it first")
@@ -555,6 +586,17 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	if c.Status == statusQueued {
+		if !c.Closed {
+			return nil, fail(409, "the session is queued, start it instead")
+		}
+		c, _ = s.store.update(c.ID, func(c *Conversation) bool {
+			c.Closed, c.ClosedAt = false, time.Time{}
+			return true
+		})
+		s.publish(c.ID)
+		return s.view(c, false), nil
+	}
 	s.driven(c.ID, r)
 	c, _ = s.store.get(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
@@ -587,9 +629,13 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		killWindow(c.Window)
 	}
 	s.store.update(c.ID, func(c *Conversation) bool {
-		c.Closed, c.ClosedAt, c.Status, c.Attention = true, time.Now(), statusExited, ""
+		c.Closed, c.ClosedAt, c.Attention = true, time.Now(), ""
+		if c.Status != statusQueued {
+			c.Status = statusExited
+		}
 		return true
 	})
+	s.closeNotice(c.ID)
 	s.publish(c.ID)
 	return map[string]bool{"ok": true}, nil
 }
@@ -809,11 +855,13 @@ func (s *Server) tick() {
 	now := time.Now()
 	startTimeout := s.cfg().startTimeout()
 	notify := s.cfg().coordinator()
+	queued := s.queued()
 	for _, c := range s.store.list() {
 		if c.Closed {
 			continue
 		}
 		events := s.readTail(c)
+		activity := s.activity(c)
 		open, settled := s.background(c)
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
@@ -851,6 +899,16 @@ func (s *Server) tick() {
 					c.Status, changed = statusWorking, true
 				}
 			}
+			for path, a := range activity {
+				if !reflect.DeepEqual(c.Transcripts[path], a) {
+					// The stored conversation shares the map with this copy.
+					c.Transcripts = maps.Clone(c.Transcripts)
+					if c.Transcripts == nil {
+						c.Transcripts = map[string]Activity{}
+					}
+					c.Transcripts[path], changed = a, true
+				}
+			}
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
 				if name := codexThreadName(c.Session); name != "" && name != c.Title {
 					c.Title, changed = name, true
@@ -871,7 +929,7 @@ func (s *Server) tick() {
 		}
 		if notify {
 			cur, _ := s.store.get(c.ID)
-			s.observe(cur, events != nil, now)
+			s.observe(cur, events != nil, len(queued[c.ID]) > 0, now)
 		}
 		if c.Role == coordinatorID {
 			s.maybeCompact(c, now)
@@ -893,6 +951,30 @@ func (s *Server) readTail(c Conversation) *Tail {
 	}
 	cp := *t
 	return &cp
+}
+
+// activity returns the activity of c's current transcript and of the transcripts of its subagents, by file. It counts
+// the lines of the transcript that were read.
+func (s *Server) activity(c Conversation) map[string]Activity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tail(c)
+	if t == nil {
+		return nil
+	}
+	out := map[string]Activity{c.Transcript: t.Activity.clone()}
+	if list := subagents[c.Harness]; list != nil {
+		for _, p := range list(c) {
+			sub := s.subagents[p]
+			if sub == nil {
+				sub = newTail(p)
+				s.subagents[p] = sub
+			}
+			sub.read(usageParser[c.Harness])
+			out[p] = sub.Activity.clone()
+		}
+	}
+	return out
 }
 
 // tail returns the tail of c's transcript, or nil when kk cannot read it. The caller holds s.mu.
