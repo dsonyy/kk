@@ -242,7 +242,7 @@ function App() {
     for (const id of open) loadDetail(id);
   }, [open.join(",")]);
 
-  // The directories: a tab for each one with an open session, by name, and the chosen one also when all its sessions are closed.
+  // The directories: a tab for each one with an open session or a running konduktor and for each one the user opened, by name.
   const scopes = (konduktors ?? []).flatMap((k) => (k.scope ? [k.scope] : []));
   const projects = [...new Set([...sessions.map((c) => c.project), ...scopes])];
   const label = (p: string) => shortName(p, projects);
@@ -262,7 +262,16 @@ function App() {
   useEffect(() => {
     if (hidden.includes(dir)) storeHidden(hidden.filter((d) => d !== dir));
   }, [dir]);
-  const tabDirs = [...live, ...(dir && !live.includes(dir) ? [dir] : [])].filter((d) => d === dir || !hidden.includes(d)).sort((a, b) => byName(label(a), label(b)));
+  // A tab stays until its X is clicked, also when its directory is left with only closed sessions; a gone directory drops out.
+  const [kept, setKept] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.tabs") || "[]"));
+  const tabDirs = [...new Set([...live, ...kept.filter((d) => projects.includes(d)), ...(dir ? [dir] : [])])]
+    .filter((d) => d === dir || !hidden.includes(d))
+    .sort((a, b) => byName(label(a), label(b)));
+  useEffect(() => {
+    if (!konduktors || tabDirs.join("\n") === kept.join("\n")) return;
+    localStorage.setItem("kk.tabs", JSON.stringify(tabDirs));
+    setKept(tabDirs);
+  }, [konduktors, tabDirs.join("\n")]);
   const hiddenLive = live.filter((d) => d !== dir && hidden.includes(d)).sort((a, b) => byName(label(a), label(b)));
   const finished = projects.filter((p) => !live.includes(p)).sort((a, b) => byActivity(inDir(a), inDir(b)));
   // Alt with a digit picks All and the directories after it.

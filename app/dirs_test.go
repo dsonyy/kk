@@ -116,7 +116,7 @@ func TestDirectoryTabs(t *testing.T) {
 	p.dirTab("All")
 	p.until(`document.querySelectorAll(".board .tile").length === 3 && document.querySelectorAll(".board .column .project").length > 0`)
 
-	// gamma has only closed sessions: More lists it, and picking it shows its tab until another directory is chosen.
+	// gamma has only closed sessions: More lists it, and picking it gives it a tab.
 	p.click(`document.querySelector("nav.tabs .more-tab")`)
 	p.until(`document.querySelector(".dir-menu")`)
 	if got := p.texts(".dir-menu > *"); !slices.Equal(got, []string{"alpha2", "beta1", "Only closed sessions", "gamma1"}) {
@@ -127,7 +127,7 @@ func TestDirectoryTabs(t *testing.T) {
 	p.until(`!document.querySelector(".dir-menu") && document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "gamma"`)
 	p.until(`document.querySelectorAll(".board .column.folded").length === 1`)
 	p.dirTab("beta")
-	p.until(`document.querySelectorAll("nav.tabs .dirs .tab").length === 3`)
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "beta" && [...document.querySelectorAll("nav.tabs .dirs .tab")].some((a) => a.textContent === "gamma")`)
 
 	// Alt with a digit picks a tab, also while typing.
 	p.view("Agents")
@@ -307,4 +307,76 @@ func TestHideDirectoryTab(t *testing.T) {
 		t.Fatalf("kk.hiddenTabs after bringing alpha back: %q", stored)
 	}
 	p.shot("tab-back")
+}
+
+func TestDirectoryTabFromMoreStays(t *testing.T) {
+	e := newEnv(t)
+	ids := e.dirSessions()
+	beta, gamma := filepath.Join(e.work, "beta"), filepath.Join(e.work, "gamma")
+	p := e.openPage(1600, 900)
+	tabOf := func(name string) string {
+		return fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .dirs .tab")].find((a) => a.textContent === %q)`, name)
+	}
+	// The inbox sessions may bring a tab of their own, so only the test directories are checked.
+	tabs := func() []string {
+		return slices.DeleteFunc(p.texts("nav.tabs .dirs .tab"), func(s string) bool { return !slices.Contains([]string{"All", "alpha", "beta", "gamma"}, s) })
+	}
+	p.until(`document.querySelectorAll("nav.tabs .dirs .tab").length >= 3`)
+
+	// gamma has only closed sessions; picking it in More gives it a tab that stays while the user moves around.
+	p.click(`document.querySelector("nav.tabs .more-tab")`)
+	p.until(`document.querySelector(".dir-menu")`)
+	p.click(fmt.Sprintf(`document.querySelector('.dir-menu .dir-item[title=%q]')`, gamma))
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "gamma"`)
+	p.dirTab("alpha")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "alpha"`)
+	p.dirTab("All")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "All"`)
+	p.click(`[...document.querySelectorAll("nav.tabs .tab.global")].find((a) => a.textContent === "Stats")`)
+	p.until(`document.querySelector("nav.tabs .tab.global.on")?.textContent === "Stats"`)
+	if got := tabs(); !slices.Equal(got, []string{"All", "alpha", "beta", "gamma"}) {
+		t.Fatalf("tabs after moving away from gamma: %q", got)
+	}
+
+	// A tab whose last open session closes stays too.
+	p.dirTab("beta")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "beta"`)
+	e.mustKK("close", ids["Rebuild the index"])
+	p.dirTab("alpha")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "alpha"`)
+	p.click(`document.querySelector("nav.tabs .more-tab")`)
+	p.until(`([...document.querySelectorAll(".dir-menu > *")].map((e) => e.textContent).join("|").split("Only closed sessions|")[1] ?? "").includes("beta")`)
+	p.press("Escape", 27, "")
+	p.until(`!document.querySelector(".dir-menu")`)
+	if got := tabs(); !slices.Equal(got, []string{"All", "alpha", "beta", "gamma"}) {
+		t.Fatalf("tabs after the last open session of beta closed: %q", got)
+	}
+
+	// Both stay across a reload, kept in kk.tabs.
+	p.call("Page.reload", nil)
+	p.until(`document.querySelector(".sidebar .tile")`)
+	p.until(tabOf("gamma"))
+	if got := tabs(); !slices.Equal(got, []string{"All", "alpha", "beta", "gamma"}) {
+		t.Fatalf("tabs after a reload: %q", got)
+	}
+	var stored []string
+	p.eval(`JSON.parse(localStorage.getItem("kk.tabs"))`, &stored)
+	if !slices.Contains(stored, gamma) || !slices.Contains(stored, beta) {
+		t.Fatalf("kk.tabs: %q", stored)
+	}
+	p.shot("tab-from-more-kept")
+
+	// The close button sends gamma back to More.
+	p.click(tabOf("gamma") + `.querySelector(".tab-close")`)
+	p.until(`!(` + tabOf("gamma") + `)`)
+	p.dirTab("beta")
+	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "beta"`)
+	p.call("Page.reload", nil)
+	p.until(`document.querySelector(".sidebar .tile")`)
+	if got := tabs(); !slices.Equal(got, []string{"All", "alpha", "beta"}) {
+		t.Fatalf("tabs after closing gamma: %q", got)
+	}
+	p.click(`document.querySelector("nav.tabs .more-tab")`)
+	p.until(fmt.Sprintf(`document.querySelector('.dir-menu .dir-item[title=%q]')`, gamma))
+	p.shot("tab-from-more-closed")
 }
