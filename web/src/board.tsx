@@ -68,13 +68,15 @@ type BoardProps = {
   all: Conversation[];
   sort: Sort;
   empty: string;
+  // Whether each column names its directory, which only All needs.
+  projects: boolean;
   // Whether a column is folded, or undefined when it cannot fold.
   folded: (project: string, group: string) => boolean | undefined;
   onFold: (project: string, group: string, on: boolean) => void;
   onOpen: (id: string) => void;
 };
 
-export function Board({ list, all, sort, empty, folded, onFold, onOpen }: BoardProps) {
+export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen }: BoardProps) {
   if (list.length === 0) return <div class="board empty">{empty}</div>;
   return (
     <div class="board">
@@ -95,7 +97,7 @@ export function Board({ list, all, sort, empty, folded, onFold, onOpen }: BoardP
                     aria-expanded={foldable ? !fold : undefined}
                     onClick={foldable ? () => onFold(col.project, col.group, !fold) : undefined}
                   >
-                    <span class="project">{col.project.replace(/\/+$/, "").split("/").pop() || "/"}</span>
+                    {projects && <span class="project">{col.project.replace(/\/+$/, "").split("/").pop() || "/"}</span>}
                     <div class="name">
                       {foldable && <i class="icon icon-chevron" />}
                       <h1 class={col.group ? "" : "muted"}>{col.group || "Ungrouped"}</h1>

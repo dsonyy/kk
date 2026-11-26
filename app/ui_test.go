@@ -419,7 +419,7 @@ func TestWorktreeIcon(t *testing.T) {
 		Width, Height, Lines, Start float64
 	}
 	for _, view := range []struct{ tab, cards string }{{"Agents", ".sidebar .tile"}, {"Sessions", ".board .tile"}} {
-		p.click(fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .tab")].find((a) => a.textContent === %q)`, view.tab))
+		p.click(fmt.Sprintf(`[...document.querySelectorAll(".views button")].find((b) => b.textContent === %q)`, view.tab))
 		p.until(fmt.Sprintf(`document.querySelectorAll(%q).length === %d`, view.cards, len(ids)))
 		var cards []card
 		p.eval(fmt.Sprintf(`[...document.querySelectorAll(%q)].map((tile) => {

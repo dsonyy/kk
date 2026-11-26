@@ -25,7 +25,11 @@ import { Stats } from "./stats";
 import "./app.css";
 
 const COORDINATOR = "coordinator";
-const tabs = ["Agents", "Sessions", "Inbox", "Stats", "Logs", "Tmux", "Settings"] as const;
+// A directory shows its sessions in the views of the second level; the global tabs are the same in every directory.
+const views = ["Agents", "Sessions"] as const;
+const globals = ["Inbox", "Stats", "Logs", "Tmux", "Settings"] as const;
+type Tab = (typeof views)[number] | (typeof globals)[number];
+const isView = (t: Tab) => (views as readonly string[]).includes(t);
 
 reportErrors();
 
@@ -48,13 +52,35 @@ function Markdown({ text, images = [], partial }: { text: string; images?: Attac
   return <div ref={box} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-// The hash lists the open panels in order. Pinned ones stay until hidden; the one marked with ~ is reused by the next
-// session the user opens, so at most one panel is unpinned.
+// The open panels in order. Pinned ones stay until hidden; the one marked with ~ is reused by the next session the user
+// opens, so at most one panel is unpinned.
 type Panel = { id: string; pinned: boolean };
 
-function openPanels(): Panel[] {
+// Where the page is: the tab, the directory (empty for All) and that directory's open panels. The hash holds it as
+// tab/directory/panels. A hash from before the directories holds only the panels.
+type Place = { tab: Tab; dir: string; panels: Panel[] };
+
+function readHash(): Place & { legacy: boolean } {
+  const hash = location.hash.slice(1);
+  if (!hash.includes("/")) return { tab: "Agents", dir: "", panels: parsePanels(decodeURIComponent(hash)), legacy: !!hash };
+  const [tab, dir, panels = ""] = hash.split("/");
+  return { tab: [...views, ...globals].find((t) => t.toLowerCase() === tab) ?? "Agents", dir: decodeURIComponent(dir), panels: parsePanels(panels), legacy: false };
+}
+
+const hashOf = (p: Place) => `${p.tab.toLowerCase()}/${encodeURIComponent(p.dir)}/${p.panels.map((x) => (x.pinned ? x.id : `~${x.id}`)).join(",")}`;
+
+// The panels each directory had open, so coming back to it shows them again.
+function storedPanels(): Record<string, Panel[]> {
+  try {
+    return JSON.parse(localStorage.getItem("kk.panels") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function parsePanels(text: string): Panel[] {
   const out: Panel[] = [];
-  for (const part of decodeURIComponent(location.hash.slice(1)).split(",")) {
+  for (const part of text.split(",")) {
     const id = part.replace(/^~/, "");
     if (id && !out.some((p) => p.id === id)) out.push({ id, pinned: !part.startsWith("~") });
   }
@@ -66,19 +92,28 @@ function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
   const [filter, setFilter] = useFilter();
   const [sort, setSort] = useSort();
-  const shown = sessions.filter((c) => matches(filter, c)).sort(compare(sort));
+  const [place, setPlace] = useState<Place>(readHash);
+  const placeRef = useRef(place);
+  const { tab, dir, panels } = place;
+  const open = panels.map((p) => p.id);
+  // A directory opens with the view the user looked at last.
+  const lastView = useRef<Tab>(isView(tab) ? tab : "Agents");
+  if (isView(tab)) lastView.current = tab;
+  // Inside a directory the directory filter has nothing to choose; it stays saved for All.
+  const mine = dir ? sessions.filter((c) => c.project === dir) : sessions;
+  const scoped = dir ? { ...filter, dirs: [] } : filter;
+  const shown = mine.filter((c) => matches(scoped, c)).sort(compare(sort));
   // Closed sessions come after the open ones in the sidebar; both keep the chosen order.
   const list = [...shown.filter((c) => !c.closed), ...shown.filter((c) => c.closed)];
-  const empty = sessions.length ? "No sessions match the filters." : "No sessions yet.";
-  const filters = () => <Filters sessions={sessions} shown={shown.length} filter={filter} onChange={setFilter} sort={sort} onSort={setSort} />;
+  const empty = mine.length ? "No sessions match the filters." : dir ? "No sessions in this directory." : "No sessions yet.";
+  const filters = () => (
+    <Filters sessions={mine} shown={shown.length} filter={scoped} dirs={!dir} onChange={(f) => setFilter(dir ? { ...f, dirs: filter.dirs } : f)} sort={sort} onSort={setSort} />
+  );
   // Groups whose sessions are all closed start collapsed; opening one lasts until the page reloads.
   const [unfolded, setUnfolded] = useState<string[]>([]);
   const unfold = (key: string, on: boolean) => setUnfolded(on ? [...unfolded, key] : unfolded.filter((k) => k !== key));
   const allClosed = (inGroup: (c: Conversation) => boolean) => sessions.filter(inGroup).every((c) => c.closed);
   const [details, setDetails] = useState<Record<string, Conversation>>({});
-  const [panels, setPanels] = useState(openPanels);
-  const open = panels.map((p) => p.id);
-  const [tab, setTab] = useState<(typeof tabs)[number]>("Agents");
   // The prompt a new session starts with; undefined while the dialog is closed.
   const [creating, setCreating] = useState<string>();
   // Called once the session from the dialog exists, for the Inbox item it was started from.
@@ -87,19 +122,29 @@ function App() {
     created.current = then;
     setCreating(prompt);
   };
-  const openRef = useRef(panels);
-  openRef.current = panels;
   const loaded = useRef(new Set<string>());
-  const isOpen = (id: string) => openRef.current.some((p) => p.id === id);
+  const isOpen = (id: string) => placeRef.current.panels.some((p) => p.id === id);
 
-  const setOpen = (next: Panel[]) => {
-    openRef.current = next;
-    setPanels(next);
-    location.hash = next.map((p) => (p.pinned ? p.id : `~${p.id}`)).join(",");
+  // Moving to another directory brings back the panels it had open.
+  const go = (next: Partial<Place>) => {
+    const cur = placeRef.current;
+    const p = { ...cur, ...next };
+    if (next.dir !== undefined && next.dir !== cur.dir && !next.panels) p.panels = storedPanels()[p.dir] ?? [];
+    placeRef.current = p;
+    setPlace(p);
+    const stored = { ...storedPanels(), [p.dir]: p.panels };
+    if (!p.panels.length) delete stored[p.dir];
+    localStorage.setItem("kk.panels", JSON.stringify(stored));
+    location.hash = hashOf(p);
   };
-  const hide = (id: string) => setOpen(openRef.current.filter((p) => p.id !== id));
+  const setOpen = (next: Panel[]) => go({ panels: next });
+  const hide = (id: string) => setOpen(placeRef.current.panels.filter((p) => p.id !== id));
   // Unpinning a panel makes it the reusable one, so the panel that held that place stays open as a pinned one.
-  const pin = (id: string, on: boolean) => setOpen(openRef.current.map((p) => (p.id === id ? { id, pinned: on } : { ...p, pinned: p.pinned || !on })));
+  const pin = (id: string, on: boolean) => setOpen(placeRef.current.panels.map((p) => (p.id === id ? { id, pinned: on } : { ...p, pinned: p.pinned || !on })));
+  const pick = (d: string) => {
+    const t = placeRef.current.tab;
+    go({ tab: isView(t) ? t : lastView.current, dir: d });
+  };
 
   const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1"))), []);
   const loadDetail = useCallback(async (id: string) => {
@@ -113,10 +158,26 @@ function App() {
     } catch (e) {
       if (id === COORDINATOR) return setDetails(({ [COORDINATOR]: _, ...d }) => d);
       // A failed load, such as during a server restart, leaves a pinned panel that has something to show.
-      if (!(openRef.current.find((p) => p.id === id)?.pinned && loaded.current.has(id))) hide(id);
+      if (!(placeRef.current.panels.find((p) => p.id === id)?.pinned && loaded.current.has(id))) hide(id);
       flash((e as Error).message);
     }
   }, []);
+
+  // A hash from before the directories lists panels of any directory: each goes to its own, and the page to the first one's.
+  const legacy = useRef(readHash().legacy);
+  useEffect(() => {
+    if (!legacy.current || !sessions.length) return;
+    legacy.current = false;
+    const byDir: Record<string, Panel[]> = {};
+    for (const p of placeRef.current.panels) {
+      const project = sessions.find((c) => c.id === p.id)?.project;
+      if (project) (byDir[project] ??= []).push(p);
+    }
+    const first = Object.keys(byDir)[0];
+    if (first === undefined) return;
+    localStorage.setItem("kk.panels", JSON.stringify({ ...storedPanels(), ...byDir }));
+    go({ dir: first, panels: byDir[first] });
+  }, [sessions]);
 
   useEffect(() => {
     loadList();
@@ -136,9 +197,14 @@ function App() {
     source.onopen = () => {
       loadList();
       loadDetail(COORDINATOR);
-      for (const p of openRef.current) loadDetail(p.id);
+      for (const p of placeRef.current.panels) loadDetail(p.id);
     };
-    const onHash = () => setPanels(openPanels());
+    const onHash = () => {
+      const h = readHash();
+      legacy.current ||= h.legacy;
+      placeRef.current = h;
+      setPlace(h);
+    };
     window.addEventListener("hashchange", onHash);
     return () => {
       source.close();
@@ -162,19 +228,52 @@ function App() {
     for (const id of open) loadDetail(id);
   }, [open.join(",")]);
 
+  // The directories: a tab for each one with an open session, by name, and the chosen one also when all its sessions are closed.
+  const projects = [...new Set(sessions.map((c) => c.project))];
+  const label = (p: string) => shortName(p, projects);
+  const inDir = (p: string) => sessions.filter((c) => c.project === p);
+  const live = projects.filter((p) => inDir(p).some((c) => !c.closed));
+  const tabDirs = [...live, ...(dir && !live.includes(dir) ? [dir] : [])].sort((a, b) => byName(label(a), label(b)));
+  const finished = projects.filter((p) => !live.includes(p)).sort((a, b) => byActivity(inDir(a), inDir(b)));
+  // Alt with a digit picks All and the directories after it.
+  const order = useRef<string[]>([]);
+  order.current = ["", ...tabDirs];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const n = /^Digit([1-9])$/.exec(e.code);
+      if (!n || !e.altKey || e.ctrlKey || e.metaKey || (e.target as HTMLElement).closest?.(".xterm")) return;
+      const d = order.current[Number(n[1]) - 1];
+      if (d === undefined) return;
+      e.preventDefault();
+      pick(d);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  const dirsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const reveal = () => dirsRef.current?.querySelector(".on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    reveal();
+    window.addEventListener("resize", reveal);
+    return () => window.removeEventListener("resize", reveal);
+  }, [dir, tab]);
+
   const [collapsed, setCollapsed] = useState<string[]>(() => JSON.parse(localStorage.getItem("kk.collapsed") || "[]"));
-  const collapse = (project: string, on: boolean) => {
-    const next = on ? [...collapsed, project] : collapsed.filter((p) => p !== project);
+  const collapse = (key: string, on: boolean) => {
+    const next = on ? [...collapsed, key] : collapsed.filter((p) => p !== key);
     localStorage.setItem("kk.collapsed", JSON.stringify(next));
     setCollapsed(next);
   };
-  // A group follows its first session, its name when sorting by title, and puts work in progress first when sorting by activity.
+  // The sidebar groups sessions by directory in All and by feature inside a directory, with the ungrouped ones last. A group
+  // follows its first session, its name when sorting by title, and puts work in progress first when sorting by activity.
+  const keyOf = (c: Conversation) => (dir ? `${c.project}\n${c.group ?? ""}` : c.project);
+  const nameOf = (key: string) => (dir ? key.split("\n")[1] || "Ungrouped" : label(key));
   const groups = new Map<string, Conversation[]>();
-  for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
-  const projects = [...groups.keys()];
-  const names = new Map(projects.map((p) => [p, shortName(p, projects)]));
-  if (sort === "title") projects.sort((a, b) => byName(names.get(a)!, names.get(b)!));
-  if (sort === "active") projects.sort((a, b) => byActivity(groups.get(a)!, groups.get(b)!));
+  for (const c of list) groups.set(keyOf(c), [...(groups.get(keyOf(c)) ?? []), c]);
+  const keys = [...groups.keys()];
+  if (sort === "title") keys.sort((a, b) => byName(nameOf(a), nameOf(b)));
+  if (sort === "active") keys.sort((a, b) => byActivity(groups.get(a)!, groups.get(b)!));
+  if (dir) keys.sort((a, b) => Number(a.endsWith("\n")) - Number(b.endsWith("\n")));
 
   const [konduktor, setKonduktor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
 
@@ -183,10 +282,15 @@ function App() {
   useEffect(() => {
     if (focus) document.getElementById(`panel-${focus.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
   }, [focus]);
-  const show = (id: string) => {
-    const cur = openRef.current;
-    const slot = cur.findIndex((p) => !p.pinned);
-    if (!isOpen(id)) setOpen(slot < 0 ? [...cur, { id, pinned: false }] : cur.map((p, i) => (i === slot ? { id, pinned: false } : p)));
+  // A session opens in its own directory, unless All is shown or the directory is given.
+  const show = (id: string, to?: string) => {
+    const cur = placeRef.current;
+    const project = sessions.find((c) => c.id === id)?.project;
+    const target = to ?? (cur.dir && project ? project : cur.dir);
+    const list = target === cur.dir ? cur.panels : (storedPanels()[target] ?? []);
+    const slot = list.findIndex((p) => !p.pinned);
+    const next = list.some((p) => p.id === id) ? list : slot < 0 ? [...list, { id, pinned: false }] : list.map((p, i) => (i === slot ? { id, pinned: false } : p));
+    go({ tab: "Agents", dir: target, panels: next });
     setFocus({ id });
   };
 
@@ -196,8 +300,15 @@ function App() {
         <span class="logo">
           <b>k</b>ondu<b>k</b>tor
         </span>
-        {tabs.map((t) => (
-          <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
+        <div class="dirs" ref={dirsRef}>
+          <DirTab name="All" title="Every directory" list={sessions} on={isView(tab) && !dir} onPick={() => pick("")} />
+          {tabDirs.map((d) => (
+            <DirTab key={d} name={label(d)} title={d} mono list={inDir(d)} on={isView(tab) && d === dir} onPick={() => pick(d)} />
+          ))}
+        </div>
+        {projects.length > 0 && <MoreDirs live={[...live].sort((a, b) => byName(label(a), label(b)))} finished={finished} label={label} count={(d) => inDir(d)} onPick={pick} />}
+        {globals.map((t) => (
+          <a class={t === tab ? "tab global on" : "tab global"} onClick={() => go({ tab: t })}>
             {t}
           </a>
         ))}
@@ -214,96 +325,196 @@ function App() {
       </nav>
       {/* The konduktor panel stays mounted on the right of every tab; each tab's view goes before it. */}
       <div class="workspace">
-        {tab === "Settings" && <SettingsView />}
-        {tab === "Inbox" && <Inbox onStart={create} />}
-        {tab === "Stats" && <Stats />}
-        {tab === "Logs" && <Logs />}
-        {tab === "Tmux" && (
-          <main class="tmux">
-            <Terminal path="/api/tmux" />
-          </main>
-        )}
-        {tab === "Sessions" && (
-          <div class="sessions">
-            <Scope>{filters()}</Scope>
-            <Board
-              list={shown}
-              all={sessions}
-              sort={sort}
-              empty={empty}
-              folded={(project, group) => (allClosed((c) => c.project === project && c.group === group) ? !unfolded.includes(`${project}\n${group}`) : undefined)}
-              onFold={(project, group, on) => unfold(`${project}\n${group}`, !on)}
-              onOpen={(id) => {
-                setTab("Agents");
-                show(id);
-              }}
-            />
-          </div>
-        )}
-        <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
-          <Scope>
-            <div class="sidebar-head">
-              <Button label="New session" icon="plus" class="primary" onClick={() => create("")} />
-              {filters()}
-            </div>
-          </Scope>
-          <div class="groups">
-            {list.length === 0 && <div class="empty">{empty}</div>}
-            {projects.map((project) => {
-              const closed = allClosed((c) => c.project === project);
-              return (
-                <Group
-                  key={project}
-                  all={sessions}
-                  project={project}
-                  name={names.get(project)!}
-                  list={groups.get(project)!}
-                  open={open}
-                  collapsed={closed ? !unfolded.includes(project) : collapsed.includes(project)}
-                  onCollapse={(on) => (closed ? unfold(project, !on) : collapse(project, on))}
-                  onOpen={show}
-                />
-              );
-            })}
-          </div>
-          <Glenz page={`${tab} ${konduktor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
-          <Load />
-        </aside>
-        <div class="panels" hidden={tab !== "Agents"}>
-          {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
-          {panels.map(({ id, pinned }) =>
-            details[id] ? (
-              <ConversationView
-                key={id}
-                c={details[id]}
-                before={sessions.find((x) => x.id === details[id].after)}
-                onShow={show}
-                reload={() => loadDetail(id)}
-                onHide={() => hide(id)}
-                pinned={pinned}
-                onPin={(on) => pin(id, on)}
-              />
-            ) : (
-              <main key={id} id={`panel-${id}`} class="conversation placeholder">Loading…</main>
-            ),
+        <div class="view">
+          {isView(tab) && (
+            <Scope>
+              <nav class="views" data-scope="views">
+                {views.map((v) => (
+                  <Button key={v} label={v} class={v === tab ? "on" : undefined} aria-pressed={v === tab} onClick={() => go({ tab: v })} />
+                ))}
+                <span class="where mono" title={dir || undefined}>
+                  {dir || "Every directory"}
+                </span>
+              </nav>
+            </Scope>
           )}
+          <div class="view-body">
+            {tab === "Settings" && <SettingsView />}
+            {tab === "Inbox" && <Inbox onStart={create} />}
+            {tab === "Stats" && <Stats />}
+            {tab === "Logs" && <Logs />}
+            {tab === "Tmux" && (
+              <main class="tmux">
+                <Terminal path="/api/tmux" />
+              </main>
+            )}
+            {tab === "Sessions" && (
+              <div class="sessions">
+                <Scope>
+                  <div class="sessions-head">
+                    <Button label="New session" icon="plus" class="small primary" onClick={() => create("")} />
+                    {filters()}
+                  </div>
+                </Scope>
+                <Board
+                  list={shown}
+                  all={sessions}
+                  sort={sort}
+                  empty={empty}
+                  projects={!dir}
+                  folded={(project, group) => (allClosed((c) => c.project === project && c.group === group) ? !unfolded.includes(`${project}\n${group}`) : undefined)}
+                  onFold={(project, group, on) => unfold(`${project}\n${group}`, !on)}
+                  onOpen={(id) => show(id)}
+                />
+              </div>
+            )}
+            <aside class="sidebar" data-scope="sidebar" hidden={tab !== "Agents"}>
+              <Scope>
+                <div class="sidebar-head">
+                  <Button label="New session" icon="plus" class="primary" onClick={() => create("")} />
+                  {filters()}
+                </div>
+              </Scope>
+              <div class="groups">
+                {list.length === 0 && <div class="empty">{empty}</div>}
+                {keys.map((key) => {
+                  const closed = allClosed((c) => keyOf(c) === key);
+                  return (
+                    <Group
+                      key={key}
+                      all={sessions}
+                      title={dir ? undefined : key}
+                      name={nameOf(key)}
+                      mono={!dir}
+                      muted={dir !== "" && key.endsWith("\n")}
+                      list={groups.get(key)!}
+                      open={open}
+                      collapsed={closed ? !unfolded.includes(key) : collapsed.includes(key)}
+                      onCollapse={(on) => (closed ? unfold(key, !on) : collapse(key, on))}
+                      onOpen={show}
+                    />
+                  );
+                })}
+              </div>
+              <Glenz page={`${tab} ${dir} ${konduktor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
+              <Load />
+            </aside>
+            <div class="panels" hidden={tab !== "Agents"}>
+              {open.length === 0 && <main class="conversation placeholder">Pick a session on the left or start a new one.</main>}
+              {panels.map(({ id, pinned }) =>
+                details[id] ? (
+                  <ConversationView
+                    key={id}
+                    c={details[id]}
+                    before={sessions.find((x) => x.id === details[id].after)}
+                    onShow={show}
+                    reload={() => loadDetail(id)}
+                    onHide={() => hide(id)}
+                    pinned={pinned}
+                    onPin={(on) => pin(id, on)}
+                  />
+                ) : (
+                  <main key={id} id={`panel-${id}`} class="conversation placeholder">
+                    Loading…
+                  </main>
+                ),
+              )}
+            </div>
+          </div>
         </div>
         <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!konduktor} />
       </div>
       {creating !== undefined && (
         <NewSession
           initial={creating}
+          dir={dir}
           onClose={() => setCreating(undefined)}
           onCreated={(c) => {
             created.current?.();
             loadList();
             setCreating(undefined);
-            show(c.id);
+            show(c.id, c.project);
           }}
         />
       )}
       <ImageViewer />
     </>
+  );
+}
+
+// A directory tab speaks for its sessions like a collapsed group: the one that needs the user first, then one at work,
+// then one konduktor holds.
+function DirTab({ name, title, mono, list, on, onPick }: { name: string; title: string; mono?: boolean; list: Conversation[]; on: boolean; onPick: () => void }) {
+  const loud = loudest(list);
+  const unread = list.some((c) => c.unread);
+  const cls = ["tab", "dir", on && "on", unread && "unread"];
+  return (
+    <a class={cls.filter(Boolean).join(" ")} title={loud ? `${title}\n${stateLabel(loud)}` : title} onClick={onPick}>
+      {loud && <Dot c={loud} />}
+      <span class={mono ? "mono" : undefined}>{name}</span>
+    </a>
+  );
+}
+
+type MoreProps = { live: string[]; finished: string[]; label: (dir: string) => string; count: (dir: string) => Conversation[]; onPick: (dir: string) => void };
+
+// More lists every directory, so one whose tab is scrolled away or that has only closed sessions is a click away.
+function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
+  const [at, setAt] = useState<{ top: number; left: number }>();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!at) return;
+    const close = (e: globalThis.Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setAt(undefined);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [at]);
+  const item = (d: string, closed: boolean) => {
+    const list = count(d);
+    return (
+      <button
+        type="button"
+        key={d}
+        class="dir-item"
+        title={d}
+        onClick={() => {
+          setAt(undefined);
+          onPick(d);
+        }}
+      >
+        <span class="mono">{label(d)}</span>
+        <span class="count">{closed ? list.length : list.filter((c) => !c.closed).length}</span>
+      </button>
+    );
+  };
+  return (
+    <div class="more" ref={ref}>
+      <a
+        class={at ? "tab more-tab on" : "tab more-tab"}
+        aria-expanded={!!at}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setAt(at ? undefined : { top: r.bottom, left: Math.max(0, Math.min(r.left, window.innerWidth - 320)) });
+        }}
+      >
+        More
+        <i class="icon icon-chevron" />
+      </a>
+      {at && (
+        <div class="dir-menu" style={{ top: `${at.top}px`, left: `${at.left}px` }}>
+          {live.map((d) => item(d, false))}
+          {finished.length > 0 && <div class="dir-menu-label">Only closed sessions</div>}
+          {finished.map((d) => item(d, true))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -334,10 +545,15 @@ function loudness(c: Conversation) {
   return c.waiting_for === "conductor" ? 3 : 4;
 }
 
+// The session a collapsed group or a directory tab shows the state of.
+const loudest = (list: Conversation[]) => list.filter((c) => !c.closed && loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
+
 type GroupProps = {
   all: Conversation[];
-  project: string;
+  title?: string;
   name: string;
+  mono?: boolean;
+  muted?: boolean;
   list: Conversation[];
   open: string[];
   collapsed: boolean;
@@ -345,16 +561,16 @@ type GroupProps = {
   onOpen: (id: string) => void;
 };
 
-function Group({ all, project, name, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
+function Group({ all, title, name, mono, muted, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
   const chains = arrange(list, all);
-  const loud = list.filter((c) => !c.closed && loudness(c) < 4).sort((a, b) => loudness(a) - loudness(b))[0];
+  const loud = loudest(list);
   const unread = list.some((c) => c.unread && !open.includes(c.id));
   const cls = ["group", collapsed && loud && attention(loud), collapsed && unread && "unread"];
   return (
     <details class={cls.filter(Boolean).join(" ")} open={!collapsed} onToggle={(e) => e.currentTarget.open === collapsed && onCollapse(!collapsed)}>
-      <summary title={project}>
+      <summary title={title}>
         <Icon name="chevron" />
-        <span class="name mono">{name}</span>
+        <span class={["name", mono && "mono", muted && "muted"].filter(Boolean).join(" ")}>{name}</span>
         {collapsed && loud && (
           <span class={`state ${loud.waiting_for}`} title={loud.escalation || loud.attention || undefined}>
             <Dot c={loud} />
@@ -1045,13 +1261,14 @@ function span(from: string, to: string): string {
   return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
-function NewSession({ initial, onClose, onCreated }: { initial: string; onClose: () => void; onCreated: (c: Conversation) => void }) {
+function NewSession({ initial, dir: here, onClose, onCreated }: { initial: string; dir: string; onClose: () => void; onCreated: (c: Conversation) => void }) {
   const [harnesses, setHarnesses] = useState<Harness[]>([]);
   const [dirs, setDirs] = useState<string[]>([]);
   const [prompt, setPrompt] = useState(initial);
   const [harness, setHarness] = useState(localStorage.getItem("kk.harness") || "claude");
   const [models, setModels] = useState<Record<string, string>>(() => JSON.parse(localStorage.getItem("kk.models") || "{}"));
-  const [dir, setDir] = useState(localStorage.getItem("kk.dir") || "");
+  // The directory shown, or in All the one used last.
+  const [dir, setDir] = useState(here || localStorage.getItem("kk.dir") || "");
   const [busy, setBusy] = useState(false);
   const [past, setPast] = useState<PastSession[]>([]);
   const [resume, setResume] = useState<PastSession>();
