@@ -22,14 +22,18 @@ export type Conversation = {
   // The directory the list groups the conversation under; for a worktree session the directory it was made from.
   project: string;
   // The agent works in a git worktree, apart from the main checkout.
-  worktree: boolean;
+  in_worktree: boolean;
   // The feature the agent works on. Empty until kk or the coordinator has decided.
   group?: string;
   title: string;
   created: string;
   last_message: string;
   activity: string;
-  status: "starting" | "working" | "background" | "idle" | "exited";
+  // A queued session waits with its prompt for a start; no agent runs yet.
+  status: "queued" | "starting" | "working" | "background" | "idle" | "exited";
+  // The session this one follows in a chain.
+  after?: string;
+  prompt?: string;
   attention?: string;
   // Who has to act on an agent that stopped; empty while it works.
   waiting_for: "" | "user" | "conductor";

@@ -366,7 +366,7 @@ func TestWorktreeSessionsAreMarked(t *testing.T) {
 	check := func(state string) {
 		t.Helper()
 		for title, id := range ids {
-			if got := e.conv(id).Worktree; got != want[title] {
+			if got := e.conv(id).InWorktree; got != want[title] {
 				t.Errorf("%s: %q in a worktree: %v, want %v", state, title, got, want[title])
 			}
 		}
@@ -518,8 +518,7 @@ func TestNoAccentStripes(t *testing.T) {
 	p.eval(`(() => {
 		const stripes = []
 		let rules = 0
-		// A stripe is a visible left border of 2px or more that the top does not share, or an inset shadow pushed to one side.
-		// Transparent borders draw the triangle of an arrow.
+		// A stripe is a left border of 2px or more that the top does not share, or an inset shadow pushed to one side.
 		const visit = (list) => {
 			for (const rule of list) {
 				if (rule.cssRules?.length) visit(rule.cssRules)
@@ -527,9 +526,8 @@ func TestNoAccentStripes(t *testing.T) {
 				rules++
 				const s = rule.style
 				// Chrome keeps a shorthand with a variable only in the text of the rule.
-				const wide = /border-(left|inline-start)(-width)?:\s*([2-9]|[1-9]\d)(\.\d+)?px/.test(s.cssText) ||
+				const border = /border-(left|inline-start)(-width)?:\s*([2-9]|[1-9]\d)(\.\d+)?px/.test(s.cssText) ||
 					(parseFloat(s.borderLeftWidth) >= 2 && s.borderLeftWidth !== s.borderTopWidth)
-				const border = wide && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(s.borderLeftColor)
 				const shadow = s.getPropertyValue("box-shadow").split(/,(?![^(]*\))/).some((part) =>
 					part.includes("inset") && part.replace(/(var|rgba?)\([^)]*\)|#\w+|inset/g, "").trim().split(/\s+/).slice(0, 2).some((v) => parseFloat(v)))
 				if (border || shadow) stripes.push(rule.selectorText)
