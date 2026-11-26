@@ -229,6 +229,9 @@ func (e *env) waitFor(what string, id string, ok func(c convView) bool) convView
 	return c
 }
 
+// turnEnded tells a session that ended a turn since its launch from one that is idle between its start and its first prompt.
+func turnEnded(c convView) bool { return c.Status == statusIdle && c.TurnEnded.After(c.Launched) }
+
 func hasEvent(c convView, kind, text string) bool {
 	for _, ev := range c.Events {
 		if ev.Kind == kind && (ev.Text == text || ev.Input == text) {
@@ -1044,6 +1047,39 @@ func TestInterrupt(t *testing.T) {
 			return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: after")
 		})
 	}
+}
+
+// On a busy machine tmux can take seconds to start an agent's window, while the agent already works in it.
+const slowTmux = `#!/bin/sh
+case " $* " in
+*" new-window "*) out=$(%[1]s "$@"); code=$?; sleep 3; echo "$out"; exit $code ;;
+*" respawn-pane "*) sleep 3 ;;
+esac
+exec %[1]s "$@"
+`
+
+func TestSlowWindowStart(t *testing.T) {
+	real, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "tmux"), []byte(fmt.Sprintf(slowTmux, real)), 0o755)
+	e := newEnv(t, "PATH="+bin+":"+fakeBin+":"+os.Getenv("PATH"))
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("answer", id, func(c convView) bool { return turnEnded(c) && c.Title == "Title: hello" })
+	names := ""
+	for deadline := time.Now().Add(5 * time.Second); names != "home\nTitle: hello" && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		out, _ := exec.Command(real, "-L", strings.TrimPrefix(e.vars[2], "KK_TMUX="), "list-windows", "-t", "="+tmuxSession, "-F", "#{window_name}").Output()
+		names = strings.TrimSpace(string(out))
+	}
+	if names != "home\nTitle: hello" {
+		t.Fatalf("windows %q, want the home window and the agent's under its title", names)
+	}
+	e.mustKK("stop", id)
+	e.waitFor("stopped", id, func(c convView) bool { return c.Status == statusExited })
+	e.mustKK("resume", id)
+	e.waitFor("resumed", id, func(c convView) bool { return c.Status == statusIdle })
 }
 
 func TestStop(t *testing.T) {

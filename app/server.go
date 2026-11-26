@@ -49,6 +49,9 @@ type Server struct {
 	// handovers holds the conversations handed to a konduktor, until it hears of them, with who handed them over: the
 	// user, or the konduktor that gave it away.
 	handovers map[string]string
+	// opened holds when the latest launch of each conversation had its window, or the zero time while tmux still opens it,
+	// which can take seconds on a busy machine.
+	opened sync.Map
 	// starting runs one start of a konduktor at a time.
 	starting sync.Mutex
 	// roster holds, per konduktor, the lines about other konduktors that started or closed, until it hears of them.
@@ -473,14 +476,20 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 		// A claude.ai connector gets this long to connect; the agent waits for it with ToolSearch.
 		env["MCP_CONNECT_TIMEOUT_MS"] = "30000"
 	}
+	s.opened.Store(c.ID, time.Time{})
+	defer s.opened.Store(c.ID, time.Now())
 	alive, _ := windows()
 	if _, ok := alive[c.Window]; ok && c.Window != "" {
 		err = respawnWindow(c.Window, c.Dir, env, argv)
 	} else {
 		var window string
 		window, err = openWindow(c.ID, c.Dir, env, argv)
+		title := c.Title
 		*c, _ = s.store.update(c.ID, func(c *Conversation) bool {
 			c.Window = window
+			if c.Title != title {
+				nameWindow(*c)
+			}
 			return true
 		})
 	}
@@ -493,6 +502,21 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	}
 	s.publish(c.ID)
 	return nil
+}
+
+// nameWindow gives the window of a conversation its title. The agent can write its title before tmux reports the id
+// of a new window, and renaming no window would rename the one the user is in.
+func nameWindow(c Conversation) {
+	if c.Window != "" {
+		tmux("", "rename-window", "-t", c.Window, firstLine(c.Title, 40))
+	}
+}
+
+// windowSettled tells whether the window of the latest launch has been open long enough that the list of windows taken at
+// now shows it.
+func (s *Server) windowSettled(id string, now time.Time) bool {
+	at, ok := s.opened.Load(id)
+	return !ok || !at.(time.Time).IsZero() && now.Sub(at.(time.Time)) > time.Second
 }
 
 func (s *Server) alive(c Conversation) bool {
@@ -1038,7 +1062,7 @@ func (s *Server) tick() {
 		_, changed := s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
 			// The list of windows may predate a launch that has just revived this one.
-			if c.Status != statusExited && c.Window != "" && !alive[c.Window] && now.Sub(c.Launched) > time.Second {
+			if c.Status != statusExited && c.Window != "" && !alive[c.Window] && now.Sub(c.Launched) > time.Second && s.windowSettled(c.ID, now) {
 				c.Status, c.Attention, changed = statusExited, "", true
 			}
 			// When the last task ends, the harness starts a turn of its own, which its hooks report. The wait ends without
@@ -1054,7 +1078,7 @@ func (s *Server) tick() {
 				// keeps the name of its directory.
 				if t.Title != "" && t.Title != c.Title && c.Integration == "" && c.Role == "" {
 					c.Title, changed = t.Title, true
-					tmux("", "rename-window", "-t", c.Window, firstLine(t.Title, 40))
+					nameWindow(*c)
 				}
 				if t.Last.After(c.LastMessage) {
 					c.LastMessage, changed = t.Last, true
@@ -1086,7 +1110,7 @@ func (s *Server) tick() {
 			if c.Harness == "codex" && c.Session != "" && s.ticks%10 == 0 {
 				if name := codexThreadName(c.Session); name != "" && name != c.Title {
 					c.Title, changed = name, true
-					tmux("", "rename-window", "-t", c.Window, firstLine(name, 40))
+					nameWindow(*c)
 				}
 			}
 			return changed
