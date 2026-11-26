@@ -9,6 +9,7 @@ import { DirField } from "./dirpicker";
 import { Glenz } from "./glenz";
 import { Load } from "./load";
 import { ImageViewer, linkImages, showImages } from "./images";
+import { fitTables } from "./tables";
 import { Board, CardTitle } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { Inbox } from "./inbox";
@@ -48,7 +49,10 @@ function Markdown({ text, images = [], partial }: { text: string; images?: Attac
     if (!partial) mdCache.set(key, html);
   }
   const box = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => linkImages(box.current!), [html]);
+  useLayoutEffect(() => {
+    linkImages(box.current!);
+    fitTables(box.current!, key);
+  }, [html]);
   return <div ref={box} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 

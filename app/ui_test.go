@@ -881,3 +881,128 @@ func TestCardTokensLeaveOutCacheReads(t *testing.T) {
 		}
 	}
 }
+
+const discussionTable = `## Przebieg dyskusji
+
+| Kiedy | Kto | Co |
+|---|---|---|
+| 17.11 | Chi | Pyta Armanda, jak bardzo jesteśmy "committed" do tasky. Myślał, że to POC pod designy Dimy. Prosi o tech proposal i przegląd z góry, zanim Build zacznie od tego zależeć. |
+| 17.11 | Armand | Pełny proposal to przesada: tasky to "agent + skill + tools", prompt i wstępnie wypełniona lista zadań. Osobna definicja agenta to hack pod flagi, do usunięcia. |
+| 19.11 | Loughlin | Tasky zaraz będzie core produktem, więc prosi o dwie rzeczy: dyskusję techniczną (strona w Notion + tablica) i plan komunikacji. |
+| 19.11 | Miranda | Przy podmianie thready na tasky u klientów chce tej samej komunikacji co poprzednio, bo to druga zmiana UI w kilka tygodni. |
+
+| Session | Harness | Model | Started | Turns | Input | Output | Cache reads | Cost | Directory |
+|---|---|---|---|---|---|---|---|---|---|
+| a1b2c3d4 | Claude Code | opus-4.5 | 2026-11-24 09:12 | 42 | 1,204,331 | 88,120 | 9,812,004 | $41.20 | /Users/someone/repos/conduct-monorepo |
+| e5f6a7b8 | Codex | gpt-5.5 | 2026-11-25 14:03 | 7 | 120,553 | 9,431 | 802,113 | $3.05 | /Users/someone/repos/kk |
+`
+
+// tableLayout reads how the tables of the assistant's messages in a part of the page are laid out: the words that a line
+// break cuts in two, the cells of the first two columns that take more than one line, and whether the wide table or the
+// feed scrolls sideways.
+func (p *page) tableLayout(part string) (got struct {
+	Broken, Wrapped   []string
+	Scrolls, Overflow bool
+}) {
+	p.t.Helper()
+	p.eval(fmt.Sprintf(`(() => {
+		const part = document.querySelector(%q)
+		const lines = (r) => new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size
+		const broken = [], wrapped = []
+		const tables = [...part.querySelectorAll(".msg.assistant .md table")]
+		for (const table of tables) for (const cell of table.querySelectorAll("th, td")) {
+			const tops = new Set()
+			const walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+			for (let n; (n = walk.nextNode()); ) for (const m of n.data.matchAll(/\S+/g)) {
+				const r = document.createRange()
+				r.setStart(n, m.index)
+				r.setEnd(n, m.index + m[0].length)
+				if (lines(r) > 1) broken.push(m[0])
+				tops.add(Math.round(r.getBoundingClientRect().top))
+			}
+			if (cell.cellIndex < 2 && tops.size > 1) wrapped.push(cell.textContent.trim())
+		}
+		const wide = tables.find((t) => t.querySelectorAll("th").length > 3)
+		const feed = part.querySelector(".feed")
+		return { broken, wrapped, scrolls: wide.scrollWidth > wide.clientWidth, overflow: feed.scrollWidth > feed.clientWidth }
+	})()`, part), &got)
+	return got
+}
+
+func TestMarkdownTables(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, discussionTable)
+	e.waitFor("answer", id, turnEnded)
+	e.startKonduktor(e.work, discussionTable)
+
+	p := e.openPage(1600, 900)
+	p.click(fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .dirs > div")].find((d) => d.title.startsWith(%q))`, e.work))
+	p.click(fmt.Sprintf(`document.querySelector(".tile[data-chain='%s']")`, id))
+	for _, part := range []string{".panels", ".side-panel"} {
+		p.until(fmt.Sprintf(`document.querySelectorAll("%s .msg.assistant .md table").length === 2`, part))
+	}
+	for _, size := range []struct {
+		name  string
+		width int
+	}{{"wide", 1600}, {"narrow", 1200}} {
+		p.resize(size.width, 900)
+		p.eval(`new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))`, nil)
+		p.shot("tables-" + size.name)
+		for _, part := range []string{".panels", ".side-panel"} {
+			got := p.tableLayout(part)
+			if len(got.Broken) > 0 || len(got.Wrapped) > 0 || !got.Scrolls || got.Overflow {
+				t.Errorf("%s %s: %+v, want no broken words, short columns on one line and the wide table scrolling inside the message", size.name, part, got)
+			}
+		}
+	}
+
+	// The second column of the discussion in the chat, dragged by the handle on its header's right border.
+	p.resize(1600, 900)
+	const head = `document.querySelector(".panels .msg.assistant .md table th:nth-child(2)")`
+	width := func() (w float64) {
+		t.Helper()
+		p.eval(head+`.getBoundingClientRect().width`, &w)
+		return w
+	}
+	mouse := func(kind string, x, y float64, clicks int) {
+		t.Helper()
+		p.call("Input.dispatchMouseEvent", map[string]any{"type": kind, "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": clicks})
+	}
+	handle := func() (at struct{ X, Y float64 }) {
+		t.Helper()
+		p.eval(`(() => { const r = `+head+`.querySelector(".col-resize").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`, &at)
+		return at
+	}
+	dragBy := func(dx float64) {
+		t.Helper()
+		at := handle()
+		mouse("mousePressed", at.X, at.Y, 1)
+		mouse("mouseMoved", at.X+dx/2, at.Y, 0)
+		mouse("mouseMoved", at.X+dx, at.Y, 0)
+		mouse("mouseReleased", at.X+dx, at.Y, 1)
+	}
+	auto := width()
+	p.eval(head+`.scrollIntoView({ block: "center" })`, nil)
+	dragBy(80)
+	if got := width(); math.Abs(got-(auto+80)) > 1 {
+		t.Fatalf("dragged 80px wider: %.0f, want %.0f", got, auto+80)
+	}
+	p.shot("tables-resized")
+	e.mustKK("send", id, "one more message")
+	p.until(`document.querySelectorAll(".panels .msg.assistant").length === 2`)
+	if got := width(); math.Abs(got-(auto+80)) > 1 {
+		t.Errorf("after the next message: %.0f, want %.0f", got, auto+80)
+	}
+	dragBy(-500)
+	if got := width(); got != 48 {
+		t.Errorf("dragged far left: %.0f, want the minimum of 48", got)
+	}
+	at := handle()
+	mouse("mousePressed", at.X, at.Y, 1)
+	mouse("mouseReleased", at.X, at.Y, 1)
+	mouse("mousePressed", at.X, at.Y, 2)
+	mouse("mouseReleased", at.X, at.Y, 2)
+	if got := width(); got != auto {
+		t.Errorf("after a double click: %.0f, want the automatic %.0f", got, auto)
+	}
+}

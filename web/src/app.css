@@ -424,7 +424,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 
 /* Markdown is set for reading: a short measure, open leading, and space that groups a heading with the text under it. */
 .md { font-size: 15px; line-height: 1.65; color: var(--read-text); overflow-wrap: anywhere; text-wrap: pretty; }
-.msg.assistant .md { max-width: 72ch; }
+.msg.assistant .md > :not(table) { max-width: 72ch; }
 .md > :first-child, .md blockquote > :first-child { margin-top: 0; }
 .md > :last-child, .md blockquote > :last-child { margin-bottom: 0; }
 .md :is(h1, h2, h3, h4, h5, h6) { margin: 1.6em 0 .5em; color: var(--read-strong); font-weight: 600; line-height: 1.3; text-wrap: balance; }
@@ -446,8 +446,15 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .md pre { padding: 10px 12px; overflow-x: auto; white-space: pre; background: var(--surface); border: 1px solid var(--line); line-height: 1.5; }
 .md pre code { padding: 0; background: none; font-size: 13px; }
 .md table { border-collapse: collapse; display: block; overflow-x: auto; font-variant-numeric: tabular-nums; }
-.md :is(th, td) { padding: 6px 14px 6px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-.md th { color: var(--read-strong); font-weight: 600; border-bottom-color: var(--line-strong); }
+/* A cell is never narrower than its longest word, and a column of short cells stays on one line; a table wider than the
+   message scrolls. A column dragged to a width wraps anywhere to fit it. */
+.md :is(th, td) { padding: 6px 14px 6px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: normal; }
+.md :is(th, td).short { white-space: nowrap; }
+.md :is(th, td).sized { white-space: normal; overflow-wrap: anywhere; }
+.md th { position: relative; color: var(--read-strong); font-weight: 600; border-bottom-color: var(--line-strong); }
+.md .col-resize { position: absolute; top: 0; bottom: -1px; right: 3px; width: 9px; cursor: col-resize; touch-action: none; }
+.md .col-resize::after { content: ""; position: absolute; top: 4px; bottom: 4px; left: 4px; width: 1px; }
+.md .col-resize:hover::after, .md .col-resize.dragging::after { background: var(--text-dim); }
 .md a { color: var(--read-strong); text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--text-dim); text-underline-offset: 3px; }
 .md a:hover { text-decoration-color: var(--read-strong); }
 .msg.user .md { font-size: 14px; line-height: 1.5; }
