@@ -6,6 +6,7 @@ import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
+import { Glenz } from "./glenz";
 import { Load } from "./load";
 import { Board } from "./board";
 import { Inbox } from "./inbox";
@@ -244,6 +245,7 @@ function App() {
               );
             })}
           </div>
+          <Glenz />
           <Load />
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>

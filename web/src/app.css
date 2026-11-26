@@ -22,6 +22,10 @@
   --cpu: #6aa9ff;
   --ram: #7fd18b;
   --gpu: #b794f6;
+  --glenz-light: #fff;
+  --glenz-dark: #000;
+  --glenz-edge: #fff;
+  --glenz-shadow: #000;
   --user-bg: #e4e4e4;
   --user-line: #707070;
   --user-text: #161616;
@@ -124,6 +128,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .group.attention > summary { border-color: var(--warn-line); animation: attention 1s ease-in-out infinite alternate; }
 .group.attention .state { color: var(--warn-text); }
 .tiles { list-style: none; margin: 0; padding: 2px 0 6px; display: flex; flex-direction: column; gap: 8px; }
+.glenz { flex: none; display: block; width: 100%; height: 110px; }
+@media (max-height: 640px) { .glenz { display: none; } }
 .load { flex: none; padding: var(--gap); border-top: 1px solid var(--line); }
 .load svg { display: block; width: 100%; height: 64px; border: 1px solid var(--line); background: var(--bg); }
 .load polyline { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
