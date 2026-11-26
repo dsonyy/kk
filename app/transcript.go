@@ -29,6 +29,14 @@ type Event struct {
 	Time   time.Time    `json:"time"`
 	// command marks a slash command the user ran, which is no message of theirs.
 	command bool
+	// pasted are the images pasted into a Claude Code prompt, which stay in the transcript line at offset line.
+	pasted []pastedImage
+	line   int64
+}
+
+// pastedImage is an image block of a transcript line, with the number of its [Image #N] placeholder, 0 when unknown.
+type pastedImage struct {
+	block, n int
 }
 
 const (
@@ -45,7 +53,9 @@ type Tail struct {
 	path    string
 	offset  int64
 	partial []byte
-	Events  []Event
+	// at is the offset of the line being parsed.
+	at     int64
+	Events []Event
 	// Queue holds the messages Claude Code keeps until it gets to them.
 	Queue []Event
 	tools map[string]int
@@ -103,6 +113,7 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	start := t.offset - int64(len(t.partial))
 	t.offset += int64(len(data))
 	t.stamp = st.ModTime()
 	t.check = append(t.check, data...)
@@ -116,8 +127,10 @@ func (t *Tail) read(parse func(*Tail, []byte)) (bool, error) {
 	t.partial = append([]byte(nil), data[end+1:]...)
 	for _, line := range bytes.Split(data[:end], []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) > 0 {
+			t.at = start
 			parse(t, line)
 		}
+		start += int64(len(line)) + 1
 	}
 	return true, nil
 }
@@ -249,6 +262,7 @@ type claudeLine struct {
 	Subtype           string    `json:"subtype"`
 	Operation         string    `json:"operation"`
 	Content           string    `json:"content"`
+	ImagePasteIDs     []int     `json:"imagePasteIds"`
 	// ToolUseResult is what Claude Code keeps of a tool result besides what the model reads. Its shape differs by tool.
 	ToolUseResult json.RawMessage `json:"toolUseResult"`
 	Attachment    struct {
@@ -370,16 +384,31 @@ func parseClaude(t *Tail, raw []byte) {
 		}
 		var blocks []claudeBlock
 		json.Unmarshal(l.Message.Content, &blocks)
-		if slices.ContainsFunc(blocks, func(b claudeBlock) bool { return b.Type == "text" }) {
+		if slices.ContainsFunc(blocks, func(b claudeBlock) bool { return b.Type == "text" || b.Type == "image" }) {
 			t.fork(l)
 		}
-		for _, b := range blocks {
+		before := len(t.Events)
+		var pasted []pastedImage
+		for i, b := range blocks {
 			switch b.Type {
 			case "text":
 				addClaudeUserText(t, l, b.Text)
+			case "image":
+				p := pastedImage{block: i}
+				if len(pasted) < len(l.ImagePasteIDs) {
+					p.n = l.ImagePasteIDs[len(pasted)]
+				}
+				pasted = append(pasted, p)
 			case "tool_result":
 				t.toolResult(b.ToolUseID, blockText(b.Content), b.IsError)
 			}
+		}
+		if len(pasted) > 0 && l.UUID != "" {
+			if n := len(t.Events); n == before || t.Events[n-1].Kind != kindUser || t.Events[n-1].ID != l.UUID {
+				t.add(Event{ID: l.UUID, Kind: kindUser, Time: l.Timestamp})
+			}
+			e := &t.Events[len(t.Events)-1]
+			e.pasted, e.line = pasted, t.at
 		}
 	case "assistant":
 		meterClaude(t, &l)

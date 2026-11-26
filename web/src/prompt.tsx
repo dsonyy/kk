@@ -61,7 +61,7 @@ export function withPaths(text: string, files: Attachment[]): string {
 
 export const IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
 
-export function Attachments({ items, onRemove }: { items: { name: string; url?: string }[]; onRemove?: (index: number) => void }) {
+export function Attachments({ items, onRemove }: { items: { name: string; url?: string; image?: boolean }[]; onRemove?: (index: number) => void }) {
   if (!items.length) return null;
   return (
     <ul class="attachments">
@@ -72,7 +72,7 @@ export function Attachments({ items, onRemove }: { items: { name: string; url?: 
               <i class="spinner" />
               <span class="name">{a.name}</span>
             </span>
-          ) : IMAGE.test(a.name) ? (
+          ) : a.image || IMAGE.test(a.name) ? (
             <a href={a.url} target="_blank" rel="noreferrer" title={a.name}>
               <img src={a.url} alt={a.name} />
             </a>

@@ -2,15 +2,18 @@ import { act, flash, when, type Attachment, type Event } from "./api";
 import { Button, Scope } from "./mnemonic";
 import { IMAGE } from "./prompt";
 
-export type Medium = Attachment & { path: string; time: string };
+export type Medium = Attachment & { time: string };
 
 // media lists the pictures of a conversation newest first, each file once with the time of the last message that
-// names it: the ones the user attached and the ones a message names.
+// names it: the ones the user attached or pasted and the ones a message names.
 export function media(events: Event[]): Medium[] {
   const out = new Map<string, Medium>();
   for (const e of [...events].reverse()) {
-    const files = [...(e.attachments ?? []).filter((a) => IMAGE.test(a.name)), ...(e.images ?? [])];
-    for (const f of files) if (f.path && !out.has(f.path)) out.set(f.path, { ...f, path: f.path, time: e.time });
+    const files = [...(e.attachments ?? []).filter((a) => a.image || IMAGE.test(a.name)), ...(e.images ?? [])];
+    for (const f of files) {
+      const key = f.path ?? f.url;
+      if (!out.has(key)) out.set(key, { ...f, time: e.time });
+    }
   }
   return [...out.values()];
 }
@@ -41,7 +44,7 @@ const copyImage = (m: Medium) =>
 
 const copyPath = (m: Medium) =>
   act(async () => {
-    await clipboard().writeText(m.path);
+    await clipboard().writeText(m.path!);
     flash("Path copied.");
   });
 
@@ -51,12 +54,12 @@ export function Media({ items }: { items: Medium[] }) {
   return (
     <div class="media">
       {items.map((m) => (
-        <figure key={m.path} data-scope="media">
-          <a class="image" href={m.url} title={m.path} target="_blank" rel="noreferrer">
+        <figure key={m.url} data-scope="media">
+          <a class="image" href={m.url} title={m.path ?? m.name} target="_blank" rel="noreferrer">
             <img src={m.url} alt={m.name} loading="lazy" />
           </a>
           <figcaption>
-            <span class="name mono" title={m.path}>
+            <span class={m.path ? "name mono" : "name"} title={m.path ?? m.name}>
               {m.name}
             </span>
             <time dateTime={m.time}>{when(m.time)}</time>
@@ -65,7 +68,7 @@ export function Media({ items }: { items: Medium[] }) {
             <div class="row">
               <Button label="Open" class="small" onClick={(e) => e.currentTarget.closest("figure")!.querySelector("a")!.click()} />
               <Button label="Copy image" class="small" onClick={() => copyImage(m)} />
-              <Button label="Copy path" class="small" onClick={() => copyPath(m)} />
+              {m.path && <Button label="Copy path" class="small" onClick={() => copyPath(m)} />}
             </div>
           </Scope>
         </figure>

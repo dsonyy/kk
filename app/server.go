@@ -161,6 +161,7 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/attachments", s.handleUpload)
 	mux.HandleFunc("GET /api/attachments/{id}/{name}", s.handleAttachment)
 	mux.HandleFunc("GET /api/conversations/{id}/image", s.handleImage)
+	mux.HandleFunc("GET /api/conversations/{id}/pasted/{uuid}/{block}", s.handlePasted)
 	api("GET /api/settings", s.handleSettings)
 	api("PUT /api/settings", s.handleSaveSettings)
 	api("GET /api/inbox", s.handleInbox)
@@ -263,7 +264,7 @@ func (s *Server) view(c Conversation, events bool) convView {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
 			for _, e := range t.Events {
-				v.Events = append(v.Events, withImages(c.ID, s.withAttachments(e)))
+				v.Events = append(v.Events, s.shown(c.ID, e))
 			}
 			for _, e := range t.Queue {
 				// A queue dies with the agent's process, and the transcript does not say so. Task notifications wait in it too.

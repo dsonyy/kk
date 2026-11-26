@@ -17,6 +17,8 @@ type Attachment struct {
 	Name string `json:"name"`
 	Path string `json:"path,omitempty"`
 	URL  string `json:"url"`
+	// Image marks a picture whose name is no file name, as an image pasted into a prompt.
+	Image bool `json:"image,omitempty"`
 }
 
 var (

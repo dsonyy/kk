@@ -4,6 +4,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -777,7 +778,29 @@ func userLine(prompt string) {
 		write(map[string]any{"type": "event_msg", "payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "UserMessage", "content": []any{map[string]any{"type": "text", "text": prompt}}}}})
 		return
 	}
-	write(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}})
+	line := map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}}
+	if blocks, ids := pastedImages(prompt); len(ids) > 0 {
+		line["message"] = map[string]any{"role": "user", "content": blocks}
+		line["imagePasteIds"] = ids
+	}
+	write(line)
+}
+
+// pastedImages is how Claude Code records the images pasted into its prompt: the text with an [Image #N] placeholder
+// for each, then an image block per placeholder in their order. The image of placeholder N is FAKE_HOME/paste-N.png.
+func pastedImages(prompt string) ([]any, []int) {
+	blocks := []any{map[string]any{"type": "text", "text": prompt}}
+	var ids []int
+	for _, m := range regexp.MustCompile(`\[Image #(\d+)\]`).FindAllStringSubmatch(prompt, -1) {
+		data, err := os.ReadFile(filepath.Join(os.Getenv("FAKE_HOME"), "paste-"+m[1]+".png"))
+		if err != nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[1])
+		ids = append(ids, n)
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": base64.StdEncoding.EncodeToString(data)}})
+	}
+	return blocks, ids
 }
 
 func toolCall(cmd, output string) {

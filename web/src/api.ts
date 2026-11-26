@@ -13,7 +13,7 @@ export type Event = {
   time: string;
 };
 
-export type Attachment = { name: string; url: string; path?: string };
+export type Attachment = { name: string; url: string; path?: string; image?: boolean };
 
 export type Conversation = {
   id: string;

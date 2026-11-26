@@ -105,7 +105,7 @@ func (s *Server) handleRewind(r *http.Request) (any, error) {
 	if in.Event < 0 || in.Event >= len(events) || events[in.Event].Kind != kindUser || (c.Harness == "claude" && events[in.Event].ID == "") {
 		return nil, fail(400, "event %d is not a message of yours that can be edited", in.Event)
 	}
-	if s.withAttachments(events[in.Event]).Text != in.Was {
+	if s.shown(c.ID, events[in.Event]).Text != in.Was {
 		return nil, fail(409, "the conversation changed since you started editing, open the message again")
 	}
 	back := 0
