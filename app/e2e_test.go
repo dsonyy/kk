@@ -617,16 +617,17 @@ func TestCoordinatorCompacts(t *testing.T) {
 	if c.Dir != e.home {
 		t.Fatalf("coordinator dir: %s", c.Dir)
 	}
-	md, err := os.ReadFile(filepath.Join(e.home, "coordinator.md"))
-	if err != nil || !strings.Contains(string(md), "kk new <claude|codex|cursor>") || !strings.Contains(string(md), kkBin) {
-		t.Fatalf("coordinator.md: %v %s", err, md)
+	prompt := filepath.Join(e.home, "konduktors", coordinatorID+".md")
+	md, err := os.ReadFile(prompt)
+	if err != nil || !strings.Contains(string(md), "kk new <claude|codex|cursor>") || !strings.Contains(string(md), kkBin) || !strings.Contains(string(md), "You are the main konduktor") {
+		t.Fatalf("prompt: %v %s", err, md)
 	}
 	argv, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
-	if !strings.Contains(string(argv), `"--append-system-prompt-file","`+filepath.Join(e.home, "coordinator.md")+`"`) {
+	if !strings.Contains(string(argv), `"--append-system-prompt-file","`+prompt+`"`) {
 		t.Fatalf("argv: %s", argv)
 	}
-	if ls := e.mustKK("ls"); strings.Contains(ls, coordinatorID) {
-		t.Fatalf("coordinator listed as a conversation: %s", ls)
+	if ls := e.mustKK("ls"); !strings.HasPrefix(ls, coordinatorID+" ") || !strings.Contains(strings.SplitN(ls, "\n", 2)[0], "konduktor") {
+		t.Fatalf("kk ls does not list the konduktor first: %s", ls)
 	}
 
 	e.mustKK("send", coordinatorID, "small talk")

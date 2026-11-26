@@ -25,7 +25,7 @@ const usage = `kk - konduktor, run and steer coding agents in tmux from the web
 
   kk                          start the server
   kk url                      print the web address
-  kk ls                       list conversations
+  kk ls                       list the konduktors and the conversations
   kk show <id> [-n N]         show the last N events of a conversation
   kk new <harness> [-m model] [-C dir] [-w] [-g group] [-after id] <prompt>
                               start an agent; -w gives it its own git worktree and branch,
@@ -43,6 +43,8 @@ const usage = `kk - konduktor, run and steer coding agents in tmux from the web
   kk resume <id>              restart an exited agent
   kk close <id>               stop the agent and close the conversation, resume reopens it
   kk escalate <id> <reason>   hand a waiting agent from the konduktor to the user, with a one-line reason
+  kk handover <id> <konduktor id>
+                              hand a session to another konduktor
   kk hook <event>             hook endpoint for agents (payload on stdin)
   kk guard <tool,...>         hook that refuses an agent every tool not listed
 `
@@ -106,7 +108,7 @@ func serve() error {
 	s := &Server{
 		store: store, bin: bin, token: token, settings: loadSettings(store.dir),
 		tails: map[string]*Tail{}, subagents: map[string]*Tail{}, subs: map[chan string]bool{}, grouping: make(chan string, 4096), asked: map[string]int{},
-		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{}, handovers: map[string]bool{}, answers: map[string]runAnswer{},
+		controls: map[string]time.Time{}, raises: map[string]int{}, watches: map[string]*watch{}, notices: map[string]notice{}, handovers: map[string]string{}, roster: map[string][]string{}, answers: map[string]runAnswer{},
 	}
 	os.Remove(sockPath())
 	unixLn, err := net.Listen("unix", sockPath())
@@ -130,7 +132,7 @@ func serve() error {
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()
 	if s.cfg().coordinator() {
-		if err := s.ensureCoordinator(); err != nil {
+		if err := s.ensureKonduktors(); err != nil {
 			log.Printf("konduktor: %v", err)
 		}
 	}
@@ -200,9 +202,19 @@ func runCLI(cmd string, args []string) error {
 		}
 		fmt.Printf("http://%s/?token=%s\n", addr(), bytes.TrimSpace(token))
 	case "ls":
-		var list []convView
+		var konduktors, list []convView
+		if err := call("GET", "/api/konduktors", nil, &konduktors); err != nil {
+			return err
+		}
 		if err := call("GET", "/api/conversations", nil, &list); err != nil {
 			return err
+		}
+		for _, k := range konduktors {
+			scope := k.Scope
+			if k.ID == coordinatorID {
+				scope = "every directory without its own konduktor"
+			}
+			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s (%s)\n", k.ID, k.Status, "-", "konduktor", k.Model, lastActive(k.Conversation).Format("01-02 15:04"), konduktorName(k.Conversation), scope)
 		}
 		for _, c := range list {
 			state := c.Status
@@ -212,7 +224,10 @@ func runCLI(cmd string, args []string) error {
 			if c.Attention != "" {
 				state = "ACTION REQUIRED"
 			}
-			waiting := waitingName(c.WaitingFor)
+			waiting := c.WaitingFor
+			if waiting == waitingKonduktor && c.Konduktor != "" {
+				waiting = c.Konduktor
+			}
 			if waiting == "" {
 				waiting = "-"
 			}
@@ -224,7 +239,7 @@ func runCLI(cmd string, args []string) error {
 			if c.After != "" {
 				after = "  (after " + c.After + ")"
 			}
-			fmt.Printf("%s  %-15s  %-9s  %-6s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
+			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
 		}
 	case "show":
 		if err := need(1); err != nil {
@@ -241,7 +256,14 @@ func runCLI(cmd string, args []string) error {
 		if c.Attention != "" {
 			fmt.Printf("ACTION REQUIRED: %s\n", c.Attention)
 		}
-		if c.WaitingFor != "" {
+		if c.WaitingFor == waitingKonduktor && c.Konduktor != "" {
+			name := c.Konduktor
+			var k convView
+			if call("GET", "/api/conversations/"+c.Konduktor, nil, &k) == nil {
+				name = konduktorName(k.Conversation)
+			}
+			fmt.Printf("Waiting for konduktor %s (%s)\n", name, c.Konduktor)
+		} else if c.WaitingFor != "" {
 			fmt.Printf("Waiting for the %s\n", waitingName(c.WaitingFor))
 		}
 		if c.Escalation != "" {
@@ -353,6 +375,11 @@ func runCLI(cmd string, args []string) error {
 			return err
 		}
 		return call("POST", "/api/conversations/"+args[0]+"/escalate", map[string]string{"reason": strings.Join(args[1:], " ")}, nil)
+	case "handover":
+		if err := need(2); err != nil {
+			return err
+		}
+		return call("POST", "/api/conversations/"+args[0]+"/handover", map[string]string{"konduktor": args[1]}, nil)
 	case "hook":
 		return hook(args)
 	case "guard":

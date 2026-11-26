@@ -238,7 +238,7 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	}
 	s.syncIntegrations()
 	if st.coordinator() {
-		if err := s.ensureCoordinator(); err != nil {
+		if err := s.ensureKonduktors(); err != nil {
 			return nil, err
 		}
 	}

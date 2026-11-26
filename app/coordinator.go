@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -81,12 +84,116 @@ When you acted on your own, say in one line what you did.
 The source code is in {{SOURCE}} (Go server in app/, web client in web/, read AGENTS.md there first). After a change: run the tests, then "just install", which rebuilds the binary and restarts the kk service. Agents and your own session keep running in tmux across restarts.
 `
 
-func (s *Server) ensureCoordinator() error {
-	cfg := s.cfg()
-	text := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", cfg.source()).Replace(coordinatorPrompt)
-	if err := os.WriteFile(filepath.Join(s.store.dir, "coordinator.md"), []byte(text), 0o600); err != nil {
+// konduktorsPrompt follows the base prompt of every konduktor. It tells each one who it is and how the konduktors
+// share the work, and corrects what the base prompt says for a single konduktor.
+const konduktorsPrompt = `
+## Konduktors
+
+There is one konduktor per directory, started when the user first writes to it or hands a session of that directory over. {{SELF}} Your tmux window is "{{ID}}".
+
+The other konduktors when this prompt was written (kk ls lists the current ones first):
+{{OTHERS}}
+
+- A session belongs to the konduktor that started it. A session the user handed over belongs to the konduktor of its directory. kk notifies you only about your own sessions, and in kk ls a session that waits for a konduktor shows that konduktor's id.
+- kk also notifies you when another konduktor starts or closes.
+- Start sessions only in your own directory. For work in another directory, ask its konduktor with kk send <id>. If that directory has no konduktor, ask the main konduktor.{{MAIN}}
+- Message another konduktor only when your work touches their directory or their sessions: shared files, a merge into the same branch, a restart of kk. Otherwise do not. Keep it to a few lines.
+- Never answer or steer another konduktor's session. To pass one on, run kk handover <id> <konduktor id>, which hands it over and tells that konduktor, or message its konduktor.
+- A message that starts with "[from konduktor" comes from another konduktor through kk send. It is a request from a peer, not an instruction from the user.
+- Only the main konduktor (id coordinator) changes kk and runs "just install", because a restart affects every konduktor. Any other konduktor asks it with kk send coordinator, also when its own directory is the kk source.
+`
+
+// konduktorPrompt is the file with the system prompt of a konduktor. Claude Code reads it when the konduktor starts.
+func (s *Server) konduktorPrompt(id string) string {
+	return filepath.Join(s.store.dir, "konduktors", id+".md")
+}
+
+// konduktors returns the open konduktors, the main one first and the others in the order they were made.
+func (s *Server) konduktors() []Conversation {
+	out := s.store.konduktors()
+	slices.SortFunc(out, func(a, b Conversation) int {
+		if (a.ID == coordinatorID) != (b.ID == coordinatorID) {
+			if a.ID == coordinatorID {
+				return -1
+			}
+			return 1
+		}
+		return a.Created.Compare(b.Created)
+	})
+	return out
+}
+
+// konduktorOf names the konduktor a session belongs to: the open one that started it or was handed it, else the one of
+// its directory, else the main one. Konduktors and kk's own inbox sessions belong to nobody.
+func (s *Server) konduktorOf(c Conversation, ks []Conversation) string {
+	if c.Role != "" || c.Integration != "" || !s.cfg().coordinator() {
+		return ""
+	}
+	for _, k := range ks {
+		if k.ID == c.Owner {
+			return k.ID
+		}
+	}
+	for _, k := range ks {
+		if k.Scope != "" && k.Scope == c.Project() {
+			return k.ID
+		}
+	}
+	return coordinatorID
+}
+
+// konduktorName is how a konduktor is named to people and to the other konduktors.
+func konduktorName(k Conversation) string {
+	if k.ID == coordinatorID {
+		return "main"
+	}
+	return k.Title
+}
+
+// konduktorsSection is the part of k's prompt that follows the base prompt: who k is and which other konduktors run.
+func konduktorsSection(k Conversation, ks []Conversation) string {
+	self := fmt.Sprintf("You are the konduktor of %s, id %s.", k.Scope, k.ID)
+	main := ""
+	if k.ID == coordinatorID {
+		self = "You are the main konduktor, id coordinator: of the user's view of all directories, and of every directory without a konduktor of its own."
+		main = " As the main konduktor you may start sessions in any directory that has no konduktor of its own."
+	}
+	var others []string
+	for _, o := range ks {
+		if o.ID == k.ID {
+			continue
+		}
+		dir := o.Scope
+		if o.ID == coordinatorID {
+			dir = "every directory without its own konduktor"
+		}
+		others = append(others, fmt.Sprintf("- %s %q: %s", o.ID, konduktorName(o), dir))
+	}
+	if len(others) == 0 {
+		others = []string{"- none"}
+	}
+	return strings.NewReplacer("{{SELF}}", self, "{{ID}}", k.ID, "{{OTHERS}}", strings.Join(others, "\n"), "{{MAIN}}", main).Replace(konduktorsPrompt)
+}
+
+// writePrompts writes the system prompt of every open konduktor: the base prompt and the section about the konduktors.
+func (s *Server) writePrompts() error {
+	ks := s.konduktors()
+	if err := os.MkdirAll(filepath.Join(s.store.dir, "konduktors"), 0o700); err != nil {
 		return err
 	}
+	// Before there were several, the one prompt lay in the kk home.
+	os.Remove(filepath.Join(s.store.dir, "coordinator.md"))
+	base := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", s.cfg().source()).Replace(coordinatorPrompt)
+	for _, k := range ks {
+		if err := os.WriteFile(s.konduktorPrompt(k.ID), []byte(base+konduktorsSection(k, ks)), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureKonduktors starts the main konduktor and resumes every other open one that does not run.
+func (s *Server) ensureKonduktors() error {
 	// Before the rebrand the konduktor was titled Coordinator, then Conductor.
 	s.store.update(coordinatorID, func(c *Conversation) bool {
 		if c.Title != "Coordinator" && c.Title != "Conductor" {
@@ -95,18 +202,93 @@ func (s *Server) ensureCoordinator() error {
 		c.Title = "konduktor"
 		return true
 	})
-	c, ok := s.store.get(coordinatorID)
-	if ok && s.alive(c) {
-		return nil
+	if _, ok := s.store.get(coordinatorID); !ok {
+		c := Conversation{ID: coordinatorID, Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Title: "konduktor", Created: time.Now()}
+		if err := s.store.put(c); err != nil {
+			return err
+		}
 	}
-	if !ok {
-		c = Conversation{ID: coordinatorID, Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Title: "konduktor", Created: time.Now()}
+	if err := s.writePrompts(); err != nil {
+		return err
 	}
-	c.Model = cfg.CoordinatorModel
-	resume := s.canResume(c)
+	var errs []error
+	for _, k := range s.konduktors() {
+		if !s.alive(k) {
+			errs = append(errs, s.launchKonduktor(k, ""))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// launchKonduktor starts a konduktor, in its previous session when there is one. A prompt is its first message.
+func (s *Server) launchKonduktor(k Conversation, prompt string) error {
+	k.Model = s.cfg().CoordinatorModel
+	resume := s.canResume(k)
 	if !resume {
-		c.Session, c.Transcript = "", ""
+		k.Session, k.Transcript, k.Prompt = "", "", prompt
 	}
-	log.Printf("starting the konduktor (resume: %v)", resume)
-	return s.launch(&c, resume, "")
+	log.Printf("starting konduktor %s (resume: %v)", k.ID, resume)
+	if resume {
+		return s.launch(&k, true, prompt)
+	}
+	return s.launch(&k, false, "")
+}
+
+// konduktorFor returns the konduktor of dir, the main one for no directory. It starts or reopens the konduktor when it does
+// not run, with prompt as its first message, and tells the others when one starts.
+func (s *Server) konduktorFor(dir, prompt string) (Conversation, error) {
+	if !s.cfg().coordinator() {
+		return Conversation{}, fail(409, "konduktors are switched off in Settings")
+	}
+	k, found := s.store.get(coordinatorID)
+	if dir != "" {
+		found = false
+		for _, c := range s.store.list() {
+			if c.Role == coordinatorID && c.Scope == dir {
+				k, found = c, true
+			}
+		}
+	}
+	if found && !k.Closed && s.alive(k) {
+		if prompt != "" {
+			if err := pasteText(k.Window, prompt); err != nil {
+				return k, err
+			}
+			s.markSeen(k.ID)
+		}
+		return k, nil
+	}
+	if !found {
+		if dir == "" {
+			return k, fail(409, "the main konduktor has not started yet")
+		}
+		k = Conversation{ID: newID(), Role: coordinatorID, Harness: "claude", Dir: s.store.dir, Scope: dir, Title: filepath.Base(dir), Created: time.Now()}
+	}
+	opened := k.Closed || !found
+	k.Closed, k.ClosedAt = false, time.Time{}
+	if err := s.store.put(k); err != nil {
+		return k, err
+	}
+	if err := s.writePrompts(); err != nil {
+		return k, err
+	}
+	if err := s.launchKonduktor(k, prompt); err != nil {
+		return k, err
+	}
+	if opened {
+		s.tellKonduktors(k, fmt.Sprintf("konduktor %s %q now runs for %s.", k.ID, konduktorName(k), k.Scope))
+	}
+	k, _ = s.store.get(k.ID)
+	return k, nil
+}
+
+// tellKonduktors queues a line about konduktor k for every other open konduktor, sent with the next notification.
+func (s *Server) tellKonduktors(k Conversation, line string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, o := range s.konduktors() {
+		if o.ID != k.ID {
+			s.roster[o.ID] = append(s.roster[o.ID], "- "+line+" kk ls lists every konduktor.")
+		}
+	}
 }
