@@ -23,6 +23,8 @@ export type Conversation = {
   dir: string;
   // The directory the list groups the conversation under; for a worktree session the directory it was made from.
   project: string;
+  // The agent works in a git worktree, apart from the main checkout.
+  in_worktree: boolean;
   // The feature the agent works on. Empty until kk or the coordinator has decided.
   group?: string;
   title: string;

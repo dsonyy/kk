@@ -61,6 +61,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// InWorktree says the agent works in a git worktree, apart from the main checkout.
+	InWorktree bool `json:"in_worktree"`
 	// RunDone marks a scheduled run that finished and waits for the user to see it.
 	RunDone bool      `json:"run_done"`
 	NextRun time.Time `json:"next_run,omitzero"`
@@ -233,7 +235,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), RunDone: c.RunDone(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), InWorktree: inWorktree(c), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), RunDone: c.RunDone(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if c.Schedule != nil {
 		v.NextRun = c.Schedule.next(time.Now())
 	}

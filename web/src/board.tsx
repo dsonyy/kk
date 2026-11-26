@@ -28,6 +28,16 @@ function columns(list: Conversation[], sort: Sort): Column[] {
   return cols.sort((a, b) => Number(!a.group) - Number(!b.group) || byName(a.group, b.group) || byName(a.project, b.project));
 }
 
+export function CardTitle({ c }: { c: Conversation }) {
+  return (
+    <div class="tile-top">
+      <TitleIcon c={c} />
+      <div class="title">{c.title || "Untitled"}</div>
+      {c.in_worktree && <i class="icon icon-worktree" role="img" aria-label="Git worktree" title={`Works in a git worktree: ${c.dir}`} />}
+    </div>
+  );
+}
+
 export const dayKey = (t: string | number) => new Date(t).toLocaleDateString("en-CA");
 
 export function dayLabel(key: string): string {
@@ -99,10 +109,7 @@ export function Board({ list, all, sort, empty, folded, onFold, onOpen }: BoardP
                           const [cls, label] = state(c);
                           return (
                             <li key={c.id} class={`tile ${cls}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
-                              <div class="tile-top">
-                                <TitleIcon c={c} />
-                                <div class="title">{c.title || "Untitled"}</div>
-                              </div>
+                              <CardTitle c={c} />
                               <ChainRefs chains={chains} id={c.id} />
                               <div class="meta">
                                 <span>{harnessLabel(c.harness)}</span>

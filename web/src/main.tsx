@@ -6,8 +6,10 @@ import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
+import { Glenz } from "./glenz";
 import { Load } from "./load";
-import { Board } from "./board";
+import { ImageViewer, linkImages } from "./images";
+import { Board, CardTitle } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { Inbox } from "./inbox";
 import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
@@ -17,7 +19,7 @@ import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import { Logs, reportErrors } from "./logs";
-import { ScheduleDialog, TitleIcon, scheduleText } from "./schedule";
+import { ScheduleDialog, scheduleText } from "./schedule";
 import { Stats } from "./stats";
 import "./app.css";
 
@@ -33,7 +35,9 @@ function Markdown({ text, partial }: { text: string; partial?: boolean }) {
     html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }) as string);
     if (!partial) mdCache.set(text, html);
   }
-  return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => linkImages(box.current!), [html]);
+  return <div ref={box} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // The hash lists the open panels in order. Pinned ones stay until hidden; the one marked with ~ is reused by the next
@@ -181,14 +185,18 @@ function App() {
   return (
     <>
       <nav class="tabs">
+        <span class="logo">
+          <b>k</b>ondu<b>k</b>tor
+        </span>
         {tabs.map((t) => (
           <a class={t === tab ? "tab on" : "tab"} onClick={() => setTab(t)}>
             {t}
           </a>
         ))}
         <Button
-          class="conductor-toggle"
-          label={conductor ? "Hide conductor" : "Show conductor"}
+          class={conductor ? "conductor-toggle on" : "conductor-toggle"}
+          label="Conductor"
+          aria-pressed={conductor}
           title={conductor ? "Hide the conductor panel" : "Show the conductor panel"}
           onClick={() => {
             localStorage.setItem("kk.conductor", conductor ? "hidden" : "");
@@ -250,6 +258,7 @@ function App() {
               );
             })}
           </div>
+          <Glenz page={`${tab} ${conductor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
           <Load />
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>
@@ -285,6 +294,7 @@ function App() {
           }}
         />
       )}
+      <ImageViewer />
     </>
   );
 }
@@ -360,10 +370,7 @@ function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: 
   const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
-      <div class="tile-top">
-        <TitleIcon c={c} />
-        <div class="title">{c.title || "Untitled"}</div>
-      </div>
+      <CardTitle c={c} />
       <ChainRefs chains={chains} id={c.id} />
       {c.escalation && <div class="reason">{c.escalation}</div>}
       <div class="meta">
