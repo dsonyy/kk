@@ -22,6 +22,8 @@
   --cpu: #6aa9ff;
   --ram: #7fd18b;
   --gpu: #b794f6;
+  --schedule: #4fc6d9;
+  --schedule-bg: #062a30;
   --user-bg: #e4e4e4;
   --user-line: #707070;
   --user-text: #161616;
@@ -80,6 +82,7 @@ u.mnemonic { text-decoration: underline; text-decoration-color: var(--text-dim);
 .icon-reset { mask-image: url("/icons/reset.svg"); }
 .icon-power { mask-image: url("/icons/power.svg"); }
 .icon-pin { mask-image: url("/icons/pin.svg"); }
+.icon-clock { mask-image: url("/icons/clock.svg"); }
 button:has(.icon) { display: inline-flex; align-items: center; gap: 6px; }
 button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
@@ -89,6 +92,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .dot.attention.conductor { box-shadow: inset 0 0 0 1px var(--warn-text); }
 .dot.exited.conductor { box-shadow: inset 0 0 0 1px var(--text-dim); }
 .dot.working, .dot.starting { background: var(--text-strong); animation: blink 1s steps(2, jump-none) infinite; }
+.dot.called { background: var(--schedule); }
+.dot.sleeping { background: none; box-shadow: inset 0 0 0 1px var(--text-dim); }
 .dot.background { background: var(--text-strong); animation: blink 2.4s steps(2, jump-none) infinite; }
 @keyframes blink { to { opacity: .2; } }
 .spinner { flex: none; width: 7px; height: 7px; background: var(--text-strong); animation: blink .6s steps(2, jump-none) infinite; }
@@ -123,6 +128,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .group.warn > summary { border-color: var(--warn-line); }
 .group.attention > summary { border-color: var(--warn-line); animation: attention 1s ease-in-out infinite alternate; }
 .group.attention .state { color: var(--warn-text); }
+.group.called > summary { border-color: var(--schedule); animation: called 1s ease-in-out infinite alternate; }
+.group.called .state { color: var(--schedule); }
 .tiles { list-style: none; margin: 0; padding: 2px 0 6px; display: flex; flex-direction: column; gap: 8px; }
 .load { flex: none; padding: var(--gap); border-top: 1px solid var(--line); }
 .load svg { display: block; width: 100%; height: 64px; border: 1px solid var(--line); background: var(--bg); }
@@ -139,6 +146,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line-strong); background: var(--bg); cursor: pointer; }
 .tile:hover { border-color: var(--text); }
 .tile.on { border-color: var(--text-strong); background: var(--surface-2); }
+.tile-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.tile .schedule-icon { flex: none; width: 14px; height: 14px; margin-top: 3px; background: var(--schedule); }
 .tile .title { color: var(--text-strong); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .tile .state.user { color: var(--text-strong); }
@@ -165,7 +174,10 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile.attention { border-color: var(--warn-line); animation: attention 1s ease-in-out infinite alternate; }
 .tile.attention .state { color: var(--warn-text); }
 @keyframes attention { from { background-color: var(--bg); } to { background-color: var(--warn-bg); } }
-@media (prefers-reduced-motion: reduce) { .tile.working, .tile.attention, .group.attention > summary { animation: none; } .tile.attention, .group.attention > summary { background-color: var(--warn-bg); } }
+.tile.called { border-color: var(--schedule); animation: called 1s ease-in-out infinite alternate; }
+.tile.called .state { color: var(--schedule); }
+@keyframes called { from { background-color: var(--bg); } to { background-color: var(--schedule-bg); } }
+@media (prefers-reduced-motion: reduce) { .tile.working, .tile.attention, .tile.called, .group.attention > summary, .group.called > summary { animation: none; } .tile.attention, .group.attention > summary { background-color: var(--warn-bg); } .tile.called, .group.called > summary { background-color: var(--schedule-bg); } }
 
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
 .filters button.on { background: var(--surface-2); border-color: var(--text-strong); color: var(--text-strong); }
@@ -229,6 +241,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .status { color: var(--text-strong); }
 .status.conductor { color: var(--text); }
 .status.attention { color: var(--warn-text); }
+.status.called { color: var(--schedule); }
 .feed { flex: 1; min-height: 0; overflow-y: auto; padding: var(--gap); background: var(--read-bg); }
 .feed-inner { display: flex; flex-direction: column; gap: 16px; }
 .feed-inner > * { animation: enter .18s ease-out; }
@@ -408,6 +421,15 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .settings table { border-collapse: collapse; font-size: 13px; }
 .settings td { padding: 3px 16px 3px 0; }
 .hint { font-size: 12px; color: var(--text-dim); }
+.schedule { width: min(520px, 100%); }
+.schedule .hint { margin: 0; }
+.schedule-days, .schedule-times { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.schedule-times { gap: 8px; }
+.schedule-time { display: flex; }
+.schedule-time button { border-left: none; }
+.schedule .field textarea { min-height: 100px; }
+.conv-head .schedule-meta { display: flex; align-items: center; gap: 5px; color: var(--schedule); }
+.conv-head .schedule-meta .icon { width: 12px; height: 12px; }
 .tabs a.tab { cursor: pointer; }
 
 #flash { position: fixed; right: var(--gap); bottom: var(--gap); max-width: min(480px, calc(100vw - 2 * var(--gap))); padding: 8px 12px; background: var(--invert-bg); color: var(--invert-text); white-space: pre-wrap; z-index: 10; cursor: pointer; }

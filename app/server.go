@@ -57,6 +57,9 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// RunDone marks a scheduled run that finished and waits for the user to see it.
+	RunDone bool      `json:"run_done"`
+	NextRun time.Time `json:"next_run,omitzero"`
 }
 
 type apiError struct {
@@ -111,6 +114,8 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
 	api("POST /api/conversations/{id}/group", s.handleSetGroup)
+	api("PUT /api/conversations/{id}/schedule", s.handleSchedule)
+	api("DELETE /api/conversations/{id}/schedule", s.handleUnschedule)
 	api("GET /api/groups", s.handleGroups)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
@@ -217,7 +222,10 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Project: c.Project(), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), RunDone: c.RunDone(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	if c.Schedule != nil {
+		v.NextRun = c.Schedule.next(time.Now())
+	}
 	if events {
 		s.mu.Lock()
 		if t := s.tails[c.ID]; t != nil && t.path == c.Transcript {
@@ -374,7 +382,7 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	if resume && controls[c.Harness].blind {
 		c.Status = statusIdle
 	}
-	c.Attention = ""
+	c.Attention, c.Sleeping = "", false
 	c.Closed, c.ClosedAt = false, time.Time{}
 	c.Launched = time.Now()
 	// Saved before the agent starts, because its first hook can arrive within milliseconds.
@@ -588,6 +596,7 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	}
 	s.store.update(c.ID, func(c *Conversation) bool {
 		c.Closed, c.ClosedAt, c.Status, c.Attention = true, time.Now(), statusExited, ""
+		c.Sleeping, c.Schedule = false, nil
 		return true
 	})
 	s.publish(c.ID)
@@ -877,6 +886,7 @@ func (s *Server) tick() {
 			s.maybeCompact(c, now)
 		}
 	}
+	s.lifecycle(now)
 	s.flushNotices(now)
 }
 

@@ -49,6 +49,11 @@ type Conversation struct {
 	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
 	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
 	Group string `yaml:"group,omitempty" json:"group,omitempty"`
+	// Sleeping marks an agent kk stopped after a long time without activity. It waits for nobody.
+	Sleeping bool      `yaml:"sleeping,omitempty" json:"sleeping,omitempty"`
+	Schedule *Schedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	// LastRun is when the schedule last gave the agent its prompt.
+	LastRun time.Time `yaml:"last_run,omitempty" json:"last_run,omitzero"`
 }
 
 const (
@@ -68,7 +73,7 @@ const (
 
 // Waiting reports whether the agent has stopped and someone has to act: its turn ended, it needs input, or it exited.
 func (c *Conversation) Waiting() bool {
-	return !c.Closed && (c.Attention != "" || c.Status == statusIdle || c.Status == statusExited)
+	return !c.Closed && !c.Sleeping && (c.Attention != "" || c.Status == statusIdle || c.Status == statusExited)
 }
 
 // WaitingFor says who has to act on a waiting agent. Every agent that stops waits for the conductor, unless the conductor
@@ -85,6 +90,11 @@ func (c *Conversation) WaitingFor(conductor bool) string {
 
 func (c *Conversation) Unread() bool {
 	return !c.Closed && !c.TurnEnded.IsZero() && c.TurnEnded.After(c.Seen)
+}
+
+// RunDone reports whether a scheduled run has finished and the user has not seen it yet, also after the agent fell asleep.
+func (c *Conversation) RunDone() bool {
+	return !c.LastRun.IsZero() && c.TurnEnded.After(c.LastRun) && c.Unread()
 }
 
 // Project is the directory the conversation belongs to: the one the user chose, also when the agent works in a worktree of it.
@@ -233,6 +243,12 @@ func logChange(old, c *Conversation) {
 	}
 	if old.Group != c.Group {
 		log.Printf("conversation %s: group changed", c.ID)
+	}
+	if old.Sleeping != c.Sleeping {
+		log.Printf("conversation %s: %s", c.ID, map[bool]string{true: "asleep", false: "awake"}[c.Sleeping])
+	}
+	if (old.Schedule == nil) != (c.Schedule == nil) {
+		log.Printf("conversation %s: schedule %s", c.ID, map[bool]string{true: "set", false: "removed"}[c.Schedule != nil])
 	}
 	if old.Session != c.Session && c.Session != "" {
 		log.Printf("conversation %s: session %s", c.ID, c.Session)

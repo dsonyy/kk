@@ -103,7 +103,7 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	}
 	var reason string
 	switch {
-	case c.Closed || !conductorsTurn(c):
+	case c.Closed || c.Sleeping || !conductorsTurn(c):
 	case attention && (!w.attention || raises > w.raises):
 		reason = "needs action"
 	case c.Status == statusExited && prev.Status != statusExited && prev.Status != "":

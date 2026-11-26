@@ -35,6 +35,13 @@ export type Conversation = {
   escalation?: string;
   closed?: boolean;
   closed_at?: string;
+  // Stopped by kk after a long time without activity; waits for nobody.
+  sleeping?: boolean;
+  schedule?: Schedule;
+  last_run?: string;
+  next_run?: string;
+  // A scheduled run finished and the user has not seen it yet.
+  run_done: boolean;
   context_tokens: number;
   unread: boolean;
   actions: string[];
@@ -42,6 +49,9 @@ export type Conversation = {
   queued: Event[];
   events: Event[];
 };
+
+// Days are weekdays, 0 for Sunday; times are local, "09:30".
+export type Schedule = { days: number[]; times: string[]; prompt: string };
 
 export type PastSession = { id: string; title: string; dir: string; modified: string; messages: number; started: string; ended: string };
 
