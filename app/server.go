@@ -46,8 +46,13 @@ type Server struct {
 	raises  map[string]int
 	watches map[string]*watch
 	notices map[string]notice
-	// handovers holds the conversations the user started and handed to the konduktor, until the konduktor hears of them.
-	handovers map[string]bool
+	// handovers holds the conversations handed to a konduktor, until it hears of them, with who handed them over: the
+	// user, or the konduktor that gave it away.
+	handovers map[string]string
+	// starting runs one start of a konduktor at a time.
+	starting sync.Mutex
+	// roster holds, per konduktor, the lines about other konduktors that started or closed, until it hears of them.
+	roster map[string][]string
 	// answers holds the answer of the current run of each integration, by conversation.
 	answers map[string]runAnswer
 }
@@ -63,6 +68,8 @@ type convView struct {
 	Queued []Event `json:"queued"`
 	// WaitingFor is who has to act on an agent that stopped: "user" or "conductor". Empty while the agent works.
 	WaitingFor string `json:"waiting_for"`
+	// Konduktor is the konduktor the session belongs to. Empty for konduktors, kk's own inbox sessions and with konduktors off.
+	Konduktor string `json:"konduktor,omitempty"`
 	// InWorktree says the agent works in a git worktree, apart from the main checkout.
 	InWorktree bool `json:"in_worktree"`
 	// RunDone marks a scheduled run that finished and waits for the user to see it.
@@ -128,6 +135,9 @@ func (s *Server) routes() *http.ServeMux {
 	api("DELETE /api/conversations/{id}/schedule", s.handleUnschedule)
 	api("POST /api/conversations/{id}/start", s.handleStart)
 	api("POST /api/conversations/{id}/prompt", s.handlePrompt)
+	api("POST /api/conversations/{id}/handover", s.handleHandover)
+	api("GET /api/konduktors", s.handleKonduktors)
+	api("POST /api/konduktors", s.handleStartKonduktor)
 	api("GET /api/groups", s.handleGroups)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
@@ -238,7 +248,7 @@ func (s *Server) conv(r *http.Request) (Conversation, error) {
 }
 
 func (s *Server) view(c Conversation, events bool) convView {
-	v := convView{Conversation: c, Project: c.Project(), InWorktree: inWorktree(c), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), RunDone: c.RunDone(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
+	v := convView{Conversation: c, Konduktor: s.konduktorOf(c, s.konduktors()), Project: c.Project(), InWorktree: inWorktree(c), Unread: c.Unread(), WaitingFor: c.WaitingFor(s.cfg().coordinator()), RunDone: c.RunDone(), Actions: actions(c), Events: []Event{}, Queued: []Event{}}
 	if c.Schedule != nil {
 		v.NextRun = c.Schedule.next(time.Now())
 	}
@@ -361,11 +371,12 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 			}
 			c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: p.Dir, Title: p.Title, Session: p.ID, Transcript: p.path, Created: now, Seen: now, ByAgent: byAgent}
 			c.Group = s.groupName(c.Project(), in.Group)
+			s.own(&c, r, in.Konduktor)
 			if err := s.launch(&c, true, in.Prompt); err != nil {
 				return nil, err
 			}
 			if byUser(r) && in.Konduktor {
-				s.handOver(c.ID)
+				s.handOver(c.ID, waitingUser)
 			}
 			s.queueGroup(c.ID)
 			return s.view(c, false), nil
@@ -378,6 +389,7 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: byAgent}
 	if in.After != "" {
 		c.Group = s.groupName(c.Project(), in.Group)
+		s.own(&c, r, in.Konduktor)
 		c, err := s.queue(c, in.After, in.Worktree)
 		if err != nil {
 			return nil, err
@@ -391,14 +403,45 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		}
 	}
 	c.Group = s.groupName(c.Project(), in.Group)
+	s.own(&c, r, in.Konduktor)
 	if err := s.launch(&c, false, ""); err != nil {
 		return nil, err
 	}
 	if byUser(r) && in.Konduktor {
-		s.handOver(c.ID)
+		s.handOver(c.ID, waitingUser)
 	}
 	s.queueGroup(c.ID)
 	return s.view(c, false), nil
+}
+
+// own records the konduktor a new conversation belongs to: the one behind the agent that starts it, or for one the user
+// hands over, the konduktor of its directory, which starts when it does not run.
+func (s *Server) own(c *Conversation, r *http.Request, handover bool) {
+	if !byUser(r) {
+		c.Owner = s.callerKonduktor(r)
+		return
+	}
+	if !handover || !s.cfg().coordinator() {
+		return
+	}
+	k, err := s.konduktorFor(c.Project(), "")
+	if err != nil {
+		log.Printf("konduktor of %s: %v", c.ID, err)
+		return
+	}
+	c.Owner = k.ID
+}
+
+// callerKonduktor names the konduktor behind an agent's request: the agent itself when it is one, else the one it belongs to.
+func (s *Server) callerKonduktor(r *http.Request) string {
+	caller, ok := s.store.get(r.Header.Get(agentHeader))
+	if !ok {
+		return ""
+	}
+	if caller.Role == coordinatorID {
+		return caller.ID
+	}
+	return s.konduktorOf(caller, s.konduktors())
 }
 
 // launch starts the agent of c. A prompt given with a resume is the first message in the resumed session.
@@ -480,11 +523,25 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	if err := midRewind(c.ID); err != nil {
 		return nil, err
 	}
+	// A message from an agent to a konduktor says where it comes from, and leaves the user's unread mark alone.
+	peer := c.Role != "" && !byUser(r)
+	if peer {
+		if c.Attention != "" {
+			return nil, fail(409, "konduktor %s is in a dialog, try again in a moment", c.ID)
+		}
+		from := "agent " + r.Header.Get(agentHeader)
+		if k, ok := s.store.get(r.Header.Get(agentHeader)); ok && k.Role != "" {
+			from = fmt.Sprintf("konduktor %q (%s)", konduktorName(k), k.ID)
+		}
+		in.Text = fmt.Sprintf("[from %s via kk send - not from the user]\n%s", from, in.Text)
+	}
 	if err := pasteText(c.Window, in.Text); err != nil {
 		return nil, err
 	}
-	s.driven(c.ID, r)
-	s.markSeen(c.ID)
+	if !peer {
+		s.driven(c.ID, r)
+		s.markSeen(c.ID)
+	}
 	return map[string]bool{"ok": true}, nil
 }
 
@@ -545,14 +602,22 @@ func byUser(r *http.Request) bool {
 	return r.Header.Get(agentHeader) == ""
 }
 
-// driven records who acted on the conversation last, so its next stop waits for them.
+// driven records who acted on the conversation last, so its next stop waits for them. A session without a konduktor
+// becomes the one of the agent that takes it over.
 func (s *Server) driven(id string, r *http.Request) {
 	agent := !byUser(r)
+	owner := ""
+	if agent {
+		owner = s.callerKonduktor(r)
+	}
 	if _, changed := s.store.update(id, func(c *Conversation) bool {
-		if c.ByAgent == agent {
+		if c.ByAgent == agent && (c.Owner != "" || owner == "") {
 			return false
 		}
 		c.ByAgent = agent
+		if c.Owner == "" {
+			c.Owner = owner
+		}
 		return true
 	}); changed {
 		s.publish(id)
@@ -589,6 +654,70 @@ func (s *Server) handleEscalate(r *http.Request) (any, error) {
 	return map[string]bool{"ok": true}, nil
 }
 
+// handleHandover hands a session to a konduktor, which hears of it and drives it from then on.
+func (s *Server) handleHandover(r *http.Request) (any, error) {
+	c, err := s.conv(r)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Konduktor string `json:"konduktor"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if c.Role != "" || c.Integration != "" {
+		return nil, fail(400, "only a session can be handed over")
+	}
+	k, ok := s.store.get(in.Konduktor)
+	if !ok || k.Role != coordinatorID || k.Closed {
+		return nil, fail(400, "%q is not a running konduktor, kk ls lists them", in.Konduktor)
+	}
+	c, _ = s.store.update(c.ID, func(c *Conversation) bool {
+		c.Owner, c.ByAgent, c.Escalation = k.ID, true, ""
+		return true
+	})
+	from := s.callerKonduktor(r)
+	if byUser(r) {
+		from = waitingUser
+	}
+	s.handOver(c.ID, from)
+	s.publish(c.ID)
+	return s.view(c, false), nil
+}
+
+// handleKonduktors lists the running konduktors, the main one first.
+func (s *Server) handleKonduktors(r *http.Request) (any, error) {
+	out := []convView{}
+	for _, k := range s.konduktors() {
+		out = append(out, s.view(k, false))
+	}
+	return out, nil
+}
+
+// handleStartKonduktor finds the konduktor of a directory and gives it the prompt, starting or reopening it when it does not run.
+func (s *Server) handleStartKonduktor(r *http.Request) (any, error) {
+	var in struct {
+		Dir    string `json:"dir"`
+		Prompt string `json:"prompt"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	dir := ""
+	if in.Dir != "" {
+		var err error
+		if dir, err = expandDir(in.Dir); err != nil {
+			return nil, err
+		}
+	}
+	k, err := s.konduktorFor(dir, in.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return s.view(k, false), nil
+}
+
 func (s *Server) handleSeen(r *http.Request) (any, error) {
 	c, err := s.conv(r)
 	if err != nil {
@@ -620,6 +749,13 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 		s.publish(c.ID)
 		return s.view(c, false), nil
 	}
+	if c.Role != "" {
+		k, err := s.konduktorFor(c.Scope, "")
+		if err != nil {
+			return nil, err
+		}
+		return s.view(k, false), nil
+	}
 	s.driven(c.ID, r)
 	c, _ = s.store.get(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
@@ -644,8 +780,8 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.Role != "" {
-		return nil, fail(400, "the konduktor cannot be closed")
+	if c.ID == coordinatorID {
+		return nil, fail(400, "the main konduktor cannot be closed")
 	}
 	if c.Integration != "" {
 		return nil, fail(400, "switch %s off in Settings to stop its checks", c.Integration)
@@ -663,6 +799,13 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		return true
 	})
 	s.closeNotice(c.ID)
+	if c.Role != "" {
+		s.writePrompts()
+		s.tellKonduktors(c, fmt.Sprintf("konduktor %s %q for %s was closed; its sessions go to the konduktor of their directory or to the main konduktor.", c.ID, konduktorName(c), c.Scope))
+		s.mu.Lock()
+		delete(s.roster, c.ID)
+		s.mu.Unlock()
+	}
 	s.publish(c.ID)
 	return map[string]bool{"ok": true}, nil
 }
@@ -907,8 +1050,9 @@ func (s *Server) tick() {
 				c.Attention, changed = fmt.Sprintf("The agent has not started its session after %s and may be waiting for input", startTimeout), true
 			}
 			if t := events; t != nil {
-				// An integration keeps its name: a title made up from its transcript can repeat the mail it read.
-				if t.Title != "" && t.Title != c.Title && c.Integration == "" {
+				// An integration keeps its name: a title made up from its transcript can repeat the mail it read. A konduktor
+				// keeps the name of its directory.
+				if t.Title != "" && t.Title != c.Title && c.Integration == "" && c.Role == "" {
 					c.Title, changed = t.Title, true
 					tmux("", "rename-window", "-t", c.Window, firstLine(t.Title, 40))
 				}

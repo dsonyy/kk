@@ -146,17 +146,29 @@ function App() {
     go({ tab: isView(t) ? t : lastView.current, dir: d });
   };
 
-  const loadList = useCallback(() => act(async () => setList(await api<Conversation[]>("GET", "/api/conversations?all=1"))), []);
+  // The running konduktors; undefined until they are loaded. The panel shows the pinned one, else the one of the directory.
+  const [konduktors, setKonduktors] = useState<Conversation[]>();
+  // The konduktor the visible panel shows, which the user reads.
+  const reading = useRef<string | undefined>(undefined);
+  const loadList = useCallback(
+    () =>
+      act(async () => {
+        const [list, ks] = await Promise.all([api<Conversation[]>("GET", "/api/conversations?all=1"), api<Conversation[]>("GET", "/api/konduktors")]);
+        setList(list);
+        setKonduktors(ks);
+      }),
+    [],
+  );
   const loadDetail = useCallback(async (id: string) => {
     try {
       const c = await api<Conversation>("GET", `/api/conversations/${id}`);
       setDetails((d) => ({ ...d, [id]: c }));
       loaded.current.add(id);
-      if (c.unread && (isOpen(id) || id === COORDINATOR) && document.hasFocus()) {
+      if (c.unread && (isOpen(id) || id === reading.current) && document.hasFocus()) {
         await api("POST", `/api/conversations/${id}/seen`, {});
       }
     } catch (e) {
-      if (id === COORDINATOR) return setDetails(({ [COORDINATOR]: _, ...d }) => d);
+      if (!isOpen(id)) return setDetails(({ [id]: _, ...d }) => d);
       // A failed load, such as during a server restart, leaves a pinned panel that has something to show.
       if (!(placeRef.current.panels.find((p) => p.id === id)?.pinned && loaded.current.has(id))) hide(id);
       flash((e as Error).message);
@@ -181,7 +193,6 @@ function App() {
 
   useEffect(() => {
     loadList();
-    loadDetail(COORDINATOR);
     const pending = new Set<string>();
     let timer = 0;
     const source = new EventSource("/api/events");
@@ -190,13 +201,13 @@ function App() {
       clearTimeout(timer);
       timer = window.setTimeout(() => {
         loadList();
-        for (const id of pending) if (isOpen(id) || id === COORDINATOR) loadDetail(id);
+        for (const id of pending) if (isOpen(id) || id === reading.current) loadDetail(id);
         pending.clear();
       }, 100);
     };
     source.onopen = () => {
       loadList();
-      loadDetail(COORDINATOR);
+      if (reading.current) loadDetail(reading.current);
       for (const p of placeRef.current.panels) loadDetail(p.id);
     };
     const onHash = () => {
@@ -229,10 +240,12 @@ function App() {
   }, [open.join(",")]);
 
   // The directories: a tab for each one with an open session, by name, and the chosen one also when all its sessions are closed.
-  const projects = [...new Set(sessions.map((c) => c.project))];
+  const scopes = (konduktors ?? []).flatMap((k) => (k.scope ? [k.scope] : []));
+  const projects = [...new Set([...sessions.map((c) => c.project), ...scopes])];
   const label = (p: string) => shortName(p, projects);
   const inDir = (p: string) => sessions.filter((c) => c.project === p);
-  const live = projects.filter((p) => inDir(p).some((c) => !c.closed));
+  const live = projects.filter((p) => scopes.includes(p) || inDir(p).some((c) => !c.closed));
+  const konduktorOf = (d: string) => (konduktors ?? []).find((k) => (d ? k.scope === d : k.id === COORDINATOR));
   const tabDirs = [...live, ...(dir && !live.includes(dir) ? [dir] : [])].sort((a, b) => byName(label(a), label(b)));
   const finished = projects.filter((p) => !live.includes(p)).sort((a, b) => byActivity(inDir(a), inDir(b)));
   // Alt with a digit picks All and the directories after it.
@@ -276,6 +289,22 @@ function App() {
   if (dir) keys.sort((a, b) => Number(a.endsWith("\n")) - Number(b.endsWith("\n")));
 
   const [konduktor, setKonduktor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
+  const [konduktorPin, setKonduktorPin] = useState(() => localStorage.getItem("kk.konduktorPin") || "");
+  const pinKonduktor = (id: string) => {
+    localStorage.setItem("kk.konduktorPin", id);
+    setKonduktorPin(id);
+  };
+  const pinnedKonduktor = konduktors?.find((k) => k.id === konduktorPin);
+  const shownKonduktor = pinnedKonduktor ?? konduktorOf(dir);
+  reading.current = konduktor ? shownKonduktor?.id : undefined;
+  useEffect(() => {
+    if (reading.current) loadDetail(reading.current);
+  }, [reading.current]);
+  const konduktorName = (k: Conversation) => (k.id === COORDINATOR ? "main" : label(k.scope ?? ""));
+  konduktorNames = new Map(konduktors && konduktors.length > 1 ? konduktors.map((k) => [k.id, k.id === COORDINATOR ? "main konduktor" : `konduktor ${konduktorName(k)}`]) : []);
+  const konduktorHead = (title: string) => (
+    <KonduktorPick list={konduktors ?? []} shown={shownKonduktor} name={konduktorName} title={title} pinned={!!pinnedKonduktor} onPick={pinKonduktor} />
+  );
 
   // An object, so that showing the same panel twice scrolls to it again.
   const [focus, setFocus] = useState<{ id: string }>();
@@ -301,9 +330,9 @@ function App() {
           <b>k</b>ondu<b>k</b>tor
         </span>
         <div class="dirs" ref={dirsRef}>
-          <DirTab name="All" title="Every directory" list={sessions} on={isView(tab) && !dir} onPick={() => pick("")} />
+          <DirTab name="All" title="Every directory" list={sessions} konduktor={konduktorOf("")} on={isView(tab) && !dir} onPick={() => pick("")} />
           {tabDirs.map((d) => (
-            <DirTab key={d} name={label(d)} title={d} mono list={inDir(d)} on={isView(tab) && d === dir} onPick={() => pick(d)} />
+            <DirTab key={d} name={label(d)} title={d} mono list={inDir(d)} konduktor={konduktorOf(d)} on={isView(tab) && d === dir} onPick={() => pick(d)} />
           ))}
         </div>
         {projects.length > 0 && <MoreDirs live={[...live].sort((a, b) => byName(label(a), label(b)))} finished={finished} label={label} count={(d) => inDir(d)} onPick={pick} />}
@@ -422,7 +451,28 @@ function App() {
             </div>
           </div>
         </div>
-        <CoordinatorPanel c={details[COORDINATOR]} reload={() => loadDetail(COORDINATOR)} hidden={!konduktor} />
+        <CoordinatorPanel hidden={!konduktor}>
+          {konduktors === undefined ? null : !konduktors.length ? (
+            <div class="conversation placeholder">konduktor is not running.</div>
+          ) : shownKonduktor ? (
+            details[shownKonduktor.id] ? (
+              <ConversationView c={details[shownKonduktor.id]} reload={() => loadDetail(shownKonduktor.id)} side head={konduktorHead(konduktorName(shownKonduktor))} />
+            ) : (
+              <div class="conversation placeholder">Loading…</div>
+            )
+          ) : (
+            <KonduktorStart
+              key={dir}
+              dir={dir}
+              name={label(dir)}
+              head={konduktorHead(label(dir))}
+              onStarted={(k) => {
+                loadList();
+                loadDetail(k.id);
+              }}
+            />
+          )}
+        </CoordinatorPanel>
       </div>
       {creating !== undefined && (
         <NewSession
@@ -444,9 +494,12 @@ function App() {
 
 // A directory tab speaks for its sessions like a collapsed group: the one that needs the user first, then one at work,
 // then one konduktor holds.
-function DirTab({ name, title, mono, list, on, onPick }: { name: string; title: string; mono?: boolean; list: Conversation[]; on: boolean; onPick: () => void }) {
+type DirTabProps = { name: string; title: string; mono?: boolean; list: Conversation[]; konduktor?: Conversation; on: boolean; onPick: () => void };
+
+// The konduktor of the directory marks the tab when it wrote something the user has not read.
+function DirTab({ name, title, mono, list, konduktor, on, onPick }: DirTabProps) {
   const loud = loudest(list);
-  const unread = list.some((c) => c.unread);
+  const unread = list.some((c) => c.unread) || !!konduktor?.unread;
   const cls = ["tab", "dir", on && "on", unread && "unread"];
   return (
     <a class={cls.filter(Boolean).join(" ")} title={loud ? `${title}\n${stateLabel(loud)}` : title} onClick={onPick}>
@@ -518,11 +571,17 @@ function MoreDirs({ live, finished, label, count, onPick }: MoreProps) {
   );
 }
 
+// The names of the konduktors, set while more than one runs, so a session says whose turn it is.
+let konduktorNames = new Map<string, string>();
+
 function stateLabel(c: Conversation) {
   if (c.closed) return "Closed";
   if (c.sleeping) return "Sleeping";
   if (c.status === "queued") return "Queued";
-  if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · konduktor's turn" : "konduktor's turn";
+  if (c.waiting_for === "conductor") {
+    const turn = `${(c.konduktor && konduktorNames.get(c.konduktor)) || "konduktor"}'s turn`;
+    return c.status === "exited" ? `Exited · ${turn}` : turn;
+  }
   if (c.attention) return "Action required";
   if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
   if (c.integration && c.status === "idle") return "Idle";
@@ -811,9 +870,11 @@ type ConversationViewProps = {
   // The session this one follows in a chain.
   before?: Conversation;
   onShow?: (id: string) => void;
+  // What the konduktor panel shows in place of the title.
+  head?: preact.ComponentChildren;
 };
 
-function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onShow }: ConversationViewProps) {
+function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onShow, head }: ConversationViewProps) {
   const [chosen, setView] = useState<"chat" | "terminal" | "media">("chat");
   // Closing kills the window, so a closed session has no terminal to show.
   const view = chosen === "terminal" && c.closed ? "chat" : chosen;
@@ -921,7 +982,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
               <Icon name="pin" />
             </button>
           )}
-          <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>
+          {head ?? <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>}
           <div class="actions">
             {!queued && (
               <div class="modes">
@@ -942,12 +1003,12 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             {!side && !c.closed && !queued && !c.integration && (
               <Button label="Schedule" icon="clock" class={c.schedule ? "small on" : "small"} title="Resume the session with a prompt on set days and times" onClick={() => setScheduling(true)} />
             )}
-            {!side && !c.closed && !c.integration && (
+            {(!side || c.id !== COORDINATOR) && !c.closed && !c.integration && (
               <Button
                 label={confirmClose ? "Confirm close" : "Close"}
                 icon="close"
                 class="small"
-                title={queued ? "Drop the queued session, it moves to the closed ones" : "Stop the agent and move the session to the closed ones"}
+                title={side ? "Stop this konduktor, your next message to it starts it again" : queued ? "Drop the queued session, it moves to the closed ones" : "Stop the agent and move the session to the closed ones"}
                 onClick={close}
               />
             )}
@@ -1228,7 +1289,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   );
 }
 
-function CoordinatorPanel({ c, reload, hidden }: { c?: Conversation; reload: () => void; hidden: boolean }) {
+function CoordinatorPanel({ hidden, children }: { hidden: boolean; children: preact.ComponentChildren }) {
   const [width, setWidth] = useState(() => Number(localStorage.getItem("kk.panel")) || 440);
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
@@ -1246,8 +1307,131 @@ function CoordinatorPanel({ c, reload, hidden }: { c?: Conversation; reload: () 
   return (
     <aside class="side-panel" hidden={hidden} style={{ "--panel-width": `${width}px` }}>
       <div class={dragging ? "panel-resize dragging" : "panel-resize"} onPointerDown={() => setDragging(true)} />
-      {c ? <ConversationView c={c} reload={reload} side /> : <div class="conversation placeholder">konduktor is not running.</div>}
+      {children}
     </aside>
+  );
+}
+
+type PickProps = { list: Conversation[]; shown?: Conversation; name: (k: Conversation) => string; title: string; pinned: boolean; onPick: (id: string) => void };
+
+// The head of the konduktor panel: the konduktor shown, a menu of every one, and the pin that keeps one while the directory changes.
+function KonduktorPick({ list, shown, name, title, pinned, onPick }: PickProps) {
+  const [at, setAt] = useState<{ top: number; left: number }>();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!at) return;
+    const close = (e: globalThis.Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setAt(undefined);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [at]);
+  return (
+    <div class="konduktor-pick" ref={ref}>
+      <button
+        type="button"
+        class={pinned ? "pin on" : "pin"}
+        aria-label={pinned ? "Unpin" : "Pin"}
+        title={pinned ? "Unpin: show the konduktor of the directory you are in" : "Pin: keep this konduktor while you move between directories"}
+        disabled={!shown}
+        onClick={() => shown && onPick(pinned ? "" : shown.id)}
+      >
+        <Icon name="pin" />
+      </button>
+      <h1>
+        <button
+          type="button"
+          class="konduktor-name"
+          aria-expanded={!!at}
+          title={title}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setAt(at ? undefined : { top: r.bottom + 2, left: Math.max(0, Math.min(r.left, window.innerWidth - 320)) });
+          }}
+        >
+          konduktor
+          <span class="mono">{title}</span>
+          <Icon name="chevron" />
+        </button>
+      </h1>
+      {at && (
+        <div class="dir-menu" style={{ top: `${at.top}px`, left: `${at.left}px` }}>
+          {list.map((k) => (
+            <button
+              type="button"
+              key={k.id}
+              class={["dir-item", k.unread && "unread", k.id === shown?.id && "on"].filter(Boolean).join(" ")}
+              title={k.scope || "Every directory without its own konduktor"}
+              onClick={() => {
+                setAt(undefined);
+                onPick(k.id);
+              }}
+            >
+              <span>
+                <Dot c={k} />
+                <span class="mono">{name(k)}</span>
+              </span>
+              <span class="count">{stateLabel(k)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The panel of a directory whose konduktor has not started: the first message starts it.
+function KonduktorStart({ dir, name, head, onStarted }: { dir: string; name: string; head: preact.ComponentChildren; onStarted: (k: Conversation) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const skills = useSkills("claude", dir);
+  const attachments = useAttachments();
+  const send = () => {
+    if (busy || attachments.uploading || (!text.trim() && !attachments.items.length)) return;
+    setBusy(true);
+    act(async () => {
+      try {
+        const k = await api<Conversation>("POST", "/api/konduktors", { dir, prompt: withPaths(text, attachments.items as Attachment[]) });
+        setText("");
+        attachments.setItems([]);
+        onStarted(k);
+      } finally {
+        setBusy(false);
+      }
+    });
+  };
+  return (
+    <div class="conversation" data-scope="coordinator">
+      <Scope>
+        <header class="conv-head">{head}</header>
+        <div class="feed">
+          <p class="konduktor-hint">The konduktor of {name} starts with your first message.</p>
+        </div>
+        <div class="composer">
+          <PromptInput
+            rows={1}
+            up
+            value={text}
+            onValue={setText}
+            skills={skills}
+            attachments={attachments}
+            placeholder={`Message the konduktor of ${name}`}
+            onEnter={(e) => {
+              if (!e.shiftKey && !e.isComposing) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />
+          <Button label="Send" icon="send" class="primary" disabled={busy || attachments.uploading} onClick={send} />
+        </div>
+      </Scope>
+    </div>
   );
 }
 
@@ -1389,7 +1573,7 @@ function NewSession({ initial, dir: here, onClose, onCreated }: { initial: strin
           </div>
           <div class="field">
             <Check label="Hand over to konduktor" checked={managed} onChange={(e) => setManaged(e.currentTarget.checked)} />
-            <span class="hint">konduktor drives the session when it stops, until you write into it yourself.</span>
+            <span class="hint">The konduktor of {dir.replace(/\/+$/, "").split("/").pop() || "this directory"} drives the session when it stops, until you write into it yourself. It starts if it is not running.</span>
           </div>
           <Field label={resume ? "Prompt, optional" : "Prompt"}>
             <PromptInput

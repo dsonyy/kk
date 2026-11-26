@@ -22,9 +22,12 @@ func (e *env) killAgent(id string) {
 	syscall.Kill(pid, syscall.SIGTERM)
 }
 
-// notifications returns the kk notifications the coordinator received, and those it holds in its queue.
-func (e *env) notifications() []string {
-	c := e.conv(coordinatorID)
+// notifications returns the kk notifications the main konduktor received, and those it holds in its queue.
+func (e *env) notifications() []string { return e.notificationsOf(coordinatorID) }
+
+// notificationsOf returns the kk notifications a konduktor received, and those it holds in its queue.
+func (e *env) notificationsOf(konduktor string) []string {
+	c := e.conv(konduktor)
 	var out []string
 	for _, ev := range append(c.Events, c.Queued...) {
 		if ev.Kind == kindUser && strings.HasPrefix(ev.Text, notifyMarker) {
@@ -34,15 +37,18 @@ func (e *env) notifications() []string {
 	return out
 }
 
-// waitNotified waits until the coordinator received a line about id that has want in it.
-func (e *env) waitNotified(id, want string) {
+// waitNotified waits until the main konduktor received a line about id that has want in it.
+func (e *env) waitNotified(id, want string) { e.t.Helper(); e.waitNotifiedTo(coordinatorID, id, want) }
+
+// waitNotifiedTo waits until a konduktor received a line about id that has want in it.
+func (e *env) waitNotifiedTo(konduktor, id, want string) {
 	e.t.Helper()
 	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		if countLines(e.notifications(), id, want) > 0 {
+		if countLines(e.notificationsOf(konduktor), id, want) > 0 {
 			return
 		}
 	}
-	e.t.Fatalf("no notification %q for %s, got:\n%s", want, id, strings.Join(e.notifications(), "\n---\n"))
+	e.t.Fatalf("no notification %q for %s to %s, got:\n%s", want, id, konduktor, strings.Join(e.notificationsOf(konduktor), "\n---\n"))
 }
 
 func countLines(messages []string, id, want string) int {
@@ -204,8 +210,13 @@ func TestHandOverToKonduktor(t *testing.T) {
 	}
 	handed := create("hello\nfrom the user "+strings.Repeat("x", 400), true)
 	mine := create("hello mine", false)
-	e.waitNotified(handed, "the user started it in "+e.work+" and handed it over to you, first prompt \"hello from the user xxx")
-	e.waitNotified(handed, "finished its turn. Look: kk screen "+handed)
+	// The session goes to the konduktor of its directory, which starts for it.
+	k := e.conv(handed).Konduktor
+	if kc := e.conv(k); k == coordinatorID || kc.Role != coordinatorID || kc.Scope != e.work {
+		t.Fatalf("handed to %q: %+v", k, kc.Conversation)
+	}
+	e.waitNotifiedTo(k, handed, "the user started it in "+e.work+" and handed it over to you, first prompt \"hello from the user xxx")
+	e.waitNotifiedTo(k, handed, "finished its turn. Look: kk screen "+handed)
 	e.waitFor("konduktor's turn", handed, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
 	e.waitFor("user's turn", mine, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingUser })
 
@@ -214,7 +225,10 @@ func TestHandOverToKonduktor(t *testing.T) {
 		return hasEvent(c, kindAssistant, "echo: from the user") && c.Status == statusIdle && c.WaitingFor == waitingUser
 	})
 	time.Sleep(3 * time.Second)
-	got := e.notifications()
+	got := e.notificationsOf(k)
+	if n := countLines(e.notifications(), handed, ""); n != 0 {
+		t.Errorf("the main konduktor heard of the handed session %d times", n)
+	}
 	if n := countLines(got, handed, "handed it over"); n != 1 {
 		t.Errorf("%d handover lines, want one", n)
 	}

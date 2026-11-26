@@ -24,8 +24,8 @@ func (e *env) putSettings(body map[string]any) settingsView {
 	return v
 }
 
-// launches returns the argv of every start of the fake program, in order.
-func (e *env) launches(program string) [][]string {
+// starts returns the argv of every start of the fake program, in order.
+func (e *env) starts(program string) [][]string {
 	data, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
 	var out [][]string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
@@ -40,10 +40,15 @@ func (e *env) launches(program string) [][]string {
 func TestKonduktorPrompt(t *testing.T) {
 	e := newEnv(t, "KK_COORDINATOR=1")
 	e.waitFor("konduktor start", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
-	file := filepath.Join(e.home, "coordinator.md")
+	file := filepath.Join(e.home, "konduktors", coordinatorID+".md")
+	// The section about the konduktors follows the editable base and overrides it where they differ.
 	read := func() string {
 		data, _ := os.ReadFile(file)
-		return string(data)
+		base, section, ok := strings.Cut(string(data), "\n## Konduktors\n")
+		if !ok || !strings.Contains(section, "This section overrides the text above") {
+			t.Fatalf("prompt file without the section about the konduktors:\n%s", data)
+		}
+		return base
 	}
 	root := filepath.Dir(e.home)
 	filled := func(text string) string {
@@ -68,7 +73,7 @@ func TestKonduktorPrompt(t *testing.T) {
 	e.stop()
 	e.start()
 	e.waitFor("konduktor restart", coordinatorID, func(c convView) bool { return c.Status == statusIdle })
-	starts := e.launches("claude")
+	starts := e.starts("claude")
 	last := starts[len(starts)-1]
 	if p, _ := argOf(last, "--append-system-prompt-file"); p != file || strings.Contains(strings.Join(last, " "), "Worker rules.") || read() != want {
 		t.Fatalf("konduktor start: %v\n%s", last, read())
@@ -97,15 +102,15 @@ func TestWorkerPrompt(t *testing.T) {
 	for _, id := range []string{claude, codex, cursor} {
 		e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
 	}
-	if p, _ := argOf(e.launches("claude")[0], "--append-system-prompt"); p != worker {
-		t.Fatalf("claude: %v", e.launches("claude")[0])
+	if p, _ := argOf(e.starts("claude")[0], "--append-system-prompt"); p != worker {
+		t.Fatalf("claude: %v", e.starts("claude")[0])
 	}
 	quoted, _ := json.Marshal(worker)
-	if !slices.Contains(e.launches("codex")[0], "developer_instructions="+string(quoted)) {
-		t.Fatalf("codex: %v", e.launches("codex")[0])
+	if !slices.Contains(e.starts("codex")[0], "developer_instructions="+string(quoted)) {
+		t.Fatalf("codex: %v", e.starts("codex")[0])
 	}
 	// kk also runs cursor-agent to list its models.
-	starts := e.launches("cursor-agent")
+	starts := e.starts("cursor-agent")
 	if p, _ := argOf(starts[len(starts)-1], "--"); p != worker+"\n\nhi cursor" {
 		t.Fatalf("cursor: %q", p)
 	}
@@ -118,8 +123,8 @@ func TestWorkerPrompt(t *testing.T) {
 	e.waitFor("stop", claude, func(c convView) bool { return c.Status == statusExited })
 	e.mustKK("resume", claude)
 	e.waitFor("resume", claude, func(c convView) bool { return c.Status == statusIdle })
-	if p, _ := argOf(e.launches("claude")[1], "--append-system-prompt"); p != worker || !strings.Contains(strings.Join(e.launches("claude")[1], " "), "--resume") {
-		t.Fatalf("claude resume: %v", e.launches("claude")[1])
+	if p, _ := argOf(e.starts("claude")[1], "--append-system-prompt"); p != worker || !strings.Contains(strings.Join(e.starts("claude")[1], " "), "--resume") {
+		t.Fatalf("claude resume: %v", e.starts("claude")[1])
 	}
 
 	// The worker prompt rides on every launch's command line, which tmux limits.

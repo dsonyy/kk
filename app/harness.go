@@ -183,7 +183,11 @@ func (s *Server) command(c *Conversation, resume bool) ([]string, error) {
 			argv = append(argv, "--model", c.Model)
 		}
 		if c.Role == coordinatorID {
-			argv = append(argv, "--append-system-prompt-file", filepath.Join(s.store.dir, "coordinator.md"), "--name", "kk konduktor")
+			name := "kk konduktor"
+			if c.ID != coordinatorID {
+				name += " " + c.Title
+			}
+			argv = append(argv, "--append-system-prompt-file", s.konduktorPrompt(c.ID), "--name", name)
 		}
 		if w := s.worker(c); w != "" {
 			argv = append(argv, "--append-system-prompt", w)

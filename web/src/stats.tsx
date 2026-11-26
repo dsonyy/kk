@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { api, count, dollars, harnessLabel, usageTokens, type Usage } from "./api";
+import { api, count, dollars, harnessLabel, newTokens, usageTokens, type Usage } from "./api";
 import { Button } from "./mnemonic";
 
 // A row is a conversation with what happened in all of its transcripts. Usage is unknown, not zero, when metered is false.
@@ -212,7 +212,8 @@ export function Stats() {
     { label: "Sessions", total: String(rows.length), parts: byHarness(() => 1), format: String },
     { label: "Turns", total: count(sum(rows.map((r) => r.turns))), parts: byHarness((r) => r.turns), format: count },
     { label: "Tool calls", total: count(sum(rows.map((r) => sum(Object.values(r.tools ?? {}))))), parts: byHarness((r) => sum(Object.values(r.tools ?? {}))), format: count },
-    { label: "Tokens", total: count(sum(metered.map(usageTokens))), parts: byHarness(usageTokens, metered), format: count, only: unmetered },
+    { label: "Tokens", total: count(sum(metered.map(newTokens))), parts: byHarness(newTokens, metered), format: count, only: unmetered, title: "Input, cache writes and output, as on the session cards" },
+    { label: "Cache reads", total: count(sum(metered.map((r) => r.cache_read))), parts: byHarness((r) => r.cache_read, metered), format: count, only: unmetered, title: "The context read again on each request" },
     { label: "Cost", total: dollars(sum(metered.map((r) => r.cost))), parts: byHarness((r) => r.cost, metered), format: dollars, only: unmetered, title: ESTIMATE },
   ];
 
@@ -237,7 +238,7 @@ export function Stats() {
       const parts = models.get(m) ?? {};
       parts[r.harness] = (parts[r.harness] ?? 0) + value(u, metric);
       models.set(m, parts);
-      if (metric === "cost" && u.unpriced?.length) modelNote.set(m, `${count(usageTokens(u))} tokens, no list price`);
+      if (metric === "cost" && u.unpriced?.length) modelNote.set(m, `${count(newTokens(u))} tokens, no list price`);
     }
   const modelBars: Bar[] = [...models].map(([label, parts]) => ({ label, parts, note: modelNote.get(label) })).sort((a, b) => sum(Object.values(b.parts)) - sum(Object.values(a.parts)));
   const projects = new Map<string, Record<string, number>>();
@@ -338,16 +339,16 @@ export function Stats() {
         ))}
       </div>
       <div class="stats-grid">
-        <Section title={`${metric === "cost" ? "Cost" : "Tokens"} per day, last ${DAYS} days`} note={usageNote(metric)}>
+        <Section title={`${metric === "cost" ? "Cost" : "Tokens and cache reads"} per day, last ${DAYS} days`} note={usageNote(metric)}>
           {metered.length ? <Columns columns={usageDays} series={harnesses.filter((s) => !unmetered.includes(s.key))} format={f} /> : <p class="muted">No harness here reports usage.</p>}
         </Section>
         <Section title={`Sessions started per day, last ${DAYS} days`}>
           <Columns columns={sessionDays} series={harnesses} format={(v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))} />
         </Section>
-        <Section title={`${metric === "cost" ? "Cost" : "Tokens"} by model`} note={usageNote(metric)}>
+        <Section title={`${metric === "cost" ? "Cost" : "Tokens and cache reads"} by model`} note={usageNote(metric)}>
           <Rows bars={modelBars} series={harnesses} format={f} empty="No harness here reports usage." />
         </Section>
-        <Section title={`${metric === "cost" ? "Cost" : "Tokens"} by project, top 10`} note={usageNote(metric)}>
+        <Section title={`${metric === "cost" ? "Cost" : "Tokens and cache reads"} by project, top 10`} note={usageNote(metric)}>
           <Rows bars={projectBars} series={harnesses} format={f} empty="No harness here reports usage." />
         </Section>
         <Section title="Token mix" note={noUsage}>

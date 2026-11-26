@@ -135,9 +135,9 @@ export function SettingsView() {
             "coordinator_prompt",
             "konduktor prompt",
             24,
-            "The system prompt of konduktor. A new konduktor gets it at once, a running one after its next restart; saving does not restart it. Empty means the default.",
+            "The system prompt of every konduktor. A new konduktor gets it at once, a running one after its next restart; saving does not restart it. Empty means the default.",
             <div class="placeholders">
-              <span class="hint">kk fills in these placeholders:</span>
+              <span class="hint">kk fills in these placeholders, then appends a section about the konduktors that overrides this text where they differ:</span>
               <dl>
                 {Object.keys(view.placeholders)
                   .sort()

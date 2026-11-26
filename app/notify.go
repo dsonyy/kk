@@ -29,8 +29,9 @@ type watch struct {
 }
 
 type notice struct {
-	reason   string
-	handover bool
+	reason string
+	// handover is who handed the conversation over: the user, or the id of a konduktor.
+	handover string
 	at       time.Time
 }
 
@@ -48,13 +49,14 @@ func (s *Server) controlled(id string) {
 // driven through the kk CLI and not escalated. The user sees their own agents in the web app.
 func konduktorsTurn(c Conversation) bool { return c.ByAgent && c.Escalation == "" }
 
-// handOver tells the konduktor about a conversation the user started and handed to it. With no konduktor running, nobody hears of it.
-func (s *Server) handOver(id string) {
+// handOver tells the konduktor of a conversation that it was handed the conversation, by the user or by another konduktor.
+// With no konduktor running, nobody hears of it.
+func (s *Server) handOver(id, from string) {
 	if !s.cfg().coordinator() {
 		return
 	}
 	s.mu.Lock()
-	s.handovers[id] = true
+	s.handovers[id] = from
 	s.mu.Unlock()
 }
 
@@ -122,23 +124,29 @@ func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.T
 	if reason != "" && !quiet {
 		n.reason, n.at = reason, now
 	}
-	if handover {
-		n.handover, n.at = true, now
+	if handover != "" {
+		n.handover, n.at = handover, now
 	}
-	if n.reason != "" || n.handover {
+	if n.reason != "" || n.handover != "" {
 		s.notices[c.ID] = n
 	}
 }
 
-// flushNotices types the gathered events into the konduktor as one message, like kk send does. Claude Code
-// queues a message that arrives mid-turn. Nothing is typed while the konduktor is not ready for a message,
-// because the Enter would answer its own dialog.
+// flushNotices types the gathered events into each konduktor as one message, like kk send does. Claude Code queues a
+// message that arrives mid-turn. Nothing is typed while a konduktor is not ready for a message, because the Enter would
+// answer its own dialog; its events wait, and the other konduktors get theirs.
 func (s *Server) flushNotices(now time.Time) {
-	if len(s.notices) == 0 {
+	s.mu.Lock()
+	roster := len(s.roster)
+	s.mu.Unlock()
+	if len(s.notices) == 0 && roster == 0 {
 		return
 	}
 	if !s.cfg().coordinator() {
 		clear(s.notices)
+		s.mu.Lock()
+		clear(s.roster)
+		s.mu.Unlock()
 		return
 	}
 	for _, n := range s.notices {
@@ -146,64 +154,84 @@ func (s *Server) flushNotices(now time.Time) {
 			return
 		}
 	}
-	co, ok := s.store.get(coordinatorID)
-	if !ok || co.Attention != "" || !slices.Contains([]string{statusIdle, statusWorking, statusBackground}, co.Status) || !s.alive(co) || midRewind(co.ID) != nil {
-		return
-	}
-	ids := make([]string, 0, len(s.notices))
+	ks := s.konduktors()
+	byKonduktor := map[string][]string{}
 	for id := range s.notices {
-		ids = append(ids, id)
-	}
-	slices.SortFunc(ids, func(a, b string) int { return s.notices[a].at.Compare(s.notices[b].at) })
-	lines := []string{notifyMarker}
-	var told []string
-	queued := s.queued()
-	for _, id := range ids {
 		c, ok := s.store.get(id)
-		n := s.notices[id]
-		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer
-		// news, unless queued successors wait for it.
-		next := queued[id]
-		if !ok || c.Closed && n.reason != closedReason || !konduktorsTurn(c) && len(next) == 0 {
+		if !ok {
+			delete(s.notices, id)
 			continue
 		}
-		if n.reason == "needs action" && c.Attention == "" {
-			n.reason = ""
-		}
-		var parts []string
-		if n.handover {
-			handover := "the user started it in " + c.Dir + " and handed it over to you"
-			if c.Prompt != "" {
-				handover += fmt.Sprintf(", first prompt %q", shorten(c.Prompt, 300))
-			}
-			parts = append(parts, handover)
-		}
-		if n.reason != "" {
-			reason := n.reason
-			if c.Attention != "" {
-				reason += ": " + strings.TrimSuffix(firstLine(c.Attention, 300), ".")
-			}
-			parts = append(parts, reason)
-		}
-		if len(parts) == 0 {
+		k := s.konduktorOf(c, ks)
+		byKonduktor[k] = append(byKonduktor[k], id)
+	}
+	queued := s.queued()
+	for _, co := range ks {
+		ids := byKonduktor[co.ID]
+		s.mu.Lock()
+		lines := append([]string{notifyMarker}, s.roster[co.ID]...)
+		s.mu.Unlock()
+		if len(lines) == 1 && len(ids) == 0 || co.Attention != "" || !slices.Contains([]string{statusIdle, statusWorking, statusBackground}, co.Status) || !s.alive(co) || midRewind(co.ID) != nil {
 			continue
 		}
-		if len(next) > 0 {
-			parts = append(parts, chainNote(next))
+		s.mu.Lock()
+		delete(s.roster, co.ID)
+		s.mu.Unlock()
+		slices.SortFunc(ids, func(a, b string) int { return s.notices[a].at.Compare(s.notices[b].at) })
+		var told []string
+		for _, id := range ids {
+			c, _ := s.store.get(id)
+			n := s.notices[id]
+			delete(s.notices, id)
+			// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer
+			// news, unless queued successors wait for it.
+			next := queued[id]
+			if c.Closed && n.reason != closedReason || !konduktorsTurn(c) && len(next) == 0 {
+				continue
+			}
+			if n.reason == "needs action" && c.Attention == "" {
+				n.reason = ""
+			}
+			var parts []string
+			if n.handover != "" {
+				handover := "the user started it in " + c.Dir + " and handed it over to you"
+				if from, ok := s.store.get(n.handover); ok && from.Role != "" {
+					handover = fmt.Sprintf("konduktor %s %q handed it over to you", from.ID, konduktorName(from))
+				}
+				if c.Prompt != "" {
+					handover += fmt.Sprintf(", first prompt %q", shorten(c.Prompt, 300))
+				}
+				parts = append(parts, handover)
+			}
+			if n.reason != "" {
+				reason := n.reason
+				if c.Attention != "" {
+					reason += ": " + strings.TrimSuffix(firstLine(c.Attention, 300), ".")
+				}
+				parts = append(parts, reason)
+			}
+			if len(parts) == 0 {
+				continue
+			}
+			if len(next) > 0 {
+				parts = append(parts, chainNote(next))
+			}
+			line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, strings.Join(parts, "; "))
+			lines = append(lines, line+". Look: kk screen "+id)
+			told = append(told, id)
 		}
-		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, strings.Join(parts, "; "))
-		lines = append(lines, line+". Look: kk screen "+id)
-		told = append(told, id)
-	}
-	clear(s.notices)
-	if len(lines) == 1 {
-		return
-	}
-	text := strings.Join(lines, "\n")
-	log.Printf("notify the konduktor about %s", strings.Join(told, ", "))
-	go func() {
-		if err := pasteText(co.Window, text); err != nil {
-			log.Printf("notify the konduktor: %v", err)
+		if len(lines) == 1 {
+			continue
 		}
-	}()
+		text := strings.Join(lines, "\n")
+		if len(lines) > len(told)+1 {
+			told = append(told, "konduktors")
+		}
+		log.Printf("notify konduktor %s about %s", co.ID, strings.Join(told, ", "))
+		go func() {
+			if err := pasteText(co.Window, text); err != nil {
+				log.Printf("notify konduktor %s: %v", co.ID, err)
+			}
+		}()
+	}
 }
