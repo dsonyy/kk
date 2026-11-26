@@ -28,6 +28,7 @@
   --user-dim: #555;
   --user-code: #cfcfcf;
   --backdrop: rgb(0 0 0 / .7);
+  --backdrop-view: rgb(0 0 0 / .92);
   --series-0: #e6e6e6;
   --series-1: #9a9a9a;
   --series-2: #5e5e5e;
@@ -312,6 +313,13 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .composer { padding-inline: max(var(--gap), calc((100% - var(--chat-width)) / 2)); }
 .md img { max-width: 100%; height: auto; }
 
+/* A frame keeps a dark picture apart from the dark page. A click opens it large. */
+.feed .md img, .msg .attachments li:has(img) { border: 1px solid var(--text-dim); }
+.feed :is(.md, .attachments) img { cursor: zoom-in; }
+.feed a:has(> img:only-child) { outline: none; text-decoration: none; }
+.feed a:focus-visible > img { outline: 2px solid var(--text-strong); outline-offset: 2px; }
+.feed .msg.user a:focus-visible > img { outline-color: var(--user-text); }
+
 /* Side panel: a resizable panel on the right that takes space from the page instead of covering it. */
 .side-panel { position: relative; flex: none; width: var(--panel-width, 440px); max-width: 60vw; min-width: 280px; display: flex; flex-direction: column; border-left: 1px solid var(--line-strong); }
 .panel-resize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; z-index: 1; }
@@ -350,6 +358,12 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .msg.user .md { font-size: 14px; line-height: 1.5; }
 
 .overlay { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: var(--gap); background: var(--backdrop); }
+.viewer { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; border: 0; flex-direction: column; gap: var(--gap); background: var(--backdrop-view); color: var(--text); }
+.viewer:not([open]) { display: none; }
+.viewer::backdrop { background: none; }
+.viewer button { flex: none; align-self: flex-end; }
+.viewer .stage { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
+.viewer img { max-width: 100%; max-height: 100%; border: 1px solid var(--text-dim); cursor: zoom-out; }
 .new-session { width: min(720px, 100%); height: min(720px, 100%); overflow-y: scroll; display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); background: var(--surface); }
 .new-session h1 { font-size: 16px; color: var(--text-strong); }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); }

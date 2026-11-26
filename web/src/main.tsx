@@ -7,6 +7,7 @@ import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attac
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
+import { ImageViewer, linkImages } from "./images";
 import { Board, CardTitle } from "./board";
 import { Inbox } from "./inbox";
 import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
@@ -31,7 +32,9 @@ function Markdown({ text, partial }: { text: string; partial?: boolean }) {
     html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }) as string);
     if (!partial) mdCache.set(text, html);
   }
-  return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => linkImages(box.current!), [html]);
+  return <div ref={box} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // The hash lists the open panels in order. Pinned ones stay until hidden; the one marked with ~ is reused by the next
@@ -276,6 +279,7 @@ function App() {
           }}
         />
       )}
+      <ImageViewer />
     </>
   );
 }

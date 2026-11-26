@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"math"
 	"net/http"
 	"os"
@@ -563,5 +568,124 @@ func TestNoAccentStripes(t *testing.T) {
 	}
 	if got.Selected != "solid 1px" || got.SelectedShadow != "none" || got.Other != "none" {
 		t.Errorf("selected suggestion: %q, shadow %q, others %q", got.Selected, got.SelectedShadow, got.Other)
+	}
+}
+
+// press sends a key to the page the way a keyboard does.
+func (p *page) press(key string, code int, text string) {
+	p.t.Helper()
+	p.call("Input.dispatchKeyEvent", map[string]any{"type": "keyDown", "key": key, "windowsVirtualKeyCode": code, "text": text})
+	p.call("Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": key, "windowsVirtualKeyCode": code})
+}
+
+// tap clicks the middle of an element with the mouse.
+func (p *page) tap(element string) {
+	p.t.Helper()
+	p.until(element)
+	var at struct{ X, Y float64 }
+	p.eval(fmt.Sprintf(`(() => { const e = %s; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`, element), &at)
+	for _, kind := range []string{"mousePressed", "mouseReleased"} {
+		p.call("Input.dispatchMouseEvent", map[string]any{"type": kind, "x": at.X, "y": at.Y, "button": "left", "clickCount": 1})
+	}
+}
+
+func TestMessageImages(t *testing.T) {
+	e := newEnv(t)
+	dark := image.NewRGBA(image.Rect(0, 0, 2400, 1600))
+	draw.Draw(dark, dark.Bounds(), image.NewUniform(color.RGBA{20, 20, 20, 255}), image.Point{}, draw.Src)
+	var data bytes.Buffer
+	png.Encode(&data, dark)
+	attached, inline, linked := e.upload("attached.png", data.Bytes()), e.upload("inline.png", data.Bytes()), e.upload("linked.png", data.Bytes())
+	prompt := fmt.Sprintf("![inline](%s)\n\n[![linked](%s)](https://example.com/)\n\n%s", inline.URL, linked.URL, attached.Path)
+	id := e.mustKK("new", "claude", "-C", e.work, prompt)
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+
+	p := e.openPage(1600, 900)
+	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	// The user's message and the echo of it hold the two markdown images, and the user's message the attachment.
+	p.until(`[...document.querySelectorAll(".feed img")].filter((i) => i.naturalWidth).length >= 5`)
+	var frames []struct {
+		Alt, Width, Style string
+		Brightness        float64
+	}
+	p.eval(`[...document.querySelectorAll(".feed img")].map((img) => {
+		const s = getComputedStyle(img.closest(".attachments li") ?? img)
+		const [r, g, b] = s.borderTopColor.match(/[\d.]+/g).map(Number)
+		const doubled = img.closest(".attachments li") && parseFloat(getComputedStyle(img).borderTopWidth)
+		return { alt: img.alt, width: doubled ? "doubled" : s.borderTopWidth + " " + s.borderLeftWidth, style: s.borderTopStyle, brightness: (r + g + b) / 3 }
+	})`, &frames)
+	for _, f := range frames {
+		// The line colors of the page are too close to a dark picture to separate them.
+		if f.Width != "1px 1px" || f.Style != "solid" || f.Brightness < 80 {
+			t.Errorf("frame of %q: %+v", f.Alt, f)
+		}
+	}
+
+	type viewer struct {
+		Open, OnClose, Inside bool
+		Src, Focus, Conductor string
+		Width, Height         float64
+	}
+	read := func() (got viewer) {
+		t.Helper()
+		p.eval(`(() => {
+			const d = document.querySelector("dialog.viewer"), a = document.activeElement
+			const img = d?.querySelector("img"), box = img?.getBoundingClientRect()
+			return { open: !!d?.open, onClose: a?.getAttribute("aria-label") === "Close" && !!d?.contains(a), inside: a === document.body || !!d?.contains(a),
+				src: img?.getAttribute("src") ?? "", focus: a?.querySelector?.("img")?.alt ?? "", width: box?.width ?? 0, height: box?.height ?? 0,
+				conductor: document.querySelector(".conductor-toggle").getAttribute("aria-pressed") }
+		})()`, &got)
+		return got
+	}
+	closed := func(how, focus string) {
+		t.Helper()
+		p.until(`!document.querySelector("dialog.viewer")`)
+		if got := read(); got.Focus != focus || got.Conductor != "true" {
+			t.Errorf("closed with %s: %+v, want the focus on %q", how, got, focus)
+		}
+	}
+	picture := func(alt string) string {
+		return fmt.Sprintf(`document.querySelector('.msg.assistant img[alt="%s"]') ?? document.querySelector('.feed img[alt="%s"]')`, alt, alt)
+	}
+	for alt, file := range map[string]Attachment{"inline": inline, "linked": linked, "attached.png": attached} {
+		p.eval(fmt.Sprintf(`(%s).closest("a").focus()`, picture(alt)), nil)
+		p.press("Enter", 13, "\r")
+		p.until(`document.querySelector("dialog.viewer img")?.naturalWidth`)
+		got := read()
+		if !got.Open || !got.OnClose || !strings.HasSuffix(got.Src, file.URL) {
+			t.Errorf("%s opened from the keyboard: %+v", alt, got)
+		}
+		// Large: as big as the screen allows, with its shape kept.
+		if got.Height < 700 || math.Abs(got.Width/got.Height-1.5) > 0.01 {
+			t.Errorf("%s is not shown large: %+v", alt, got)
+		}
+		for range 3 {
+			p.press("Tab", 9, "")
+			if got := read(); !got.Inside {
+				t.Errorf("%s: Tab left the open image: %+v", alt, got)
+			}
+		}
+		p.press("Escape", 27, "")
+		closed("Escape", alt)
+
+		p.tap(picture(alt))
+		p.until(`document.querySelector("dialog.viewer[open] img")?.naturalWidth`)
+		p.tap(`document.querySelector("dialog.viewer img")`)
+		closed("a click on the image", alt)
+
+		p.tap(picture(alt))
+		p.until(`document.querySelector("dialog.viewer[open]")`)
+		p.tap(`document.querySelector('dialog.viewer button[aria-label="Close"]')`)
+		closed("the close button", alt)
+
+		p.tap(picture(alt))
+		p.until(`document.querySelector("dialog.viewer[open]")`)
+		p.press("c", 67, "c")
+		closed("the mnemonic of the close button", alt)
+	}
+	var url string
+	p.eval(`location.href`, &url)
+	if !strings.Contains(url, e.addr) {
+		t.Errorf("a click on a linked image left the page: %s", url)
 	}
 }
