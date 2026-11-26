@@ -127,6 +127,7 @@ func (s *Server) integrationAnswer(ctx context.Context, r connectorRun) (string,
 			}
 			s.mu.Lock()
 			a := s.answers[id]
+			delete(s.answers, id)
 			s.mu.Unlock()
 			if !a.launched.Equal(cur.Launched) {
 				return "", nil

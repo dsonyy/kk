@@ -427,8 +427,8 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	}
 	env := map[string]string{"KK_CONVERSATION": c.ID, "KK_HOME": s.store.dir}
 	if c.Integration != "" {
-		// Claude Code takes the first prompt before the claude.ai connectors have connected, unless told to wait for them.
-		env["MCP_CONNECTION_NONBLOCKING"], env["MCP_CONNECT_TIMEOUT_MS"] = "false", "30000"
+		// A claude.ai connector gets this long to connect; the agent waits for it with ToolSearch.
+		env["MCP_CONNECT_TIMEOUT_MS"] = "30000"
 	}
 	alive, _ := windows()
 	if _, ok := alive[c.Window]; ok && c.Window != "" {
