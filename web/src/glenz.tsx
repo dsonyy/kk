@@ -145,7 +145,7 @@ function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
 // page is nearly black, so the map stretches the dark end of the range to white.
 function pageMap(skip: Element): HTMLCanvasElement {
   const [W, H] = [window.innerWidth, window.innerHeight];
-  const scale = 0.25;
+  const scale = 0.5;
   const map = document.createElement("canvas");
   map.width = Math.ceil(W * scale);
   map.height = Math.ceil(H * scale);
@@ -174,7 +174,7 @@ function pageMap(skip: Element): HTMLCanvasElement {
     const border = parseFloat(css.borderTopWidth) ? grey(css.borderTopColor) : "";
     if (border) {
       ctx.strokeStyle = border;
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 3;
       ctx.strokeRect(box.left, box.top, box.width, box.height);
     }
     const text = grey(css.color);
@@ -184,7 +184,7 @@ function pageMap(skip: Element): HTMLCanvasElement {
       ctx.fillStyle = text;
       for (const line of range.getClientRects()) {
         const [left, right] = [Math.max(line.left, box.left), Math.min(line.right, box.right)];
-        if (right > left) ctx.fillRect(left, line.top + line.height * 0.25, right - left, line.height * 0.5);
+        if (right > left) ctx.fillRect(left, line.top + line.height * 0.2, right - left, line.height * 0.6);
       }
     }
   }
@@ -241,9 +241,9 @@ void main() {
     vec3 view = normalize(vRot + vec3(0, 0, ${CAMERA.toFixed(1)}));
     vec3 ray = reflect(view, vNormal);
     vec2 uv = anchor + ray.xy * reach + vRot.xy * spread;
-    float fresnel = 0.6 + 0.4 * pow(1.0 - abs(dot(view, vNormal)), 2.0);
-    color.rgb = color.rgb * (1.0 - 0.3 * fresnel) + texture(page, uv).rgb * 0.7 * fresnel;
-    color.a = max(color.a, max(color.r, max(color.g, color.b)));
+    float fresnel = 0.75 + 0.25 * pow(1.0 - abs(dot(view, vNormal)), 2.0);
+    float m = smoothstep(0.12, 0.55, texture(page, uv).r);
+    color = mix(color, vec4(1), m * 0.85 * fresnel);
   }
 }`;
 
@@ -280,14 +280,14 @@ function webgl(canvas: HTMLCanvasElement) {
     offset += n;
   }
   gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
-  for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+  for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.MIRRORED_REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   const uniform = (name: string) => gl.getUniformLocation(program, name);
   gl.uniform3f(uniform("lightDir"), ...LIGHT);
   gl.uniform2f(uniform("reach"), 1.4, 1.1);
-  gl.uniform2f(uniform("spread"), 0.14, 0.18);
+  gl.uniform2f(uniform("spread"), 0.1, 0.13);
   const data = new Float32Array((FACES.length * 3 + 6) * STRIDE);
   const bary: V[] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 
