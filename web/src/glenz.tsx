@@ -20,9 +20,9 @@ for (let a = 0; a < 3; a++)
       }
 
 const FPS = 30;
-const BOUNCE = 6.8;
+const BOUNCE = 13.6;
 // The height of a bounce in pixels, the one the solid had in its own 110 px strip.
-const LIFT = 36;
+const LIFT = 72;
 const SIZE = 18;
 // The still frame rests on the floor at the far right, just above the system load chart.
 const STILL = 14 * BOUNCE - 0.01;
@@ -98,15 +98,15 @@ function size(canvas: HTMLCanvasElement) {
   return { w, h, dpr, floor: (canvas.nextElementSibling as HTMLElement).offsetTop };
 }
 
-// The face colour: light faces stay near white and dark faces near black, so the checker of the faces shows at a glance. The
+// The face colour: light faces stay clearly light and dark faces near black, so the checker of the faces shows at a glance. The
 // dark tone takes a little of the light one where it faces the light, so it still reads on a near black background.
 function shade(style: Style, tone: number, n: V): V {
   const lit = Math.max(0, -(n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]));
-  const f = tone === 0 ? 0.92 + 0.08 * lit : 0.03 + 0.12 * lit;
+  const f = tone === 0 ? 0.76 + 0.24 * lit : 0.03 + 0.12 * lit;
   return style.dark.map((c, i) => c + (style.light[i] - c) * f) as V;
 }
 
-const fillAlpha = (tone: number, front: boolean) => (tone === 0 ? (front ? 0.95 : 0.3) : front ? 0.9 : 0.35);
+const fillAlpha = (tone: number, front: boolean) => (tone === 0 ? (front ? 0.84 : 0.3) : front ? 0.9 : 0.35);
 const edgeAlpha = (front: boolean) => (front ? 0.4 : 0.1);
 
 function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
@@ -234,8 +234,8 @@ void main() {
   }
   bool front = vKind.y > 0.5;
   float lit = max(0.0, -dot(vNormal, lightDir));
-  vec3 c = mix(dark, light, vKind.x < 0.5 ? 0.92 + 0.08 * lit : 0.03 + 0.12 * lit);
-  float a = vKind.x < 0.5 ? (front ? 0.95 : 0.3) : (front ? 0.9 : 0.35);
+  vec3 c = mix(dark, light, vKind.x < 0.5 ? 0.76 + 0.24 * lit : 0.03 + 0.12 * lit);
+  float a = vKind.x < 0.5 ? (front ? 0.84 : 0.3) : (front ? 0.9 : 0.35);
   color = vec4(c * a, a);
   vec3 near = smoothstep(vec3(0), fwidth(vBary) * 1.5, vBary);
   float e = (1.0 - min(min(near.x, near.y), near.z)) * (front ? 0.4 : 0.1);

@@ -236,7 +236,7 @@ func litRows(img image.Image, height float64) (top, bottom float64) {
 	return float64(first-img.Bounds().Min.Y) / scale, float64(last-img.Bounds().Min.Y+1) / scale
 }
 
-// tones returns the shares of a canvas shot's drawn pixels that are near white and near black.
+// tones returns the shares of a canvas shot's drawn pixels that are clearly light and near black.
 func tones(img image.Image) (light, dark float64) {
 	bg, drawn := img.At(0, 0), 0
 	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
@@ -247,7 +247,7 @@ func tones(img image.Image) (light, dark float64) {
 			r, g, b, _ := img.At(x, y).RGBA()
 			l := (0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)) / 257
 			drawn++
-			if l > 190 {
+			if l > 140 {
 				light++
 			} else if l < 60 {
 				dark++
@@ -303,16 +303,16 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if now, _ := b.glenzShot(); lit < 500 || same(first, now) {
 		t.Fatalf("the solid is not drawn or does not move: %d pixels drawn", lit)
 	}
-	// Over one 6.8 s bounce the solid stays in a low band just above the system load chart: the floor plus 36 px of
+	// Over one 13.6 s bounce the solid stays in a low band just above the system load chart: the floor plus 72 px of
 	// travel and the solid's own height.
 	high, low := size.Height, 0.0
-	for end := time.Now().Add(7200 * time.Millisecond); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
+	for end := time.Now().Add(14400 * time.Millisecond); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
 		img, _ := b.glenzShot()
 		top, bottom := litRows(img, size.Height)
 		high, low = math.Min(high, top), math.Max(low, bottom)
 	}
-	if low >= size.Chart || high < size.Floor-130 {
-		t.Fatalf("the solid reaches from %.0f to %.0f px, want within 130 px above the floor at %.0f and above the chart at %.0f", high, low, size.Floor, size.Chart)
+	if low >= size.Chart || high < size.Floor-170 {
+		t.Fatalf("the solid reaches from %.0f to %.0f px, want within 170 px above the floor at %.0f and above the chart at %.0f", high, low, size.Floor, size.Chart)
 	}
 	if n := b.counter("maps") - maps; n != 0 {
 		t.Fatalf("the page map was drawn %d times while nothing changed", n)
@@ -347,12 +347,12 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if now, _ := b.glenzShot(); !same(still, now) {
 		t.Fatal("the still frame changed under reduced motion")
 	}
-	// The light faces are near white and the dark ones near black, each a large part of the solid.
+	// The light faces are clearly light and the dark ones near black, each a large part of the solid.
 	if light, dark := tones(still); light < 0.25 || dark < 0.25 {
-		t.Fatalf("%.0f%% of the solid is near white and %.0f%% near black, want at least 25%% each", light*100, dark*100)
+		t.Fatalf("%.0f%% of the solid is clearly light and %.0f%% near black, want at least 25%% each", light*100, dark*100)
 	}
 	b.eval(measure, &size)
-	if top, bottom := litRows(still, size.Height); bottom >= size.Chart || top < size.Floor-130 {
+	if top, bottom := litRows(still, size.Height); bottom >= size.Chart || top < size.Floor-170 {
 		t.Fatalf("the still frame spans %.0f to %.0f px, want above the chart at %.0f and near the floor at %.0f", top, bottom, size.Chart, size.Floor)
 	}
 
