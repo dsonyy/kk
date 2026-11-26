@@ -283,7 +283,8 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 		X, Y  float64
 		Under bool
 	}
-	b.eval(`(() => { const r = document.querySelector(".tile").getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2;
+	b.waitFor("the session card", `!!document.querySelector(".tile[data-chain='`+id+`']")`)
+	b.eval(`(() => { const r = document.querySelector(".tile[data-chain='`+id+`']").getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2;
 		const c = document.querySelector("canvas.glenz").getBoundingClientRect();
 		return { x, y, under: x > c.left && x < c.right && y > c.top && y < c.bottom && getComputedStyle(document.querySelector("canvas.glenz")).zIndex > 0 }; })()`, &tile)
 	if !tile.Under {
