@@ -21,6 +21,9 @@ for (let a = 0; a < 3; a++)
 
 const FPS = 30;
 const BOUNCE = 3.4;
+const SIZE = 18;
+// The still frame rests on the floor at the far right, where the pane has the least text.
+const STILL = 14 * BOUNCE - 0.01;
 const CAMERA = 7;
 const LIGHT = norm([-0.5, -0.8, -0.6]);
 
@@ -58,10 +61,9 @@ function frame(t: number, w: number, h: number): Frame {
   };
 
   // The bounce is a parabola. Each landing squashes the solid, and it wobbles like jelly until the wobble dies out.
-  const size = h * 0.16;
   const since = t % BOUNCE;
   const u = since / BOUNCE;
-  const lift = (h - size * 4.2) * 4 * u * (1 - u);
+  const lift = (h - SIZE * 4.2) * 4 * u * (1 - u);
   const sy = 1 - 0.22 * Math.exp(-since / 0.32) * Math.cos(since * 13);
   const sx = 1 / Math.sqrt(sy);
 
@@ -72,15 +74,15 @@ function frame(t: number, w: number, h: number): Frame {
     const n = norm([e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]);
     const mid = [0, 1, 2].map((i) => (r[0][i] + r[1][i] + r[2][i]) / 3) as V;
     if (n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] < 0) n.forEach((_, i) => (n[i] = -n[i]));
-    const p = r.map(([x, y, z]) => [(x * CAMERA * size * sx) / (CAMERA + z), (y * CAMERA * size * sy) / (CAMERA + z)]);
+    const p = r.map(([x, y, z]) => [(x * CAMERA * SIZE * sx) / (CAMERA + z), (y * CAMERA * SIZE * sy) / (CAMERA + z)]);
     return { p, r, n, tone, front: n[2] < 0, depth: mid[2] };
   });
   tris.sort((a, b) => b.depth - a.depth);
   const bottom = Math.max(...tris.flatMap((tr) => tr.p.map((p) => p[1])));
-  const margin = size * 2.2;
+  const margin = SIZE * 2.2;
   const cx = w / 2 + (w / 2 - margin) * (0.75 * Math.sin(t * 0.17) + 0.25 * Math.sin(t * 0.41 + 1));
   const near = 1 - lift / h;
-  return { tris, cx, cy: h - 1 - bottom - lift, shadow: { x: cx, rx: size * 1.7 * sx * (0.6 + 0.4 * near), alpha: 0.25 + 0.55 * near } };
+  return { tris, cx, cy: h - 1 - bottom - lift, shadow: { x: cx, rx: SIZE * 1.7 * sx * (0.6 + 0.4 * near), alpha: 0.25 + 0.55 * near } };
 }
 
 function size(canvas: HTMLCanvasElement) {
@@ -352,14 +354,14 @@ export function Glenz({ page }: { page: string }) {
       if (!gl || !shown()) return;
       gl.map(pageMap(canvas));
       box = canvas.getBoundingClientRect();
-      if (still) draw(1.3);
+      if (still) draw(STILL);
     };
     const start = () => {
       if (!shown()) return;
       style = readStyle(canvas);
       gl?.style(style);
       remap.current();
-      if (still) draw(1.3);
+      if (still) draw(STILL);
       else if (!frame) frame = requestAnimationFrame(tick);
     };
     const resize = new ResizeObserver(start);

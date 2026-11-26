@@ -8,9 +8,11 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"math"
 	"net/http"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"testing"
 	"time"
 
@@ -28,7 +30,7 @@ type browser struct {
 func newBrowser(t *testing.T, flags ...string) *browser {
 	t.Helper()
 	bin := ""
-	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
+	for _, name := range []string{"google-chrome", "chromium", "chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"} {
 		if path, err := exec.LookPath(name); err == nil {
 			bin = path
 			break
@@ -37,7 +39,7 @@ func newBrowser(t *testing.T, flags ...string) *browser {
 	if bin == "" {
 		t.Skip("no Chrome or Chromium on PATH")
 	}
-	cmd := exec.Command(bin, append([]string{"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + t.TempDir(), "--no-first-run", "about:blank"}, flags...)...)
+	cmd := exec.Command(bin, append([]string{"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + t.TempDir(), "--no-first-run", "--use-mock-keychain", "--password-store=basic", "about:blank"}, flags...)...)
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -173,13 +175,16 @@ func (b *browser) tab(name string) {
 	time.Sleep(200 * time.Millisecond)
 }
 
-// glenzShot returns a screenshot of the canvas and how many of its pixels differ from the sidebar behind it.
+// glenzShot returns a screenshot of the canvas and how many of its pixels differ from the sidebar behind it. The rest of the
+// sidebar is hidden for the shot, so the sessions and the system load under the overlay do not count.
 func (b *browser) glenzShot() (image.Image, int) {
 	b.t.Helper()
 	var box struct{ X, Y, Width, Height float64 }
-	b.eval(`(() => { const r = document.querySelector("canvas.glenz").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`, &box)
+	b.eval(`(() => { const s = document.createElement("style"); s.id = "glenz-alone"; s.textContent = "aside.sidebar > :not(.glenz) { visibility: hidden !important; }"; document.head.append(s);
+		const r = document.querySelector("canvas.glenz").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`, &box)
 	var shot struct{ Data []byte }
 	json.Unmarshal(b.call("Page.captureScreenshot", map[string]any{"format": "png", "clip": map[string]any{"x": box.X, "y": box.Y, "width": box.Width, "height": box.Height, "scale": 1}}), &shot)
+	b.eval(`document.getElementById("glenz-alone").remove(), true`, new(bool))
 	img, err := png.Decode(bytes.NewReader(shot.Data))
 	if err != nil {
 		b.t.Fatal(err)
@@ -210,6 +215,7 @@ func same(a, b image.Image) bool {
 // checkGlenz checks the animation in a browser started with the given flags and returns whether it drew with WebGL.
 func checkGlenz(t *testing.T, flags ...string) bool {
 	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "Under the glenz")
 	b := newBrowser(t, flags...)
 	b.call("Page.enable", nil)
 	b.call("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": glenzProbe})
@@ -218,17 +224,18 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	var webgl bool
 	b.eval(`!!document.querySelector("canvas.glenz").getContext("webgl2")`, &webgl)
 
-	var size struct{ Width, Height, CanvasWidth, CanvasHeight, Sidebar float64 }
-	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect();
-		return { width: r.width, height: r.height, canvasWidth: c.width, canvasHeight: c.height, sidebar: document.querySelector("aside.sidebar").clientWidth }; })()`, &size)
-	if size.Height != 110 || size.Width != size.Sidebar || size.CanvasWidth != 2*size.Width || size.CanvasHeight != 2*size.Height {
-		t.Fatalf("the canvas does not fill the sidebar at the device pixel ratio: %+v", size)
+	var size struct{ Width, Height, CanvasWidth, CanvasHeight, SidebarWidth, SidebarHeight, Groups, Below float64 }
+	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect(); const s = document.querySelector("aside.sidebar");
+		return { width: r.width, height: r.height, canvasWidth: c.width, canvasHeight: c.height, sidebarWidth: s.clientWidth, sidebarHeight: s.clientHeight,
+			groups: document.querySelector(".groups").getBoundingClientRect().bottom, below: document.querySelector(".load").getBoundingClientRect().top }; })()`, &size)
+	near := func(a, b float64) bool { return math.Abs(a-b) <= 1 }
+	if !near(size.Width, size.SidebarWidth) || !near(size.Height, size.SidebarHeight) || !near(size.CanvasWidth, 2*size.Width) || !near(size.CanvasHeight, 2*size.Height) {
+		t.Fatalf("the canvas does not cover the sidebar at the device pixel ratio: %+v", size)
 	}
-	var between bool
-	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); return c.nextElementSibling.classList.contains("load") && c.previousElementSibling.classList.contains("groups"); })()`, &between)
-	if !between {
-		t.Fatal("the animation is not between the session list and the system load")
+	if size.Groups != size.Below {
+		t.Fatalf("the animation takes space between the session list and the system load: %+v", size)
 	}
+
 	first, lit := b.glenzShot()
 	maps := b.counter("maps")
 	if n := b.countIn("draws", 2*time.Second); n < 30 || n > 64 {
@@ -257,10 +264,8 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	}
 
 	b.open(e.url, 1400, 600, false)
-	var shown bool
-	b.eval(`document.querySelector("canvas.glenz").clientHeight > 0`, &shown)
-	if n := b.countIn("frames", time.Second); shown || n != 0 {
-		t.Fatalf("on a short window the animation takes space or draws: shown %v, %d frames", shown, n)
+	if n := b.countIn("draws", time.Second); n == 0 {
+		t.Fatal("the animation does not draw on a short window")
 	}
 
 	b.open(e.url, 1400, 900, true)
@@ -272,12 +277,32 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if now, _ := b.glenzShot(); !same(still, now) {
 		t.Fatal("the still frame changed under reduced motion")
 	}
+
+	b.open(e.url, 1400, 900, false)
+	var tile struct {
+		X, Y  float64
+		Under bool
+	}
+	b.eval(`(() => { const r = document.querySelector(".tile").getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2;
+		const c = document.querySelector("canvas.glenz").getBoundingClientRect();
+		return { x, y, under: x > c.left && x < c.right && y > c.top && y < c.bottom && getComputedStyle(document.querySelector("canvas.glenz")).zIndex > 0 }; })()`, &tile)
+	if !tile.Under {
+		t.Fatalf("the session card is not under the overlay: %+v", tile)
+	}
+	for _, kind := range []string{"mousePressed", "mouseReleased"} {
+		b.call("Input.dispatchMouseEvent", map[string]any{"type": kind, "x": tile.X, "y": tile.Y, "button": "left", "clickCount": 1})
+	}
+	b.waitFor("the session to open from a click through the overlay", `!!document.querySelector(".tile.on[data-chain='`+id+`']")`)
 	return webgl
 }
 
 // The machine's GPU draws with WebGL and reflects the page; without one the 2D canvas draws, as software WebGL is slower.
 func TestGlenz(t *testing.T) {
-	webgl := checkGlenz(t, "--enable-gpu", "--ignore-gpu-blocklist", "--use-angle=gl")
+	angle := "--use-angle=gl"
+	if runtime.GOOS == "darwin" {
+		angle = "--use-angle=metal"
+	}
+	webgl := checkGlenz(t, "--enable-gpu", "--ignore-gpu-blocklist", angle)
 	t.Logf("drawn with WebGL: %v", webgl)
 }
 
