@@ -266,11 +266,14 @@ func negate(u Usage) Usage {
 	return Usage{Input: -u.Input, CacheRead: -u.CacheRead, CacheWrite: -u.CacheWrite, Output: -u.Output, Cost: -u.Cost}
 }
 
-// parseClaudeUsage reads only the usage of a Claude Code transcript, for the files of its subagents.
+// parseClaudeUsage reads only the usage and the context of a Claude Code transcript, for the files of its subagents.
 func parseClaudeUsage(t *Tail, raw []byte) {
 	var l claudeLine
 	if json.Unmarshal(raw, &l) == nil {
 		meterClaude(t, &l)
+		if l.Type == "assistant" && l.Message.Usage != nil {
+			t.Context = l.Message.Usage.context()
+		}
 	}
 }
 
@@ -456,23 +459,30 @@ func (s *Server) handleActivity(*http.Request) (any, error) {
 	return out, nil
 }
 
-// remeter counts the usage of every Claude Code transcript that conversations keep again, so that usage stored by an
-// earlier version of kk follows the current count. It keeps the turns and tools, which only the full parser counts,
-// and what is stored for a file that is gone.
+// remeter counts the usage of every Claude Code transcript that conversations keep, and the context of the current
+// one, again, so that what an earlier version of kk stored follows the current count. The tick does so only for open
+// conversations. It keeps the turns and tools, which only the full parser counts, and what is stored for a file that
+// is gone.
 func (s *Server) remeter() {
 	for _, c := range s.store.list() {
 		if c.Harness != "claude" {
 			continue
 		}
-		fresh := map[string]Activity{}
+		fresh, context := map[string]Activity{}, -1
 		for path := range c.Transcripts {
 			t := newTail(path)
 			if _, err := t.read(parseClaudeUsage); err == nil {
 				fresh[path] = t.Activity.clone()
+				if path == c.Transcript {
+					context = t.Context
+				}
 			}
 		}
 		s.store.update(c.ID, func(c *Conversation) bool {
 			changed := false
+			if context >= 0 && c.Context != context {
+				c.Context, changed = context, true
+			}
 			for path, f := range fresh {
 				a, ok := c.Transcripts[path]
 				if !ok || reflect.DeepEqual([]any{a.Usage, a.Days, a.Models}, []any{f.Usage, f.Days, f.Models}) {

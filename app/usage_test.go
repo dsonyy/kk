@@ -116,7 +116,7 @@ func TestClaudeAdvisorUsage(t *testing.T) {
 		t.Fatalf("models: %+v", m)
 	}
 
-	// Usage stored by an earlier version is counted again from the transcripts that are still there.
+	// Usage and context stored by an earlier version are counted again from the transcripts that are still there.
 	e.mustKK("close", id)
 	e.stop()
 	path := filepath.Join(e.home, "conversations", id+".yaml")
@@ -132,12 +132,13 @@ func TestClaudeAdvisorUsage(t *testing.T) {
 		stored.Transcripts[p] = a
 	}
 	stored.Transcripts["gone.jsonl"] = Activity{Usage: Usage{Output: 7, Cost: 1}, Turns: 1}
+	stored.Context = 2204
 	data, _ = yaml.Marshal(stored)
 	os.WriteFile(path, data, 0o600)
 	e.start()
 	c = e.waitFor("usage counted again", id, func(c convView) bool {
 		u := usageOf(c)
-		return tokens(u) == advisorTokens+7 && near(u.Cost, want+1)
+		return tokens(u) == advisorTokens+7 && near(u.Cost, want+1) && c.Context == 1202
 	})
 	if m := models(); m["claude-fable-5-2"].Input != 7000 {
 		t.Fatalf("models after a restart: %+v", m)
