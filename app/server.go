@@ -48,6 +48,8 @@ type Server struct {
 	notices map[string]notice
 	// handovers holds the conversations the user started and handed to the konduktor, until the konduktor hears of them.
 	handovers map[string]bool
+	// answers holds the answer of the current run of each integration, by conversation.
+	answers map[string]runAnswer
 }
 
 type convView struct {
@@ -425,8 +427,8 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 	}
 	env := map[string]string{"KK_CONVERSATION": c.ID, "KK_HOME": s.store.dir}
 	if c.Integration != "" {
-		// Claude Code takes the first prompt before the claude.ai connectors have connected, unless told to wait for them.
-		env["MCP_CONNECTION_NONBLOCKING"], env["MCP_CONNECT_TIMEOUT_MS"] = "false", "30000"
+		// A claude.ai connector gets this long to connect; the agent waits for it with ToolSearch.
+		env["MCP_CONNECT_TIMEOUT_MS"] = "30000"
 	}
 	alive, _ := windows()
 	if _, ok := alive[c.Window]; ok && c.Window != "" {
@@ -751,6 +753,7 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		TranscriptPath   string `json:"transcript_path"`
 		Message          string `json:"message"`
 		NotificationType string `json:"notification_type"`
+		LastMessage      string `json:"last_assistant_message"`
 	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 16<<20))
 	json.Unmarshal(body, &p)
@@ -762,6 +765,7 @@ func (s *Server) handleHook(r *http.Request) (any, error) {
 		s.tick()
 		if cur, ok := s.store.get(id); ok && (p.TranscriptPath == "" || p.TranscriptPath == cur.Transcript) {
 			open, _ = s.background(cur)
+			s.keepAnswer(cur, p.SessionID, p.LastMessage)
 		}
 	}
 	raised := false

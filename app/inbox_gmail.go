@@ -24,13 +24,17 @@ const gmailSystem = `You collect the emails that need the user's attention, for 
 3. Keep a thread only when a person asks something of the user in it: a direct ask, a question or a request addressed to them, or a thread that waits for their reply. Skip newsletters, notifications, promotions, receipts, calendar invites, mailing lists, automated or no-reply mail, and threads whose last message the user wrote.
 4. Decide from the search results where you can. Open a thread with get_thread only when they do not show what is asked, and open at most %d threads.
 5. Print at most %d items, one per thread, newest first, as one JSON object and nothing else, no code fence:
-{"items":[{"id":"<the Gmail thread id>","kind":"question" or "request" or "awaiting reply","title":"<the subject>","text":"<what is asked of the user, in at most 500 characters>","author":"<name of the sender of the last message>","time":"<RFC 3339 time of the last message>"}]}` + connectorRules
+{"items":[{"id":"<the Gmail thread id>","kind":"question" or "request" or "awaiting reply","title":"<the subject>","text":"<what is asked of the user, in at most 500 characters>","author":"<name of the sender of the last message>","time":"<RFC 3339 time of the last message>"}]}`
+
+const gmailPrefix = "mcp__claude_ai_Gmail__"
+
+var gmailRead = []string{"search_threads", "get_thread", "get_message", "list_labels"}
 
 var gmailRun = connectorRun{
 	source: "gmail",
 	label:  "Gmail",
-	prefix: "mcp__claude_ai_Gmail__",
-	read:   []string{"search_threads", "get_thread", "get_message", "list_labels"},
+	prefix: gmailPrefix,
+	read:   gmailRead,
 	write: []string{
 		"send_message", "reply", "forward", "create_draft", "update_draft", "delete_draft",
 		"trash_message", "trash_thread", "untrash_message", "untrash_thread",
@@ -38,7 +42,7 @@ var gmailRun = connectorRun{
 		"apply_sensitive_message_label", "apply_sensitive_thread_label", "create_label", "update_label", "delete_label",
 		"mark_message_spam", "mark_thread_spam", "unmark_message_spam", "unmark_thread_spam",
 	},
-	system: fmt.Sprintf(gmailSystem, gmailDays, gmailDays, gmailMaxOpen, gmailMaxItems, "Gmail", missingAnswer, "Emails"),
+	system: fmt.Sprintf(gmailSystem, gmailDays, gmailDays, gmailMaxOpen, gmailMaxItems) + connectorRules("Gmail", gmailPrefix, gmailRead, "Emails"),
 	prompt: "Collect my Gmail inbox.",
 }
 

@@ -21,23 +21,27 @@ const slackSystem = `You collect the Slack messages that ask something of the us
 1. Find the user's own Slack profile with slack_read_user_profile.
 2. Search for messages from the last %d hours that mention the user, and for direct messages to the user, with the Slack search tools. Skip messages the user wrote.
 3. Print at most %d items, newest first, as one JSON object and nothing else, no code fence:
-{"items":[{"kind":"mention" or "direct message","title":"<channel name or person, and the gist in a few words>","text":"<the message text, shortened to 500 characters>","author":"<display name of the sender>","url":"<the message permalink, https://...>","time":"<RFC 3339 time of the message>"}]}` + connectorRules
+{"items":[{"kind":"mention" or "direct message","title":"<channel name or person, and the gist in a few words>","text":"<the message text, shortened to 500 characters>","author":"<display name of the sender>","url":"<the message permalink, https://...>","time":"<RFC 3339 time of the message>"}]}`
+
+const slackPrefix = "mcp__claude_ai_Slack__"
+
+var slackRead = []string{
+	"slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
+	"slack_read_user_profile", "slack_search_users", "slack_search_channels",
+}
 
 var slackRun = connectorRun{
 	source: "slack",
 	label:  "Slack",
-	prefix: "mcp__claude_ai_Slack__",
-	read: []string{
-		"slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
-		"slack_read_user_profile", "slack_search_users", "slack_search_channels",
-	},
+	prefix: slackPrefix,
+	read:   slackRead,
 	write: []string{
 		"slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_add_reaction",
 		"slack_create_conversation", "slack_create_canvas", "slack_update_canvas",
 		"slack_create_list", "slack_update_list", "slack_add_list_record", "slack_update_list_record",
 		"slack_add_list_comment", "slack_update_list_comment", "slack_get_file_upload_url", "slack_complete_file_upload",
 	},
-	system: fmt.Sprintf(slackSystem, slackHours, slackMaxItems, "Slack", missingAnswer, "Message texts"),
+	system: fmt.Sprintf(slackSystem, slackHours, slackMaxItems) + connectorRules("Slack", slackPrefix, slackRead, "Message texts"),
 	prompt: "Collect my Slack inbox.",
 }
 

@@ -13,14 +13,14 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// lastLaunch is the argv of the last start of a fake claude that is not a headless run.
+// lastLaunch is the argv of the last start of the Gmail session's fake claude.
 func (e *env) lastLaunch() []string {
 	e.t.Helper()
 	data, _ := os.ReadFile(filepath.Join(e.fake, "argv.log"))
 	var last []string
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var argv []string
-		if json.Unmarshal([]byte(line), &argv) == nil && argv[0] == "claude" {
+		if json.Unmarshal([]byte(line), &argv) == nil && argv[0] == "claude" && strings.Contains(line, gmailRun.prefix) {
 			last = argv
 		}
 	}
@@ -39,8 +39,8 @@ func argOf(argv []string, name string) (string, bool) {
 func checkLimits(t *testing.T, argv []string) {
 	t.Helper()
 	want := map[string]string{
-		"--setting-sources": "", "--tools": "", "--permission-mode": "dontAsk", "--model": "sonnet",
-		"--allowedTools":    "mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_thread,mcp__claude_ai_Gmail__get_message,mcp__claude_ai_Gmail__list_labels",
+		"--setting-sources": "", "--tools": "ToolSearch", "--permission-mode": "dontAsk", "--model": "sonnet",
+		"--allowedTools":    "ToolSearch,mcp__claude_ai_Gmail__search_threads,mcp__claude_ai_Gmail__get_thread,mcp__claude_ai_Gmail__get_message,mcp__claude_ai_Gmail__list_labels",
 		"--disallowedTools": gmailRun.tools(gmailRun.write),
 		"--system-prompt":   gmailRun.system,
 	}
@@ -77,7 +77,7 @@ func TestIntegrationSession(t *testing.T) {
 	e.refreshInbox("gmail")
 	e.post("/api/inbox/tick", struct{}{})
 
-	c := e.waitFor("the first check", id, func(c convView) bool { return c.Status == statusIdle })
+	c := e.waitFor("the first check", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, gmailAnswer) })
 	if c.Integration != "gmail" || c.Title != "Gmail inbox" || c.Attention != "" || c.WaitingFor != "" || c.Unread || c.Group != inboxGroup {
 		t.Fatalf("a normal run should leave the session quiet: %+v", c.Conversation)
 	}
@@ -96,7 +96,7 @@ func TestIntegrationSession(t *testing.T) {
 	if p, _ := argOf(argv, "--"); !strings.HasPrefix(p, "Collect my Gmail inbox. Now is ") || slices.Contains(argv, "--resume") {
 		t.Fatalf("a run starts a fresh agent with its prompt: %v", argv)
 	}
-	if got := e.toolsRun(); !slices.Equal(got, []string{"mcp__claude_ai_Gmail__search_threads"}) {
+	if got := e.toolsRun(); !slices.Equal(got, []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads"}) {
 		t.Fatalf("tools run: %v", got)
 	}
 
@@ -105,7 +105,7 @@ func TestIntegrationSession(t *testing.T) {
 		e.asKonduktor("send", id, "use "+tool)
 		c = e.waitFor("the typed turn", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done" })
 	}
-	if got := e.toolsRun(); !slices.Equal(got, []string{"mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread"}) {
+	if got := e.toolsRun(); !slices.Equal(got, []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread"}) {
 		t.Fatalf("only the read tools may run, whatever is typed: %v", got)
 	}
 	refused := 0
@@ -140,7 +140,9 @@ func TestIntegrationSession(t *testing.T) {
 	// The next run clears the context: a fresh agent in a new transcript, the last one removed, its usage kept.
 	transcript := e.conv(id).Transcript
 	e.refreshInbox("gmail")
-	c = e.waitFor("the second check", id, func(c convView) bool { return c.Status == statusIdle && c.Transcript != transcript })
+	c = e.waitFor("the second check", id, func(c convView) bool {
+		return c.Status == statusIdle && c.Transcript != transcript && c.Usage != nil && c.Usage.Output == 350
+	})
 	argv = e.lastLaunch()
 	checkLimits(t, argv)
 	if s, _ := argOf(argv, "--session-id"); s == first || userTurns(c) != 1 {
