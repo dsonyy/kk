@@ -41,6 +41,10 @@ export type Conversation = {
   attention?: string;
   // Who has to act on an agent that stopped; empty while it works.
   waiting_for: "" | "user" | "conductor";
+  // The konduktor the session belongs to; empty for konduktors and kk's own inbox sessions.
+  konduktor?: string;
+  // The directory a konduktor other than the main one is responsible for.
+  scope?: string;
   // Why konduktor handed the agent to the user.
   escalation?: string;
   closed?: boolean;

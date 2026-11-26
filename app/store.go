@@ -61,6 +61,10 @@ type Conversation struct {
 	After string `yaml:"after,omitempty" json:"after,omitempty"`
 	// Worktree asks for a worktree of Dir when a queued conversation starts.
 	Worktree bool `yaml:"worktree,omitempty" json:"worktree,omitempty"`
+	// Owner is the konduktor that started the conversation, or that it was handed to. Empty for one the user started.
+	Owner string `yaml:"owner,omitempty" json:"-"`
+	// Scope is the directory a konduktor other than the main one is responsible for.
+	Scope string `yaml:"scope,omitempty" json:"scope,omitempty"`
 	// Integration is the inbox source the conversation checks for kk, such as gmail. kk starts its runs and limits its tools.
 	Integration string `yaml:"integration,omitempty" json:"integration,omitempty"`
 }
@@ -183,6 +187,19 @@ func (s *Store) list() []Conversation {
 		out = append(out, *c)
 	}
 	sort.Slice(out, func(i, j int) bool { return lastActive(out[i]).After(lastActive(out[j])) })
+	return out
+}
+
+// konduktors returns the open konduktors in no order. It copies only them, because every view of a session asks.
+func (s *Store) konduktors() []Conversation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Conversation
+	for _, c := range s.convs {
+		if c.Role == coordinatorID && !c.Closed {
+			out = append(out, *c)
+		}
+	}
 	return out
 }
 
