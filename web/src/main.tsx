@@ -17,7 +17,7 @@ import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import { Logs, reportErrors } from "./logs";
-import { ScheduleDialog, ScheduleIcon, scheduleText } from "./schedule";
+import { ScheduleDialog, TitleIcon, scheduleText } from "./schedule";
 import { Stats } from "./stats";
 import "./app.css";
 
@@ -296,11 +296,12 @@ function stateLabel(c: Conversation) {
   if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
   if (c.attention) return "Action required";
   if (c.waiting_for === "user") return c.status === "exited" ? "Exited · your turn" : "Your turn";
+  if (c.integration && c.status === "idle") return "Idle";
   return { starting: "Starting", working: "Working", background: "Background working", idle: "Your turn", exited: "Exited", queued: "Queued" }[c.status];
 }
 
 function Dot({ c }: { c: Conversation }) {
-  return <i class={`dot ${c.attention ? "attention" : c.sleeping ? "sleeping" : c.status} ${c.waiting_for}`} />;
+  return <i class={`dot ${c.attention ? "attention" : c.sleeping ? "sleeping" : c.status} ${c.waiting_for} ${c.integration ? "integration" : ""}`} />;
 }
 
 function attention(c: Conversation) {
@@ -360,7 +361,7 @@ function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: 
   return (
     <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <div class="tile-top">
-        <ScheduleIcon c={c} />
+        <TitleIcon c={c} />
         <div class="title">{c.title || "Untitled"}</div>
       </div>
       <ChainRefs chains={chains} id={c.id} />
@@ -696,12 +697,12 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
                 <Button label="Terminal" icon="terminal" class={showTerminal ? "small on" : "small"} onClick={() => setShowTerminal(true)} />
               </div>
             )}
-            {(exited || c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
+            {(exited || c.closed) && !(c.integration && c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
             <Controls c={c} reload={reload} />
-            {!side && !c.closed && !queued && (
+            {!side && !c.closed && !queued && !c.integration && (
               <Button label="Schedule" icon="clock" class={c.schedule ? "small on" : "small"} title="Resume the session with a prompt on set days and times" onClick={() => setScheduling(true)} />
             )}
-            {!side && !c.closed && (
+            {!side && !c.closed && !c.integration && (
               <Button
                 label={confirmClose ? "Confirm close" : "Close"}
                 icon="close"
@@ -749,7 +750,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
           <div class="feed-inner" ref={inner}>
             {queued && <Queued c={c} before={before} onShow={onShow} reload={reload} />}
             {c.events.length === 0 && !c.attention && !busy && !queued && <div class="empty">No messages yet.</div>}
-            <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length ? () => send(RETRY, []) : undefined} />
+            <Feed c={c} live={live.current} rewind={rewind} retry={c.status === "idle" && !sending.length && !c.integration ? () => send(RETRY, []) : undefined} />
             {c.queued.map((e, i) => (
               <div class="msg user queued" key={`q${i}`} title="The agent reads this message at its next step">
                 {e.text && <Markdown text={e.text} />}
@@ -947,6 +948,13 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
       attachments.setItems((cur) => [...files, ...cur]);
     }
   };
+  if (c.integration && c.closed) {
+    return (
+      <div class="composer">
+        <span class="muted">This source is switched off in Settings. Once it is on again, its next check reopens the session.</span>
+      </div>
+    );
+  }
   if (exited) {
     return (
       <div class="composer">
@@ -965,7 +973,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
         onValue={setText}
         skills={skills}
         attachments={attachments}
-        placeholder={c.role === COORDINATOR ? "Message the conductor" : "Reply to the agent, / for skills"}
+        placeholder={c.role === COORDINATOR ? "Message the conductor" : c.integration ? "Message the agent, it can only read" : "Reply to the agent, / for skills"}
         onEnter={(e) => {
           if (!e.shiftKey && !e.isComposing) {
             e.preventDefault();
@@ -973,7 +981,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
           }
         }}
       />
-      <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />
+      {!c.integration && <Button label="Attach" icon="file" title="Attach files, or paste or drop them" onClick={attachments.pick} />}
       <Button label="Send" icon="send" class="primary" disabled={attachments.uploading} onClick={send} />
     </div>
   );

@@ -92,6 +92,7 @@ button:has(.icon) { display: inline-flex; align-items: center; gap: 6px; }
 button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
 .dot.idle { background: var(--text-strong); }
+.dot.idle.integration { background: var(--text-dim); }
 .dot.attention { background: var(--warn-text); }
 .dot.conductor { background: none; box-shadow: inset 0 0 0 1px var(--text-strong); }
 .dot.attention.conductor { box-shadow: inset 0 0 0 1px var(--warn-text); }
@@ -166,6 +167,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile.on { border-color: var(--text-strong); background: var(--surface-2); }
 .tile-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .tile .schedule-icon { flex: none; width: 14px; height: 14px; margin-top: 3px; background: var(--schedule); }
+.tile-top .source-icon { margin-top: 3px; }
 .tile .title { color: var(--text-strong); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .tile .state.user { color: var(--text-strong); }

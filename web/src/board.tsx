@@ -1,7 +1,7 @@
 import { harnessLabel, type Conversation } from "./api";
 import { arrange, ChainLinks, ChainRefs } from "./chain";
 import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
-import { placedAt, ScheduleIcon } from "./schedule";
+import { placedAt, TitleIcon } from "./schedule";
 
 type Column = { project: string; group: string; sessions: Conversation[] };
 
@@ -100,14 +100,14 @@ export function Board({ list, all, sort, empty, folded, onFold, onOpen }: BoardP
                           return (
                             <li key={c.id} class={`tile ${cls}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
                               <div class="tile-top">
-                                <ScheduleIcon c={c} />
+                                <TitleIcon c={c} />
                                 <div class="title">{c.title || "Untitled"}</div>
                               </div>
                               <ChainRefs chains={chains} id={c.id} />
                               <div class="meta">
                                 <span>{harnessLabel(c.harness)}</span>
                                 <span class="state">
-                                  <i class={`dot ${cls}`} />
+                                  <i class={`dot ${cls} ${c.integration ? "integration" : ""}`} />
                                   {label}
                                 </span>
                               </div>

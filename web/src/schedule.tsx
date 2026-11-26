@@ -1,12 +1,15 @@
 import { useState } from "preact/hooks";
 import { act, api, type Conversation } from "./api";
 import { Button, Check, Field, Scope } from "./mnemonic";
+import { SourceIcon } from "./inbox";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // The week starts on Monday.
 const WEEK = [1, 2, 3, 4, 5, 6, 0];
 
-export function ScheduleIcon({ c }: { c: Conversation }) {
+// The icon in front of a session's title: its inbox source for an integration, a clock for a scheduled session.
+export function TitleIcon({ c }: { c: Conversation }) {
+  if (c.integration) return <SourceIcon name={c.integration} />;
   if (!c.schedule) return null;
   return <i class="icon icon-clock schedule-icon" role="img" aria-label="Scheduled" title={`Scheduled: ${scheduleText(c)}`} />;
 }

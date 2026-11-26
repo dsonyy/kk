@@ -16,6 +16,8 @@ export type Attachment = { name: string; url: string; path?: string };
 export type Conversation = {
   id: string;
   role?: string;
+  // The inbox source the session checks for kk, such as gmail. kk starts its runs and limits its tools.
+  integration?: string;
   harness: string;
   model?: string;
   dir: string;

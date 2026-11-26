@@ -16,7 +16,7 @@ export function useRewind(c: Conversation): Rewind | undefined {
       () => (harnesses = undefined),
     );
   }, [c.harness]);
-  return c.status === "idle" && !c.attention ? rewind : undefined;
+  return c.status === "idle" && !c.attention && !c.integration ? rewind : undefined;
 }
 
 type Props = { id: string; index: number; event: Event; rewind?: Rewind; children: ComponentChildren };
