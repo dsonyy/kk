@@ -1218,10 +1218,10 @@ func TestWhoseTurn(t *testing.T) {
 
 	id := e.asKonduktor("new", "claude", "-C", e.work, "hello")
 	c := e.waitFor("a stop that waits for the konduktor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
-	if ls := e.mustKK("ls"); !strings.Contains(ls, "idle             konduktor") {
+	if ls := e.mustKK("ls"); !strings.Contains(ls, id+"  idle             coordinator") {
 		t.Fatalf("ls: %s", ls)
 	}
-	if show := e.mustKK("show", id); !strings.Contains(show, "Waiting for the konduktor") {
+	if show := e.mustKK("show", id); !strings.Contains(show, "Waiting for konduktor main (coordinator)") {
 		t.Fatalf("show: %s", show)
 	}
 	if out, err := e.kk("escalate", id, " "); err == nil {

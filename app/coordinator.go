@@ -89,7 +89,7 @@ The source code is in {{SOURCE}} (Go server in app/, web client in web/, read AG
 const konduktorsPrompt = `
 ## Konduktors
 
-There is one konduktor per directory, started when the user first writes to it or hands a session of that directory over. {{SELF}} Your tmux window is "{{ID}}".
+This section overrides the text above where they differ. There is one konduktor per directory, started when the user first writes to it or hands a session of that directory over. {{SELF}} Your tmux window is "{{ID}}".
 
 The other konduktors when this prompt was written (kk ls lists the current ones first):
 {{OTHERS}}
@@ -124,7 +124,8 @@ func (s *Server) konduktors() []Conversation {
 }
 
 // konduktorOf names the konduktor a session belongs to: the open one that started it or was handed it, else the one of
-// its directory, else the main one. Konduktors and kk's own inbox sessions belong to nobody.
+// its directory, else the main one. A session an agent drove before konduktors had owners is the main one's. Konduktors
+// and kk's own inbox sessions belong to nobody.
 func (s *Server) konduktorOf(c Conversation, ks []Conversation) string {
 	if c.Role != "" || c.Integration != "" || !s.cfg().coordinator() {
 		return ""
@@ -133,6 +134,9 @@ func (s *Server) konduktorOf(c Conversation, ks []Conversation) string {
 		if k.ID == c.Owner {
 			return k.ID
 		}
+	}
+	if c.Owner == "" && c.ByAgent {
+		return coordinatorID
 	}
 	for _, k := range ks {
 		if k.Scope != "" && k.Scope == c.Project() {
@@ -237,6 +241,9 @@ func (s *Server) launchKonduktor(k Conversation, prompt string) error {
 // konduktorFor returns the konduktor of dir, the main one for no directory. It starts or reopens the konduktor when it does
 // not run, with prompt as its first message, and tells the others when one starts.
 func (s *Server) konduktorFor(dir, prompt string) (Conversation, error) {
+	// Two first messages to one directory start one konduktor.
+	s.starting.Lock()
+	defer s.starting.Unlock()
 	if !s.cfg().coordinator() {
 		return Conversation{}, fail(409, "konduktors are switched off in Settings")
 	}
@@ -288,7 +295,8 @@ func (s *Server) tellKonduktors(k Conversation, line string) {
 	defer s.mu.Unlock()
 	for _, o := range s.konduktors() {
 		if o.ID != k.ID {
-			s.roster[o.ID] = append(s.roster[o.ID], "- "+line+" kk ls lists every konduktor.")
+			// A konduktor started before there were several has its rules only in the file.
+			s.roster[o.ID] = append(s.roster[o.ID], fmt.Sprintf("- %s kk ls lists every konduktor; the section Konduktors of %s says how konduktors work together.", line, s.konduktorPrompt(o.ID)))
 		}
 	}
 }

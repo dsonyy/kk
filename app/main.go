@@ -214,7 +214,11 @@ func runCLI(cmd string, args []string) error {
 			if k.ID == coordinatorID {
 				scope = "every directory without its own konduktor"
 			}
-			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s (%s)\n", k.ID, k.Status, "-", "konduktor", k.Model, lastActive(k.Conversation).Format("01-02 15:04"), konduktorName(k.Conversation), scope)
+			model := k.Model
+			if model == "" {
+				model = "default"
+			}
+			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s (%s)\n", k.ID, k.Status, "-", "konduktor", model, lastActive(k.Conversation).Format("01-02 15:04"), konduktorName(k.Conversation), scope)
 		}
 		for _, c := range list {
 			state := c.Status

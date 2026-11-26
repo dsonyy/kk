@@ -49,6 +49,8 @@ type Server struct {
 	// handovers holds the conversations handed to a konduktor, until it hears of them, with who handed them over: the
 	// user, or the konduktor that gave it away.
 	handovers map[string]string
+	// starting runs one start of a konduktor at a time.
+	starting sync.Mutex
 	// roster holds, per konduktor, the lines about other konduktors that started or closed, until it hears of them.
 	roster map[string][]string
 	// answers holds the answer of the current run of each integration, by conversation.
@@ -600,14 +602,22 @@ func byUser(r *http.Request) bool {
 	return r.Header.Get(agentHeader) == ""
 }
 
-// driven records who acted on the conversation last, so its next stop waits for them.
+// driven records who acted on the conversation last, so its next stop waits for them. A session without a konduktor
+// becomes the one of the agent that takes it over.
 func (s *Server) driven(id string, r *http.Request) {
 	agent := !byUser(r)
+	owner := ""
+	if agent {
+		owner = s.callerKonduktor(r)
+	}
 	if _, changed := s.store.update(id, func(c *Conversation) bool {
-		if c.ByAgent == agent {
+		if c.ByAgent == agent && (c.Owner != "" || owner == "") {
 			return false
 		}
 		c.ByAgent = agent
+		if c.Owner == "" {
+			c.Owner = owner
+		}
 		return true
 	}); changed {
 		s.publish(id)
@@ -792,6 +802,9 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 	if c.Role != "" {
 		s.writePrompts()
 		s.tellKonduktors(c, fmt.Sprintf("konduktor %s %q for %s was closed; its sessions go to the konduktor of their directory or to the main konduktor.", c.ID, konduktorName(c), c.Scope))
+		s.mu.Lock()
+		delete(s.roster, c.ID)
+		s.mu.Unlock()
 	}
 	s.publish(c.ID)
 	return map[string]bool{"ok": true}, nil

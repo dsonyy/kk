@@ -202,3 +202,100 @@ func TestSecondKonduktorCompacts(t *testing.T) {
 	e.mustKK("send", k, "big context")
 	e.waitFor("compaction", k, func(c convView) bool { return hasEvent(c, kindNote, "Conversation compacted") })
 }
+
+func TestOwnerlessSessionStaysWithTheMainKonduktor(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	alpha := filepath.Join(e.work, "alpha")
+	os.MkdirAll(alpha, 0o755)
+	id := e.asKonduktor("new", "claude", "-C", alpha, "from before the owners")
+	e.waitFor("idle", id, func(c convView) bool { return c.Status == statusIdle })
+	// A session the main konduktor started before kk recorded owners.
+	e.stop()
+	path := filepath.Join(e.home, "conversations", id+".yaml")
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "owner: coordinator\n") {
+		t.Fatalf("no owner recorded:\n%s", data)
+	}
+	os.WriteFile(path, []byte(strings.Replace(string(data), "owner: coordinator\n", "", 1)), 0o600)
+	e.start()
+	e.startKonduktor(alpha, "hello alpha")
+	if c := e.conv(id); c.Konduktor != coordinatorID {
+		t.Fatalf("the main konduktor's session went to %q", c.Konduktor)
+	}
+	// A session the user started goes to the konduktor of its directory once an agent of that konduktor takes it over.
+	mine := e.mustKK("new", "claude", "-C", alpha, "the user's own")
+	k := e.konduktors()[1].ID
+	e.waitFor("idle", mine, func(c convView) bool { return c.Status == statusIdle })
+	e.mustAs(k, "send", mine, "taken over")
+	e.waitFor("taken over", mine, func(c convView) bool { return c.Konduktor == k && c.WaitingFor == waitingKonduktor })
+}
+
+func TestKonduktorPanel(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	ids := e.dirSessions()
+	alpha := filepath.Join(e.work, "alpha")
+	// Read sessions leave the tab of alpha to its konduktor.
+	for _, title := range []string{"Export invoices", "Tune the ranking"} {
+		e.post("/api/conversations/"+ids[title]+"/seen", map[string]string{})
+	}
+	p := e.openPage(1600, 900)
+	head := `document.querySelector(".side-panel .konduktor-name")?.textContent`
+	// All shows the main konduktor.
+	p.until(head + ` === "konduktormain"`)
+	p.shot("konduktor-all")
+
+	// A directory without a konduktor offers to start one with the first message.
+	p.dirTab("alpha")
+	p.until(`document.querySelector(".side-panel .konduktor-hint")?.textContent === "The konduktor of alpha starts with your first message."`)
+	p.until(head + ` === "konduktoralpha"`)
+	p.eval(`(() => {
+		const area = document.querySelector(".side-panel textarea")
+		Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(area, "hello alpha")
+		area.dispatchEvent(new Event("input", { bubbles: true }))
+		area.focus()
+	})()`, nil)
+	p.shot("konduktor-start")
+	p.press("Enter", 13, "\r")
+	p.until(`[...document.querySelectorAll(".side-panel .msg.assistant")].some((m) => m.textContent.includes("echo: hello alpha"))`)
+	ks := e.konduktors()
+	if len(ks) != 2 || ks[1].Scope != alpha {
+		t.Fatalf("konduktors: %+v", ks)
+	}
+	k := ks[1].ID
+	p.shot("konduktor-alpha")
+
+	// It follows the directory, unless pinned.
+	p.dirTab("beta")
+	p.until(head + ` === "konduktorbeta" && document.querySelector(".side-panel .konduktor-hint")`)
+	p.dirTab("All")
+	p.until(head + ` === "konduktormain"`)
+	p.click(`document.querySelector(".side-panel .konduktor-name")`)
+	p.until(`document.querySelectorAll(".dir-menu .dir-item").length === 2`)
+	if got := p.texts(".dir-menu .dir-item .mono"); len(got) != 2 || got[0] != "main" || got[1] != "alpha" {
+		t.Fatalf("konduktor menu: %q", got)
+	}
+	p.shot("konduktor-menu")
+	p.click(`document.querySelectorAll(".dir-menu .dir-item")[1]`)
+	p.until(head + ` === "konduktoralpha" && document.querySelector(".side-panel .konduktor-pick .pin.on")`)
+	p.dirTab("beta")
+	time.Sleep(300 * time.Millisecond)
+	p.until(head + ` === "konduktoralpha"`)
+
+	// A konduktor that wrote while another is shown marks its directory.
+	p.click(`document.querySelector(".side-panel .konduktor-pick .pin")`)
+	p.until(head + ` === "konduktorbeta"`)
+	p.until(`![...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
+	e.mustKK("send", k, "ping")
+	p.until(`[...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
+	p.shot("konduktor-unread")
+	p.dirTab("alpha")
+	p.until(`![...document.querySelectorAll("nav.tabs .dirs .tab.unread")].some((a) => a.textContent === "alpha")`)
+	if c := e.conv(k); c.Unread {
+		t.Fatal("the konduktor shown is still unread")
+	}
+
+	// Closing it from the panel brings back the start.
+	p.click(`[...document.querySelectorAll(".side-panel .conv-head button")].find((b) => b.textContent === "Close")`)
+	p.click(`[...document.querySelectorAll(".side-panel .conv-head button")].find((b) => b.textContent === "Confirm close")`)
+	p.until(`document.querySelector(".side-panel .konduktor-hint")`)
+}
