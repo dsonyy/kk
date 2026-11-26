@@ -476,8 +476,9 @@ func (s *Server) launch(c *Conversation, resume bool, prompt string) error {
 		// A claude.ai connector gets this long to connect; the agent waits for it with ToolSearch.
 		env["MCP_CONNECT_TIMEOUT_MS"] = "30000"
 	}
-	s.opened.Store(c.ID, time.Time{})
-	defer s.opened.Store(c.ID, time.Now())
+	id := c.ID
+	s.opened.Store(id, time.Time{})
+	defer func() { s.opened.Store(id, time.Now()) }()
 	alive, _ := windows()
 	if _, ok := alive[c.Window]; ok && c.Window != "" {
 		err = respawnWindow(c.Window, c.Dir, env, argv)
