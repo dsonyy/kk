@@ -3,7 +3,7 @@ import { render } from "preact";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { act, api, flash, harnessLabel, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
+import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Load } from "./load";
@@ -16,10 +16,11 @@ import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import { Logs, reportErrors } from "./logs";
+import { Stats } from "./stats";
 import "./app.css";
 
 const COORDINATOR = "coordinator";
-const tabs = ["Agents", "Sessions", "Inbox", "Logs", "Tmux", "Settings"] as const;
+const tabs = ["Agents", "Sessions", "Inbox", "Stats", "Logs", "Tmux", "Settings"] as const;
 
 reportErrors();
 
@@ -197,6 +198,7 @@ function App() {
       <div class="workspace">
         {tab === "Settings" && <SettingsView />}
         {tab === "Inbox" && <Inbox onStart={create} />}
+        {tab === "Stats" && <Stats />}
         {tab === "Logs" && <Logs />}
         {tab === "Tmux" && (
           <main class="tmux">
@@ -349,7 +351,9 @@ function Tile({ c, on, onOpen }: { c: Conversation; on: boolean; onOpen: () => v
         </span>
       </div>
       <div class="meta">
-        <span>Created {when(c.created)}</span>
+        <span title={usageTitle(c.usage, c.harness)}>
+          {usageLabel(c.usage)}
+        </span>
         <span>Last {when(c.last_message)}</span>
       </div>
     </li>
