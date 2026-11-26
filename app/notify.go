@@ -65,7 +65,7 @@ func shorten(s string, max int) string { return firstLine(strings.Join(strings.F
 
 // observe compares c with what the notifier last knew and queues the events the conductor should hear about.
 // The first tick only takes note: a restart is no news.
-func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
+func (s *Server) observe(c Conversation, transcript bool, chain bool, now time.Time) {
 	if c.Role == coordinatorID {
 		return
 	}
@@ -101,16 +101,18 @@ func (s *Server) observe(c Conversation, transcript bool, now time.Time) {
 	if s.ticks == 1 {
 		w.raises = raises
 	}
+	// The conductor owns the handoff to queued successors, also of an agent that waits for the user.
+	mine := conductorsTurn(c)
 	var reason string
 	switch {
-	case c.Closed || !conductorsTurn(c):
-	case attention && (!w.attention || raises > w.raises):
+	case c.Closed || !mine && !chain:
+	case mine && attention && (!w.attention || raises > w.raises):
 		reason = "needs action"
 	case c.Status == statusExited && prev.Status != statusExited && prev.Status != "":
 		reason = "exited without being stopped"
 	case c.TurnEnded.After(prev.TurnEnded) && c.Status == statusIdle && !attention:
 		reason = "finished its turn"
-	case c.Status == statusWorking && !attention && !w.stalled && now.Sub(w.stirred) >= stall:
+	case mine && c.Status == statusWorking && !attention && !w.stalled && now.Sub(w.stirred) >= stall:
 		w.stalled = true
 		reason = fmt.Sprintf("working with no hook, transcript or screen change for %s", stall.Round(time.Second))
 	}
@@ -154,11 +156,14 @@ func (s *Server) flushNotices(now time.Time) {
 	slices.SortFunc(ids, func(a, b string) int { return s.notices[a].at.Compare(s.notices[b].at) })
 	lines := []string{notifyMarker}
 	var told []string
+	queued := s.queued()
 	for _, id := range ids {
 		c, ok := s.store.get(id)
 		n := s.notices[id]
-		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer news.
-		if !ok || c.Closed || !conductorsTurn(c) {
+		// An attention that someone has dealt with meanwhile, or an agent the user took over or got escalated, is no longer
+		// news, unless queued successors wait for it.
+		next := queued[id]
+		if !ok || c.Closed && n.reason != closedReason || !conductorsTurn(c) && len(next) == 0 {
 			continue
 		}
 		if n.reason == "needs action" && c.Attention == "" {
@@ -181,6 +186,9 @@ func (s *Server) flushNotices(now time.Time) {
 		}
 		if len(parts) == 0 {
 			continue
+		}
+		if len(next) > 0 {
+			parts = append(parts, chainNote(next))
 		}
 		line := fmt.Sprintf("- %s %q (%s): %s", id, firstLine(c.Title, 80), c.Status, strings.Join(parts, "; "))
 		lines = append(lines, line+". Look: kk screen "+id)

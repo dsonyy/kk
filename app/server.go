@@ -111,6 +111,8 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
 	api("POST /api/conversations/{id}/group", s.handleSetGroup)
+	api("POST /api/conversations/{id}/start", s.handleStart)
+	api("POST /api/conversations/{id}/prompt", s.handlePrompt)
 	api("GET /api/groups", s.handleGroups)
 	api("POST /api/hook/{id}/{event}", s.handleHook)
 	api("GET /api/harnesses", func(*http.Request) (any, error) { return harnesses(), nil })
@@ -290,6 +292,8 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		Group string `json:"group"`
 		// Conductor hands a conversation the user starts to the conductor, as if the conductor had started it.
 		Conductor bool `json:"conductor"`
+		// After queues the conversation behind another one. It waits with its prompt until kk start.
+		After string `json:"after"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -311,6 +315,9 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 	now := time.Now()
 	byAgent := !byUser(r) || in.Conductor
 	if in.Session != "" {
+		if in.After != "" {
+			return nil, fail(400, "an earlier session resumes now and cannot wait for another")
+		}
 		if in.Worktree {
 			return nil, fail(400, "an earlier session resumes in its own directory, not in a new worktree")
 		}
@@ -340,6 +347,14 @@ func (s *Server) handleCreate(r *http.Request) (any, error) {
 		return nil, fail(400, "prompt is empty")
 	}
 	c := Conversation{ID: newID(), Harness: in.Harness, Model: in.Model, Dir: dir, Prompt: in.Prompt, Title: firstLine(in.Prompt, 80), Created: now, Seen: now, ByAgent: byAgent}
+	if in.After != "" {
+		c.Group = s.groupName(c.Project(), in.Group)
+		c, err := s.queue(c, in.After, in.Worktree)
+		if err != nil {
+			return nil, err
+		}
+		return s.view(c, false), nil
+	}
 	if in.Worktree {
 		c.Repo = dir
 		if c.Dir, err = addWorktree(dir, worktreeBranch(c.Title, c.ID)); err != nil {
@@ -422,6 +437,9 @@ func (s *Server) handleSend(r *http.Request) (any, error) {
 	}
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, fail(400, "text is empty")
+	}
+	if c.Status == statusQueued {
+		return nil, fail(409, "the session is queued, start it first")
 	}
 	if !s.alive(c) {
 		return nil, fail(409, "the agent is not running, resume it first")
@@ -555,6 +573,17 @@ func (s *Server) handleResume(r *http.Request) (any, error) {
 	if s.alive(c) {
 		return nil, fail(409, "the agent is already running")
 	}
+	if c.Status == statusQueued {
+		if !c.Closed {
+			return nil, fail(409, "the session is queued, start it instead")
+		}
+		c, _ = s.store.update(c.ID, func(c *Conversation) bool {
+			c.Closed, c.ClosedAt = false, time.Time{}
+			return true
+		})
+		s.publish(c.ID)
+		return s.view(c, false), nil
+	}
 	s.driven(c.ID, r)
 	c, _ = s.store.get(c.ID)
 	if err := s.launch(&c, s.canResume(c), ""); err != nil {
@@ -587,9 +616,13 @@ func (s *Server) handleClose(r *http.Request) (any, error) {
 		killWindow(c.Window)
 	}
 	s.store.update(c.ID, func(c *Conversation) bool {
-		c.Closed, c.ClosedAt, c.Status, c.Attention = true, time.Now(), statusExited, ""
+		c.Closed, c.ClosedAt, c.Attention = true, time.Now(), ""
+		if c.Status != statusQueued {
+			c.Status = statusExited
+		}
 		return true
 	})
+	s.closeNotice(c.ID)
 	s.publish(c.ID)
 	return map[string]bool{"ok": true}, nil
 }
@@ -809,6 +842,7 @@ func (s *Server) tick() {
 	now := time.Now()
 	startTimeout := s.cfg().startTimeout()
 	notify := s.cfg().coordinator()
+	queued := s.queued()
 	for _, c := range s.store.list() {
 		if c.Closed {
 			continue
@@ -871,7 +905,7 @@ func (s *Server) tick() {
 		}
 		if notify {
 			cur, _ := s.store.get(c.ID)
-			s.observe(cur, events != nil, now)
+			s.observe(cur, events != nil, len(queued[c.ID]) > 0, now)
 		}
 		if c.Role == coordinatorID {
 			s.maybeCompact(c, now)

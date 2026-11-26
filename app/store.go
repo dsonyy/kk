@@ -49,6 +49,10 @@ type Conversation struct {
 	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
 	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
 	Group string `yaml:"group,omitempty" json:"group,omitempty"`
+	// After is the conversation this one follows in a chain. A queued conversation starts only once it has finished.
+	After string `yaml:"after,omitempty" json:"after,omitempty"`
+	// Worktree asks for a worktree of Dir when a queued conversation starts.
+	Worktree bool `yaml:"worktree,omitempty" json:"worktree,omitempty"`
 }
 
 const (
@@ -58,7 +62,9 @@ const (
 	// statusBackground is an agent whose turn ended while a background task it started still runs. The harness starts
 	// the next turn by itself when the task ends, so nobody has to act.
 	statusBackground = "background"
-	statusExited   = "exited"
+	statusExited     = "exited"
+	// statusQueued is a conversation prepared with its prompt that waits for kk start. No agent runs yet.
+	statusQueued = "queued"
 )
 
 const (
@@ -233,6 +239,9 @@ func logChange(old, c *Conversation) {
 	}
 	if old.Group != c.Group {
 		log.Printf("conversation %s: group changed", c.ID)
+	}
+	if old.After != c.After {
+		log.Printf("conversation %s: after %s", c.ID, c.After)
 	}
 	if old.Session != c.Session && c.Session != "" {
 		log.Printf("conversation %s: session %s", c.ID, c.Session)
