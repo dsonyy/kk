@@ -204,6 +204,9 @@ func runCLI(cmd string, args []string) error {
 		}
 		for _, c := range list {
 			state := c.Status
+			if c.Sleeping {
+				state = "sleeping"
+			}
 			if c.Attention != "" {
 				state = "ACTION REQUIRED"
 			}

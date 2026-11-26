@@ -18,6 +18,7 @@ import { SettingsView } from "./settings";
 import { Button, Check, Field, Scope } from "./mnemonic";
 import { Terminal } from "./terminal";
 import { Logs, reportErrors } from "./logs";
+import { ScheduleDialog, ScheduleIcon, scheduleText } from "./schedule";
 import { Stats } from "./stats";
 import "./app.css";
 
@@ -292,6 +293,7 @@ function App() {
 
 function stateLabel(c: Conversation) {
   if (c.closed) return "Closed";
+  if (c.sleeping) return "Sleeping";
   if (c.status === "queued") return "Queued";
   if (c.waiting_for === "conductor") return c.status === "exited" ? "Exited · conductor's turn" : "Conductor's turn";
   if (c.attention) return "Action required";
@@ -300,16 +302,17 @@ function stateLabel(c: Conversation) {
 }
 
 function Dot({ c }: { c: Conversation }) {
-  return <i class={`dot ${c.attention ? "attention" : c.status} ${c.waiting_for}`} />;
+  return <i class={`dot ${c.attention ? "attention" : c.sleeping ? "sleeping" : c.status} ${c.waiting_for}`} />;
 }
 
 function attention(c: Conversation) {
-  return c.attention ? (c.waiting_for === "conductor" ? "warn" : "attention") : "";
+  if (c.attention) return c.waiting_for === "conductor" ? "warn" : "attention";
+  return c.run_done ? "called" : "";
 }
 
 // A collapsed group speaks for the sessions it hides: one that needs the user first, then one at work, then one the conductor holds.
 function loudness(c: Conversation) {
-  if (c.waiting_for === "user") return c.attention ? 0 : 1;
+  if (c.waiting_for === "user") return c.attention || c.run_done ? 0 : 1;
   if (c.status === "working" || c.status === "starting" || c.status === "background") return 2;
   return c.waiting_for === "conductor" ? 3 : 4;
 }
@@ -358,7 +361,10 @@ function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: 
   const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
   return (
     <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
-      <div class="title">{c.title || "Untitled"}</div>
+      <div class="tile-top">
+        <ScheduleIcon c={c} />
+        <div class="title">{c.title || "Untitled"}</div>
+      </div>
       <ChainRefs chains={chains} id={c.id} />
       {c.escalation && <div class="reason">{c.escalation}</div>}
       <div class="meta">
@@ -582,6 +588,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
   // Closing kills the window, so a closed session has no terminal to show.
   const showTerminal = terminal && !c.closed;
   const [confirmClose, setConfirmClose] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [pending, setPending] = useState<Pending[]>([]);
   const screen = useScreen(c.id, !!c.attention);
   const feed = useRef<HTMLDivElement>(null);
@@ -693,6 +700,9 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
             )}
             {(exited || c.closed) && <Button label={c.closed ? "Reopen" : "Resume"} icon="play" class="small primary" onClick={resume} />}
             <Controls c={c} reload={reload} />
+            {!side && !c.closed && !queued && (
+              <Button label="Schedule" icon="clock" class={c.schedule ? "small on" : "small"} title="Resume the session with a prompt on set days and times" onClick={() => setScheduling(true)} />
+            )}
             {!side && !c.closed && (
               <Button
                 label={confirmClose ? "Confirm close" : "Close"}
@@ -710,6 +720,13 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
               {stateLabel(c)}
             </span>
             <span>{harnessLabel(c.harness)} · {c.model || "default"}</span>
+            {c.schedule && (
+              <span class="schedule-meta" title={c.schedule.prompt}>
+                <Icon name="clock" />
+                {scheduleText(c)}
+                {c.next_run && ` · next ${when(c.next_run)}`}
+              </span>
+            )}
             {c.context_tokens > 0 && <span>{Math.round(c.context_tokens / 1000)}k context</span>}
             {!side && (
               <span class="dir mono" title={c.dir}>
@@ -801,6 +818,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, onSh
           </div>
         )}
         {!showTerminal && !queued && <Composer c={c} exited={exited || !!c.closed} onResume={resume} onSend={send} insert={composer} />}
+        {scheduling && <ScheduleDialog c={c} onClose={() => setScheduling(false)} />}
       </Scope>
     </Tag>
   );
@@ -934,7 +952,7 @@ function Composer({ c, exited, onResume, onSend, insert }: ComposerProps) {
   if (exited) {
     return (
       <div class="composer">
-        <span class="muted" style="flex:1;align-self:center">{c.closed ? "The session is closed." : "The agent has exited."}</span>
+        <span class="muted" style="flex:1;align-self:center">{c.closed ? "The session is closed." : c.sleeping ? "The agent sleeps after a long time without activity." : "The agent has exited."}</span>
         <Button label={c.closed ? "Reopen session" : "Resume session"} icon="play" class="primary" onClick={onResume} />
       </div>
     );
