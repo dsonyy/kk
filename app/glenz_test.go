@@ -24,20 +24,23 @@ type browser struct {
 	id  int
 }
 
+// chrome is a headless Chrome or Chromium with the given flags. On macOS Chrome lives in its app bundle, off PATH, and
+// a symlink to it fails to start. Without a mock keychain it asks the user for the macOS keychain.
+func chrome(t *testing.T, flags ...string) *exec.Cmd {
+	t.Helper()
+	for _, name := range []string{"google-chrome", "chromium", "chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return exec.Command(path, append([]string{"--headless=new", "--remote-debugging-port=0", "--no-first-run", "--use-mock-keychain", "--password-store=basic"}, flags...)...)
+		}
+	}
+	t.Skip("needs Chrome")
+	return nil
+}
+
 // newBrowser starts headless Chrome with the given flags and connects to its first page over the DevTools protocol.
 func newBrowser(t *testing.T, flags ...string) *browser {
 	t.Helper()
-	bin := ""
-	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
-		if path, err := exec.LookPath(name); err == nil {
-			bin = path
-			break
-		}
-	}
-	if bin == "" {
-		t.Skip("no Chrome or Chromium on PATH")
-	}
-	cmd := exec.Command(bin, append([]string{"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + t.TempDir(), "--no-first-run", "about:blank"}, flags...)...)
+	cmd := chrome(t, append([]string{"--user-data-dir=" + t.TempDir(), "about:blank"}, flags...)...)
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
