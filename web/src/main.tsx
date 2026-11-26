@@ -245,7 +245,7 @@ function App() {
               );
             })}
           </div>
-          <Glenz />
+          <Glenz page={`${tab} ${conductor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
           <Load />
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>

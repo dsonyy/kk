@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"os/exec"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +24,8 @@ type browser struct {
 	id  int
 }
 
-// newBrowser starts headless Chrome and connects to its first page over the DevTools protocol.
-func newBrowser(t *testing.T) *browser {
+// newBrowser starts headless Chrome with the given flags and connects to its first page over the DevTools protocol.
+func newBrowser(t *testing.T, flags ...string) *browser {
 	t.Helper()
 	bin := ""
 	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
@@ -35,7 +37,7 @@ func newBrowser(t *testing.T) *browser {
 	if bin == "" {
 		t.Skip("no Chrome or Chromium on PATH")
 	}
-	cmd := exec.Command(bin, "--headless=new", "--remote-debugging-port=0", "--user-data-dir="+t.TempDir(), "--no-first-run", "about:blank")
+	cmd := exec.Command(bin, append([]string{"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + t.TempDir(), "--no-first-run", "about:blank"}, flags...)...)
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -133,41 +135,88 @@ func (b *browser) open(url string, width, height int, reducedMotion bool) {
 	b.waitFor("the sidebar", `!!document.querySelector("aside.sidebar .load")`)
 }
 
-// glenzDraws counts the frames the canvas draws, as every frame starts by clearing it, and the animation frames the page asks for.
-const glenzDraws = `window.draws = 0;
+// glenzProbe counts the frames the canvas draws, the animation frames the page asks for and the page maps it builds, one
+// text range each.
+const glenzProbe = `window.draws = 0;
 window.frames = 0;
-const request = window.requestAnimationFrame;
-window.requestAnimationFrame = (f) => (window.frames++, request(f));
-const clear = CanvasRenderingContext2D.prototype.clearRect;
-CanvasRenderingContext2D.prototype.clearRect = function (...args) {
-  if (this.canvas.classList.contains("glenz")) window.draws++;
-  return clear.apply(this, args);
-};`
+window.maps = 0;
+const count = (proto, name, counter, mine) => {
+  const f = proto[name];
+  proto[name] = function (...args) {
+    if (mine(this)) window[counter]++;
+    return f.apply(this, args);
+  };
+};
+const glenz = (ctx) => ctx.canvas.classList.contains("glenz");
+count(CanvasRenderingContext2D.prototype, "clearRect", "draws", glenz);
+count(WebGL2RenderingContext.prototype, "drawArrays", "draws", glenz);
+count(Document.prototype, "createRange", "maps", () => true);
+count(window, "requestAnimationFrame", "frames", () => true);`
 
-func (b *browser) countIn(counter string, d time.Duration) int {
+func (b *browser) counter(name string) int {
 	b.t.Helper()
-	var before, after int
-	b.eval("window."+counter, &before)
+	var n int
+	b.eval("window."+name, &n)
+	return n
+}
+
+func (b *browser) countIn(name string, d time.Duration) int {
+	b.t.Helper()
+	before := b.counter(name)
 	time.Sleep(d)
-	b.eval("window."+counter, &after)
-	return after - before
+	return b.counter(name) - before
 }
 
-func (b *browser) glenzPixels() string {
+func (b *browser) tab(name string) {
 	b.t.Helper()
-	var sum string
-	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-		let lit = 0, hash = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) { lit++; hash = (hash * 31 + d[i - 3] + i) | 0; } return lit + ":" + hash; })()`, &sum)
-	return sum
+	b.eval(`[...document.querySelectorAll(".tabs .tab")].find((t) => t.textContent.trim() === "`+name+`").click(), true`, new(bool))
+	time.Sleep(200 * time.Millisecond)
 }
 
-func TestGlenz(t *testing.T) {
+// glenzShot returns a screenshot of the canvas and how many of its pixels differ from the sidebar behind it.
+func (b *browser) glenzShot() (image.Image, int) {
+	b.t.Helper()
+	var box struct{ X, Y, Width, Height float64 }
+	b.eval(`(() => { const r = document.querySelector("canvas.glenz").getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; })()`, &box)
+	var shot struct{ Data []byte }
+	json.Unmarshal(b.call("Page.captureScreenshot", map[string]any{"format": "png", "clip": map[string]any{"x": box.X, "y": box.Y, "width": box.Width, "height": box.Height, "scale": 1}}), &shot)
+	img, err := png.Decode(bytes.NewReader(shot.Data))
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	bg := img.At(0, 0)
+	lit := 0
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			if img.At(x, y) != bg {
+				lit++
+			}
+		}
+	}
+	return img, lit
+}
+
+func same(a, b image.Image) bool {
+	for y := a.Bounds().Min.Y; y < a.Bounds().Max.Y; y++ {
+		for x := a.Bounds().Min.X; x < a.Bounds().Max.X; x++ {
+			if a.At(x, y) != b.At(x, y) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// checkGlenz checks the animation in a browser started with the given flags and returns whether it drew with WebGL.
+func checkGlenz(t *testing.T, flags ...string) bool {
 	e := newEnv(t)
-	b := newBrowser(t)
+	b := newBrowser(t, flags...)
 	b.call("Page.enable", nil)
-	b.call("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": glenzDraws})
+	b.call("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": glenzProbe})
 	b.open(e.url, 1400, 900, false)
 	b.waitFor("the first frame", "window.draws > 0")
+	var webgl bool
+	b.eval(`!!document.querySelector("canvas.glenz").getContext("webgl2")`, &webgl)
 
 	var size struct{ Width, Height, CanvasWidth, CanvasHeight, Sidebar float64 }
 	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); const r = c.getBoundingClientRect();
@@ -175,28 +224,36 @@ func TestGlenz(t *testing.T) {
 	if size.Height != 110 || size.Width != size.Sidebar || size.CanvasWidth != 2*size.Width || size.CanvasHeight != 2*size.Height {
 		t.Fatalf("the canvas does not fill the sidebar at the device pixel ratio: %+v", size)
 	}
-	var above bool
-	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); return c.nextElementSibling.classList.contains("load") && c.previousElementSibling.classList.contains("groups"); })()`, &above)
-	if !above {
+	var between bool
+	b.eval(`(() => { const c = document.querySelector("canvas.glenz"); return c.nextElementSibling.classList.contains("load") && c.previousElementSibling.classList.contains("groups"); })()`, &between)
+	if !between {
 		t.Fatal("the animation is not between the session list and the system load")
 	}
-	first := b.glenzPixels()
+	first, lit := b.glenzShot()
+	maps := b.counter("maps")
 	if n := b.countIn("draws", 2*time.Second); n < 30 || n > 64 {
 		t.Fatalf("%d frames in 2 s, want about 30 a second and never more", n)
 	}
-	if strings.HasPrefix(first, "0:") || b.glenzPixels() == first {
-		t.Fatalf("the solid is not drawn or does not move: %s", first)
+	if now, _ := b.glenzShot(); lit < 500 || same(first, now) {
+		t.Fatalf("the solid is not drawn or does not move: %d pixels drawn", lit)
+	}
+	if n := b.counter("maps") - maps; n != 0 {
+		t.Fatalf("the page map was drawn %d times while nothing changed", n)
 	}
 
-	b.eval(`[...document.querySelectorAll(".tabs .tab")].find((t) => t.textContent.trim() === "Settings").click(), true`, new(bool))
-	time.Sleep(200 * time.Millisecond)
+	b.tab("Settings")
 	if n := b.countIn("frames", time.Second); n != 0 {
 		t.Fatalf("%d animation frames while the sidebar is hidden", n)
 	}
-	b.eval(`[...document.querySelectorAll(".tabs .tab")].find((t) => t.textContent.trim() === "Agents").click(), true`, new(bool))
-	time.Sleep(200 * time.Millisecond)
+	maps = b.counter("maps")
+	b.tab("Agents")
 	if n := b.countIn("draws", time.Second); n == 0 {
 		t.Fatal("the animation did not come back with the Agents tab")
+	}
+	b.call("Emulation.setDeviceMetricsOverride", map[string]any{"width": 1300, "height": 900, "deviceScaleFactor": 2, "mobile": false})
+	time.Sleep(200 * time.Millisecond)
+	if n := b.counter("maps") - maps; webgl && n == 0 || !webgl && n != 0 {
+		t.Fatalf("the page map was drawn %d times after the tab changed and the window resized, with WebGL %v", n, webgl)
 	}
 
 	b.open(e.url, 1400, 600, false)
@@ -208,8 +265,24 @@ func TestGlenz(t *testing.T) {
 
 	b.open(e.url, 1400, 900, true)
 	b.waitFor("the still frame", "window.draws > 0")
-	still := b.glenzPixels()
-	if n := b.countIn("frames", time.Second); n != 0 || strings.HasPrefix(still, "0:") || b.glenzPixels() != still {
-		t.Fatalf("under reduced motion: %d more frames, pixels %s", n, still)
+	still, lit := b.glenzShot()
+	if n := b.countIn("frames", time.Second); n != 0 || lit < 500 {
+		t.Fatalf("under reduced motion: %d more frames, %d pixels drawn", n, lit)
+	}
+	if now, _ := b.glenzShot(); !same(still, now) {
+		t.Fatal("the still frame changed under reduced motion")
+	}
+	return webgl
+}
+
+// The machine's GPU draws with WebGL and reflects the page; without one the 2D canvas draws, as software WebGL is slower.
+func TestGlenz(t *testing.T) {
+	webgl := checkGlenz(t, "--enable-gpu", "--ignore-gpu-blocklist", "--use-angle=gl")
+	t.Logf("drawn with WebGL: %v", webgl)
+}
+
+func TestGlenzWithoutWebGL(t *testing.T) {
+	if checkGlenz(t, "--disable-3d-apis") {
+		t.Fatal("drawn with WebGL although it is disabled")
 	}
 }
