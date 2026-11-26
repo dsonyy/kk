@@ -153,9 +153,8 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile .head .icon { flex: none; width: 12px; height: 12px; margin-top: 4px; color: var(--text-dim); }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .tile .state.user { color: var(--text-strong); }
-.tile .reason { padding-left: 8px; border-left: 2px solid var(--text-strong); color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .reason { padding: 2px 6px; border: 1px solid var(--line-strong); color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile.warn { border-color: var(--warn-line); }
-.tile.unread { box-shadow: inset 3px 0 0 var(--text-strong); }
 .tile.unread .title::before { content: "●\00a0"; font-size: 10px; vertical-align: 1px; }
 .tile.exited { opacity: .6; }
 .tile.closed .title { color: var(--text-dim); }
@@ -328,7 +327,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .md li:has(> input[type="checkbox"]) > :is(ul, ol, p, pre) { text-indent: 0; }
 .md li > input[type="checkbox"] { width: 13px; height: 13px; margin: 0 7px 0 0; vertical-align: -1px; }
 .md strong { color: var(--read-strong); font-weight: 600; }
-.md blockquote { padding: 0 0 0 12px; border-left: 2px solid var(--line-strong); color: var(--text-dim); }
+.md blockquote { padding: 6px 10px; border: 1px solid var(--line-strong); color: var(--text-dim); }
 .md hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line); }
 .md code { padding: 1px 4px; background: var(--surface-2); font: .9em var(--font-mono); }
 .md pre { padding: 10px 12px; overflow-x: auto; white-space: pre; background: var(--surface); border: 1px solid var(--line); line-height: 1.5; }
@@ -393,7 +392,7 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .suggest { position: absolute; left: 0; right: 0; top: 100%; z-index: 3; max-height: 260px; overflow: hidden auto; margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line-strong); }
 .suggest.up { top: auto; bottom: 100%; }
 .suggest li { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; cursor: pointer; color: var(--text-dim); }
-.suggest li.on { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--text-strong); }
+.suggest li.on { background: var(--surface-2); outline: 1px solid var(--text-strong); outline-offset: -1px; }
 .suggest .mono { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
 .suggest .desc { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .suggest .scope { flex: none; font-size: 11px; }

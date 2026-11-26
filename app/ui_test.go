@@ -480,3 +480,80 @@ func TestLogo(t *testing.T) {
 		}
 	}
 }
+
+func TestNoAccentStripes(t *testing.T) {
+	e := newEnv(t, "KK_COORDINATOR=1")
+	for _, name := range []string{"alpha", "beta"} {
+		dir := filepath.Join(filepath.Dir(e.home), ".claude", "skills", name)
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: A skill\n---\n"), 0o644)
+	}
+	idle := func(c convView) bool { return c.Status == statusIdle }
+	e.waitFor("conductor start", coordinatorID, idle)
+	escalated := e.asConductor("new", "claude", "-C", e.work, "escalated work")
+	e.waitFor("a stop to escalate", escalated, idle)
+	e.asConductor("escalate", escalated, "Pick a database")
+	quoting := e.mustKK("new", "claude", "-C", e.work, "> a quoted line\n\nmy reply")
+	e.waitFor("answer to the quote", quoting, idle)
+
+	p := e.openPage(1600, 900)
+	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+quoting), nil)
+	p.click(`document.querySelector(".panels textarea")`)
+	p.eval(`document.querySelector(".panels textarea").focus()`, nil)
+	p.call("Input.insertText", map[string]any{"text": "/"})
+	p.until(`document.querySelectorAll(".suggest li").length === 2 && document.querySelector(".msg.user blockquote") && document.querySelector(".sidebar .tile.unread .reason")`)
+
+	var got struct {
+		Stripes                                                     []string
+		Rules                                                       int
+		Dot, Shadow, Reason, Quote, Selected, SelectedShadow, Other string
+	}
+	p.eval(`(() => {
+		const stripes = []
+		let rules = 0
+		// A stripe is a visible left border of 2px or more that the top does not share, or an inset shadow pushed to one side.
+		// Transparent borders draw the triangle of an arrow.
+		const visit = (list) => {
+			for (const rule of list) {
+				if (rule.cssRules?.length) visit(rule.cssRules)
+				if (!rule.style || rule.selectorText?.includes(".xterm")) continue
+				rules++
+				const s = rule.style
+				// Chrome keeps a shorthand with a variable only in the text of the rule.
+				const wide = /border-(left|inline-start)(-width)?:\s*([2-9]|[1-9]\d)(\.\d+)?px/.test(s.cssText) ||
+					(parseFloat(s.borderLeftWidth) >= 2 && s.borderLeftWidth !== s.borderTopWidth)
+				const border = wide && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(s.borderLeftColor)
+				const shadow = s.getPropertyValue("box-shadow").split(/,(?![^(]*\))/).some((part) =>
+					part.includes("inset") && part.replace(/(var|rgba?)\([^)]*\)|#\w+|inset/g, "").trim().split(/\s+/).slice(0, 2).some((v) => parseFloat(v)))
+				if (border || shadow) stripes.push(rule.selectorText)
+			}
+		}
+		for (const sheet of document.styleSheets) visit(sheet.cssRules)
+		const style = (selector, pseudo) => getComputedStyle(document.querySelector(selector), pseudo)
+		const frame = (s) => [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth, s.borderLeftStyle].join(" ")
+		const outline = (s) => s.outlineStyle + " " + s.outlineWidth
+		return {
+			stripes, rules,
+			dot: style(".sidebar .tile.unread .title", "::before").content,
+			shadow: style(".sidebar .tile.unread").boxShadow,
+			reason: frame(style(".sidebar .tile .reason")),
+			quote: frame(style(".msg.user blockquote")),
+			selected: outline(style(".suggest li.on")),
+			selectedShadow: style(".suggest li.on").boxShadow,
+			other: style(".suggest li:not(.on)").outlineStyle,
+		}
+	})()`, &got)
+	if got.Rules < 100 || len(got.Stripes) > 0 {
+		t.Errorf("accent stripes in %d rules: %q", got.Rules, got.Stripes)
+	}
+	const framed = "1px 1px 1px 1px solid"
+	if !strings.HasPrefix(got.Dot, `"●`) || got.Shadow != "none" {
+		t.Errorf("unread card: dot %q, shadow %q", got.Dot, got.Shadow)
+	}
+	if got.Reason != framed || got.Quote != framed {
+		t.Errorf("escalation reason %q and quote %q are not framed", got.Reason, got.Quote)
+	}
+	if got.Selected != "solid 1px" || got.SelectedShadow != "none" || got.Other != "none" {
+		t.Errorf("selected suggestion: %q, shadow %q, others %q", got.Selected, got.SelectedShadow, got.Other)
+	}
+}

@@ -28,6 +28,7 @@ Design and plan: `~/brain/projects/kk/`.
 ## UI conventions
 
 - Rectangles, black and greys, no rounded corners. Colors only as CSS variables in `web/src/app.css`.
+- No accent stripes (thick left border, one-sided inset shadow) to mark or highlight. Use a 1px frame, a background or a dot.
 - Buttons are dark, never filled white. The main action gets `.primary`. A box that asks for a decision uses `.box-warn`.
 - `--font-ui` for interface text, `--font-mono` only for paths, code, commands and ids.
 - Buttons and field labels use `Button` and `Field` from `web/src/mnemonic.tsx`, which assign keyboard mnemonics. Do not hard-code mnemonics.
