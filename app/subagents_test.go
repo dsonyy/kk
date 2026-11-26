@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // subagent finds a subagent of a conversation by its title.
@@ -243,4 +245,97 @@ func TestSubagentCards(t *testing.T) {
 	p.click(fmt.Sprintf(`%s.querySelector(".agents-fold")`, tileOf(".sidebar", id)))
 	p.until(tileOf(".sidebar", nested.ID))
 	p.shot("subagents-closed-unfolded")
+}
+
+// chainEnds is where the line from a session to its queued successor leaves and enters, beside the cards of both, in
+// the coordinates of the lines.
+type chainEnds struct {
+	Out, In    float64
+	From, To   struct{ Top, Bottom, Right float64 }
+	Port, Head float64
+}
+
+func (p *page) chainEnds(part, from, to string) chainEnds {
+	p.t.Helper()
+	var got chainEnds
+	p.eval(fmt.Sprintf(`(() => {
+		const tile = (id) => document.querySelector(%q + ' .tile[data-chain="' + id + '"]');
+		const a = tile(%q), b = tile(%q), box = a.closest(".chained").getBoundingClientRect();
+		const rel = (r) => ({ top: r.top - box.top, bottom: r.bottom - box.top, right: r.right - box.left });
+		const svg = a.closest(".chained").querySelector(".chain-links");
+		const trunk = [...svg.querySelectorAll(".trunk:not(.agent)")].map((t) => t.getAttribute("d").match(/^M([\d.]+) ([\d.]+)H[\d.]+V([\d.]+)$/))[0];
+		const head = [...svg.querySelectorAll(".head:not(.agent)")].map((h) => +h.getAttribute("d").match(/^M[\d.]+ [\d.]+L([\d.]+)/)[1])[0];
+		return { out: +trunk[2], in: +trunk[3], port: +trunk[1], head, from: rel(a.getBoundingClientRect()), to: rel(b.getBoundingClientRect()) };
+	})()`, part, from, to), &got)
+	return got
+}
+
+// The line from a session to its queued successor leaves the session near its bottom and enters the successor level
+// with its title, wherever the two cards go in the list.
+func (e *env) checkChain(p *page, part, from, to, when string) {
+	e.t.Helper()
+	var got chainEnds
+	for end := time.Now().Add(3 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		got = p.chainEnds(part, from, to)
+		ok := got.Out > (got.From.Top+got.From.Bottom)/2 && got.Out < got.From.Bottom && math.Abs(got.In-(got.To.Top+17.5)) <= 1 &&
+			math.Abs(got.Port-got.From.Right) <= 1 && math.Abs(got.Head-(got.To.Right+1)) <= 1
+		if ok {
+			return
+		}
+		if time.Now().After(end) {
+			break
+		}
+	}
+	e.t.Errorf("%s, %s: the line leaves at y %.1f and enters at y %.1f; the predecessor spans %.1f-%.1f, the successor %.1f-%.1f",
+		part, when, got.Out, got.In, got.From.Top, got.From.Bottom, got.To.Top, got.To.Bottom)
+}
+
+// The sidebar of a directory sorted by state moves a session with finished subagents and its queued successor below an
+// unrelated session of another group and back, and the line between them moves with their cards.
+func TestChainFollowsSortedCards(t *testing.T) {
+	e := newEnv(t)
+	other := e.mustKK("new", "claude", "-C", e.work, "-g", "Refactor kk tasks", "Tasky refactor")
+	e.waitFor("the other session idle", other, turnEnded)
+	pred := e.mustKK("new", "claude", "-C", e.work, "-g", "Kk bundle configuration", "start 2 agents")
+	e.waitFor("two subagents", pred, func(c convView) bool { return len(c.Subagents) == 2 })
+	e.finishAgent(1, false)
+	e.finishAgent(2, false)
+	e.waitFor("the subagents done", pred, func(c convView) bool {
+		s := states(c)
+		return s["Agent task 1"] == "done" && s["Agent task 2"] == "done" && turnEnded(c)
+	})
+	next := e.mustKK("new", "claude", "-C", e.work, "-g", "Kk bundle configuration", "-after", pred, "Explain the ticket")
+
+	p := e.openPage(1600, 900)
+	p.eval(`localStorage.setItem("kk.sort", "state")`, nil)
+	p.call("Page.reload", map[string]any{})
+	p.until(`document.querySelector("nav.tabs .dirs .tab")`)
+	p.dirTab(filepath.Base(e.work))
+	order := func(want ...string) {
+		t.Helper()
+		p.until(fmt.Sprintf(`[...document.querySelectorAll(".sidebar .tile")].map((t) => t.dataset.chain).join() === %q`, strings.Join(want, ",")))
+	}
+	fold := fmt.Sprintf(`%s?.querySelector(".agents-fold")?.textContent === "2 done subagents"`, tileOf(".sidebar", pred))
+	p.until(fold)
+	order(pred, next, other)
+	e.checkChain(p, ".sidebar", pred, next, "first drawn")
+	p.shot("chain-sorted")
+
+	// Working sorts the session below the idle one, and turning idle again, as the most recent, back above it.
+	e.mustKK("send", pred, "slow")
+	e.waitFor("the session working", pred, func(c convView) bool { return c.Status == statusWorking })
+	order(other, pred, next)
+	e.checkChain(p, ".sidebar", pred, next, "the session working")
+	p.shot("chain-sorted-working")
+	e.mustKK("interrupt", pred)
+	e.waitFor("the session idle", pred, func(c convView) bool { return c.Status == statusIdle })
+	order(pred, next, other)
+	p.until(fold)
+	e.checkChain(p, ".sidebar", pred, next, "the session idle again")
+	p.shot("chain-sorted-idle")
+
+	p.view("Sessions")
+	p.until(tileOf(".board", next))
+	e.checkChain(p, ".board", pred, next, "on the Sessions page")
+	p.shot("chain-sorted-board")
 }

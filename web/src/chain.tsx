@@ -130,7 +130,8 @@ type Box = { top: number; bottom: number; right: number };
 export function ChainLinks({ chains, hot, children }: { chains: Chains; hot?: (id: string) => boolean; children: ComponentChildren }) {
   const ref = useRef<HTMLDivElement>(null);
   const [boxes, setBoxes] = useState<Map<string, Box>>(new Map());
-  const key = chains.edges.map((e) => `${e.from}>${e.to}`).join();
+  // Cards that trade places keep their sizes, so a new order has to measure again.
+  const key = chains.edges.map((e) => `${e.from}>${e.to}`).join() + "|" + chains.order.map((r) => r.id).join();
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !chains.edges.length) return;
@@ -148,7 +149,7 @@ export function ChainLinks({ chains, hot, children }: { chains: Chains; hot?: (i
     observer.observe(el);
     el.querySelectorAll("[data-chain]").forEach((t) => observer.observe(t));
     return () => observer.disconnect();
-  }, [key, chains.order.length]);
+  }, [key]);
 
   const paths: JSX.Element[] = [];
   const from = new Map<string, Edge[]>();
