@@ -282,8 +282,10 @@ func TestKonduktorPanel(t *testing.T) {
 	p.until(head + ` === "main konduktorfor All" && !` + away)
 
 	// The menu lists main and every directory, also those whose konduktor has not started: kk is the one of the inbox sessions.
+	// The answer shows before the konduktor's turn ends.
+	e.waitFor("the alpha konduktor's turn", k, turnEnded)
 	p.click(`document.querySelector(".side-panel .konduktor-name")`)
-	p.until(`document.querySelectorAll(".dir-menu .dir-item").length > 0`)
+	p.until(`[...document.querySelectorAll(".dir-menu .dir-item")].some((b) => b.textContent === "alphaYour turn")`)
 	if got := p.texts(".dir-menu .dir-item"); !slices.Equal(got, []string{"mainYour turn", "alphaYour turn", "betanot started", "gammanot started", "kknot started"}) {
 		t.Fatalf("konduktor menu: %q", got)
 	}
