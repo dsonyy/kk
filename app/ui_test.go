@@ -110,6 +110,14 @@ func (p *page) call(method string, params any) json.RawMessage {
 	}
 }
 
+// openSession opens a session's panel through the hash. The page listens for the hash where it first lists the sessions,
+// so a hash set before the list shows is missed.
+func (p *page) openSession(id string) {
+	p.t.Helper()
+	p.until(fmt.Sprintf(`document.querySelector(".tile[data-chain='%s']")`, id))
+	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+}
+
 func (p *page) resize(width, height int) {
 	p.t.Helper()
 	p.call("Emulation.setDeviceMetricsOverride", map[string]any{"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false})
@@ -366,7 +374,7 @@ func TestNewSessionWindowKeepsItsSize(t *testing.T) {
 
 	// The schedule dialog borrows the look of the window and keeps the size of its content.
 	id := e.mustKK("new", "claude", "-C", e.work, "hello")
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.openSession(id)
 	p.click(`[...document.querySelectorAll(".panels button")].find((b) => b.getAttribute("aria-label") === "Schedule")`)
 	p.until(`document.querySelector(".new-session.schedule")`)
 	var schedule struct{ Height, Content float64 }
@@ -588,7 +596,7 @@ func TestNoAccentStripes(t *testing.T) {
 	e.waitFor("answer to the quote", quoting, turnEnded)
 
 	p := e.openPage(1600, 900)
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+quoting), nil)
+	p.openSession(quoting)
 	p.click(`document.querySelector(".panels textarea")`)
 	p.eval(`document.querySelector(".panels textarea").focus()`, nil)
 	p.call("Input.insertText", map[string]any{"text": "/"})
@@ -686,7 +694,7 @@ func TestMessageImages(t *testing.T) {
 	e.waitFor("answer", id, turnEnded)
 
 	p := e.openPage(1600, 900)
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.openSession(id)
 	// The user's message and the echo of it hold the two markdown images, and the user's message the attachment.
 	p.until(`[...document.querySelectorAll(".feed img")].filter((i) => i.naturalWidth).length >= 5`)
 	var frames []struct {
@@ -794,7 +802,7 @@ func TestLocalImagesInChat(t *testing.T) {
 	e.waitFor("answer", id, turnEnded)
 
 	p := e.openPage(1600, 900)
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.openSession(id)
 	answer := `document.querySelector(".msg.assistant .md")`
 	p.until(answer + `?.querySelectorAll(".images img").length === 4 && [...` + answer + `.querySelectorAll("img")].every((i) => i.naturalWidth)`)
 	var got struct {

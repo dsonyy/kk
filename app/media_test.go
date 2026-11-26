@@ -54,7 +54,7 @@ func TestMediaView(t *testing.T) {
 	p := e.openPage(1400, 900)
 	p.call("Browser.grantPermissions", map[string]any{"origin": e.url, "permissions": []string{"clipboardReadWrite", "clipboardSanitizedWrite"}})
 	p.call("Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true})
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.openSession(id)
 	panel := fmt.Sprintf(`document.getElementById("panel-%s")`, id)
 	mode := func(label string) string {
 		return fmt.Sprintf(`%s.querySelector('.modes button[aria-label="%s"]')`, panel, label)
@@ -187,7 +187,7 @@ func TestMediaView(t *testing.T) {
 		t.Fatalf("Copy image of the PNG: %q", got)
 	}
 
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+empty), nil)
+	p.openSession(empty)
 	emptyPanel := fmt.Sprintf(`document.getElementById("panel-%s")`, empty)
 	p.tap(emptyPanel + `.querySelector('.modes button[aria-label="Media"]')`)
 	p.until(emptyPanel + `.querySelector(".media")`)
@@ -201,7 +201,7 @@ func TestMediaView(t *testing.T) {
 	if status, out := e.post("/api/conversations/"+id+"/close", map[string]any{}); status != 200 {
 		t.Fatalf("close: %d %s", status, out)
 	}
-	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	p.openSession(id)
 	p.until(fmt.Sprintf(`%s?.querySelectorAll(".modes button").length === 2`, panel))
 	p.tap(mode("Media"))
 	p.until(panel + `.querySelectorAll(".media figure").length === 4`)
