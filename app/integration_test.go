@@ -115,9 +115,7 @@ func TestIntegrationSession(t *testing.T) {
 	// Typing into the session neither widens its tools nor makes it the konduktor's.
 	for i, tool := range []string{"mcp__claude_ai_Gmail__send_message", "Bash", "CronList", "mcp__claude_ai_Google_Drive__create_file", "mcp__claude_ai_Gmail__get_thread"} {
 		e.asKonduktor("send", id, "use "+tool)
-		c = e.waitFor("the typed turn", id, func(c convView) bool {
-			return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done"
-		})
+		c = e.waitFor("the typed turn", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 2+i && c.Events[len(c.Events)-1].Text == "done" })
 	}
 	if got := e.toolsRun(); !slices.Equal(got, []string{"ToolSearch", "mcp__claude_ai_Gmail__search_threads", "mcp__claude_ai_Gmail__get_thread"}) {
 		t.Fatalf("only the read tools may run, whatever is typed: %v", got)
@@ -146,9 +144,7 @@ func TestIntegrationSession(t *testing.T) {
 		t.Fatalf("resume: %v", argv)
 	}
 	e.mustKK("send", id, "use Bash")
-	e.waitFor("the guard after a resume", id, func(c convView) bool {
-		return c.Status == statusIdle && userTurns(c) == 7 && c.Events[len(c.Events)-1].Text == "done"
-	})
+	e.waitFor("the guard after a resume", id, func(c convView) bool { return c.Status == statusIdle && userTurns(c) == 7 && c.Events[len(c.Events)-1].Text == "done" })
 	if got := e.toolsRun(); slices.Contains(got, "Bash") {
 		t.Fatalf("Bash ran after a resume: %v", got)
 	}
