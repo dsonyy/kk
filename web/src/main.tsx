@@ -8,7 +8,7 @@ import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
 import { Glenz } from "./glenz";
 import { Load } from "./load";
-import { ImageViewer, linkImages } from "./images";
+import { ImageViewer, linkImages, showImages } from "./images";
 import { Board, CardTitle } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { Inbox } from "./inbox";
@@ -29,11 +29,18 @@ const tabs = ["Agents", "Sessions", "Inbox", "Stats", "Logs", "Tmux", "Settings"
 reportErrors();
 
 const mdCache = new Map<string, string>();
-function Markdown({ text, partial }: { text: string; partial?: boolean }) {
-  let html = mdCache.get(text);
+function Markdown({ text, images = [], partial }: { text: string; images?: Attachment[]; partial?: boolean }) {
+  const key = images.length ? `${text}\0${images.map((i) => i.url).join("\0")}` : text;
+  let html = mdCache.get(key);
   if (html === undefined) {
     html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }) as string);
-    if (!partial) mdCache.set(text, html);
+    if (images.length) {
+      const box = document.createElement("template");
+      box.innerHTML = html;
+      showImages(box.content, images);
+      html = box.innerHTML;
+    }
+    if (!partial) mdCache.set(key, html);
   }
   const box = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => linkImages(box.current!), [html]);
@@ -417,7 +424,7 @@ function toolIcon(tool = "") {
 
 // Agents write whole messages to their transcripts, so a message that arrives while the page is open is revealed
 // progressively instead of appearing at once.
-function Reveal({ text }: { text: string }) {
+function Reveal({ text, images }: { text: string; images?: Attachment[] }) {
   const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const [shown, setShown] = useState(still ? text.length : 0);
   useEffect(() => {
@@ -425,7 +432,7 @@ function Reveal({ text }: { text: string }) {
     const t = setTimeout(() => setShown((n) => n + Math.max(6, Math.ceil(text.length / 60))), 16);
     return () => clearTimeout(t);
   }, [shown, text]);
-  return shown >= text.length ? <Markdown text={text} /> : <Markdown text={text.slice(0, shown)} partial />;
+  return shown >= text.length ? <Markdown text={text} images={images} /> : <Markdown text={text.slice(0, shown)} images={images} partial />;
 }
 
 function Feed({ c, live, rewind, retry }: { c: Conversation; live: number; rewind?: Rewind; retry?: () => void }) {
@@ -470,14 +477,14 @@ function Feed({ c, live, rewind, retry }: { c: Conversation; live: number; rewin
       out.push(
         // Claude Code lists only real prompts in its rewind menu; those carry their transcript id.
         <UserMessage key={i} id={c.id} index={i} event={e} rewind={c.harness !== "claude" || e.id ? rewind : undefined}>
-          {e.text && <Markdown text={e.text} />}
+          {e.text && <Markdown text={e.text} images={e.images} />}
           <Attachments items={e.attachments ?? []} />
         </UserMessage>,
       );
     else
       out.push(
         <div class={`msg ${e.kind}`} key={i} title={when(e.time)} data-event={i}>
-          {e.kind === "assistant" && i >= live ? <Reveal text={e.text ?? ""} /> : e.text && <Markdown text={e.text} />}
+          {e.kind === "assistant" && i >= live ? <Reveal text={e.text ?? ""} images={e.images} /> : e.text && <Markdown text={e.text} images={e.images} />}
           <Attachments items={e.attachments ?? []} />
         </div>,
       );

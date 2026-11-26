@@ -8,6 +8,8 @@ export type Event = {
   output?: string;
   failed?: boolean;
   attachments?: Attachment[];
+  // The local pictures the text names that the server can show.
+  images?: Attachment[];
   time: string;
 };
 

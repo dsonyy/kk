@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -658,7 +659,8 @@ func TestMessageImages(t *testing.T) {
 		}
 	}
 	picture := func(alt string) string {
-		return fmt.Sprintf(`document.querySelector('.msg.assistant img[alt="%s"]') ?? document.querySelector('.feed img[alt="%s"]')`, alt, alt)
+		// The echo names the attachment's path too, and shows it as a thumbnail of its own.
+		return fmt.Sprintf(`document.querySelector('.msg.assistant .md > p img[alt="%s"]') ?? document.querySelector('.feed .attachments img[alt="%s"]')`, alt, alt)
 	}
 	for alt, file := range map[string]Attachment{"inline": inline, "linked": linked, "attached.png": attached} {
 		p.eval(fmt.Sprintf(`(%s).closest("a").focus()`, picture(alt)), nil)
@@ -700,5 +702,84 @@ func TestMessageImages(t *testing.T) {
 	p.eval(`location.href`, &url)
 	if !strings.Contains(url, e.addr) {
 		t.Errorf("a click on a linked image left the page: %s", url)
+	}
+}
+
+func TestLocalImagesInChat(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	var shots []string
+	for i, size := range []image.Point{{1600, 900}, {800, 1200}, {300, 200}} {
+		img := image.NewRGBA(image.Rectangle{Max: size})
+		draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{uint8(40 * i), 30, 30, 255}), image.Point{}, draw.Src)
+		var data bytes.Buffer
+		png.Encode(&data, img)
+		shots = append(shots, filepath.Join(dir, fmt.Sprintf("shot-%d.png", i+1)))
+		os.WriteFile(shots[i], data.Bytes(), 0o644)
+	}
+	gone := filepath.Join(dir, "gone.png")
+	prompt := fmt.Sprintf("## Screenshots\n\n```\n%s\n```\n\nThe first is `%s`, and %s is gone.\n\n![second](%s)", strings.Join(shots, "\n"), shots[0], gone, shots[1])
+	id := e.mustKK("new", "claude", "-C", e.work, prompt)
+	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+
+	p := e.openPage(1600, 900)
+	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
+	answer := `document.querySelector(".msg.assistant .md")`
+	p.until(answer + `?.querySelectorAll(".images img").length === 4 && [...` + answer + `.querySelectorAll("img")].every((i) => i.naturalWidth)`)
+	var got struct {
+		Pre, InlineImage           bool
+		Strips                     [][]string
+		Titles                     []string
+		Code, Plain                string
+		StripHeight, Border, Width float64
+	}
+	p.eval(`(() => {
+		const md = `+answer+`, strips = [...md.querySelectorAll(".images")]
+		return {
+			pre: !!md.querySelector("pre"),
+			inlineImage: md.querySelector(":scope > p > a > img")?.getAttribute("src").startsWith("/api/conversations/"),
+			strips: strips.map((s) => [...s.querySelectorAll("span")].map((c) => c.textContent)),
+			titles: [...strips[0].querySelectorAll("a")].map((a) => a.title),
+			code: md.querySelector("code > a.image")?.textContent ?? "",
+			plain: [...md.querySelectorAll(":scope > p")].map((p) => p.textContent).join("\n"),
+			stripHeight: strips[0].getBoundingClientRect().height,
+			border: parseFloat(getComputedStyle(strips[0].querySelector("img")).borderTopWidth),
+			width: strips[0].querySelector("img").getBoundingClientRect().width,
+		}
+	})()`, &got)
+	names := []string{"shot-1.png", "shot-2.png", "shot-3.png"}
+	if got.Pre || len(got.Strips) != 2 || !slices.Equal(got.Strips[0], names) || !slices.Equal(got.Strips[1], names[:1]) || !slices.Equal(got.Titles, shots) {
+		t.Fatalf("a code block of paths did not become thumbnails named by file: %+v", got)
+	}
+	if got.Code != shots[0] || !got.InlineImage || !strings.Contains(got.Plain, gone+" is gone") {
+		t.Fatalf("paths in the text: %+v", got)
+	}
+	// Three screenshots sit side by side in one row, framed like the other pictures.
+	if got.StripHeight > 200 || got.Width > 300 || got.Border != 1 {
+		t.Fatalf("thumbnails are not compact: %+v", got)
+	}
+
+	caption := func() string {
+		var s string
+		p.eval(`document.querySelector("dialog.viewer[open] .caption")?.textContent ?? ""`, &s)
+		return s
+	}
+	p.tap(answer + `.querySelectorAll(".images img")[1]`)
+	p.until(`document.querySelector("dialog.viewer[open] img")?.naturalWidth`)
+	if c := caption(); c != shots[1] {
+		t.Fatalf("the viewer shows %q, want %q", c, shots[1])
+	}
+	for _, want := range []string{shots[2], shots[0]} {
+		p.press("ArrowRight", 39, "")
+		if c := caption(); c != want {
+			t.Fatalf("after the right arrow the viewer shows %q, want %q", c, want)
+		}
+	}
+	p.press("Escape", 27, "")
+	p.until(`!document.querySelector("dialog.viewer")`)
+	p.tap(answer + `.querySelector("code > a.image")`)
+	p.until(`document.querySelector("dialog.viewer[open]")`)
+	if c := caption(); c != shots[0] {
+		t.Fatalf("a path in code opens %q, want %q", c, shots[0])
 	}
 }

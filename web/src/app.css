@@ -354,11 +354,17 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .conversation { --chat-width: 800px; }
 .feed-inner { max-width: var(--chat-width); margin-inline: auto; }
 .composer { padding-inline: max(var(--gap), calc((100% - var(--chat-width)) / 2)); }
-.md img { max-width: 100%; height: auto; }
+.md img { max-width: 100%; height: auto; vertical-align: top; }
 
 /* A frame keeps a dark picture apart from the dark page. A click opens it large. */
 .feed .md img, .msg .attachments li:has(img) { border: 1px solid var(--text-dim); }
-.feed :is(.md, .attachments) img { cursor: zoom-in; }
+.feed :is(.md, .attachments) img, .feed .md a.image { cursor: zoom-in; }
+/* The local pictures of a block follow it as thumbnails named by file; the path is in the title and in the viewer. */
+.md .images { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; margin: 0 0 12px; }
+.md .images a { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--text-dim); text-decoration: none; }
+.md .images a:hover { color: var(--read-strong); }
+.md .images img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; }
+.md .images span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono); }
 .feed a:has(> img:only-child) { outline: none; text-decoration: none; }
 .feed a:focus-visible > img { outline: 2px solid var(--text-strong); outline-offset: 2px; }
 .feed .msg.user a:focus-visible > img { outline-color: var(--user-text); }
@@ -404,7 +410,10 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .viewer { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; border: 0; flex-direction: column; gap: var(--gap); background: var(--backdrop-view); color: var(--text); }
 .viewer:not([open]) { display: none; }
 .viewer::backdrop { background: none; }
-.viewer button { flex: none; align-self: flex-end; }
+.viewer-bar { flex: none; align-self: stretch; display: flex; align-items: center; gap: 8px; }
+.viewer-bar > button { margin-left: auto; }
+.viewer-steps { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.viewer .caption { flex: none; margin: 0; color: var(--text-dim); font-size: 12px; text-align: center; overflow-wrap: anywhere; }
 .viewer .stage { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; }
 .viewer img { max-width: 100%; max-height: 100%; border: 1px solid var(--text-dim); cursor: zoom-out; }
 .new-session { width: min(720px, 100%); height: min(720px, 100%); overflow-y: scroll; display: flex; flex-direction: column; gap: 14px; padding: 20px; border: 1px solid var(--line-strong); background: var(--surface); }
