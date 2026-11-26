@@ -36,7 +36,7 @@ func (e *env) waitLog(what string, ok func(log string) bool) string {
 func TestLogs(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "secret prompt words")
-	e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("first answer", id, turnEnded)
 	e.mustKK("send", id, "secret follow up")
 	e.waitFor("second answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: secret follow up") })
 	exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "-X", "PUT", "-d", `{"start_timeout_seconds":9}`, "http://kk/api/settings").Run()
@@ -126,7 +126,7 @@ func TestLogStaysBounded(t *testing.T) {
 func TestTmuxTab(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "hello")
-	e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("first answer", id, turnEnded)
 	sock := strings.TrimPrefix(e.vars[2], "KK_TMUX=")
 	tmuxOut := func(args ...string) string {
 		out, _ := exec.Command("tmux", append([]string{"-L", sock}, args...)...).Output()

@@ -70,7 +70,7 @@ func newCoordinatorEnv(t *testing.T, extra ...string) *env {
 }
 
 func TestNotifyCoordinator(t *testing.T) {
-	e := newCoordinatorEnv(t)
+	e := newCoordinatorEnv(t, "KK_START_TIMEOUT=5s")
 	started := e.asKonduktor("new", "claude", "-C", e.work, "hello")
 	exits1 := e.asKonduktor("new", "claude", "-C", e.work, "first")
 	permission := e.asKonduktor("new", "claude", "-C", e.work, "ask for permission")
@@ -84,8 +84,8 @@ func TestNotifyCoordinator(t *testing.T) {
 	e.waitNotified(permission, "needs action: Claude needs your permission to use Bash. Look: kk screen "+permission)
 	e.waitNotified(trust, "needs action: The agent has not started its session")
 	e.waitNotified(apiError, "needs action: The turn ended on an API error")
-	e.waitFor("user's agent idle", exits1, func(c convView) bool { return c.Status == statusIdle })
-	e.waitFor("stopped agent idle", stopped, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("user's agent idle", exits1, turnEnded)
+	e.waitFor("stopped agent idle", stopped, turnEnded)
 	e.asKonduktor("stop", stopped)
 	e.waitFor("user's own dialog", mine, func(c convView) bool { return c.Attention != "" && c.WaitingFor == waitingUser })
 	e.waitNotified(escalated, "finished its turn")
@@ -104,14 +104,14 @@ func TestNotifyCoordinator(t *testing.T) {
 	got := e.notifications()
 	for _, tc := range []struct{ id, want string }{
 		{started, "finished its turn"}, {permission, "needs action"}, {trust, "needs action"}, {apiError, "needs action"},
-		{exits1, "finished its turn"}, {exits1, "exited"}, {stopped, "finished its turn"}, {escalated, "finished its turn"},
+		{exits1, "finished its turn"}, {exits1, ": exited"}, {stopped, "finished its turn"}, {escalated, "finished its turn"},
 	} {
 		if n := countLines(got, tc.id, tc.want); n != 1 {
 			t.Errorf("%s: %d lines %q, want one", tc.id, n, tc.want)
 		}
 	}
 	// No exit for an agent stopped on purpose or escalated to the user, nothing for the user's own agent.
-	for _, tc := range []struct{ id, want string }{{stopped, "exited"}, {escalated, "exited"}, {mine, ""}} {
+	for _, tc := range []struct{ id, want string }{{stopped, ": exited"}, {escalated, ": exited"}, {mine, ""}} {
 		if n := countLines(got, tc.id, tc.want); n != 0 {
 			t.Errorf("%s: %d lines %q, want none", tc.id, n, tc.want)
 		}
@@ -150,9 +150,9 @@ func TestNotifyGathers(t *testing.T) {
 	e.mustKK("send", coordinatorID, "slow work")
 	e.waitFor("coordinator working", coordinatorID, func(c convView) bool { return c.Status == statusWorking })
 	exits := e.asKonduktor("new", "claude", "-C", e.work, "first")
-	e.waitFor("answer", exits, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("answer", exits, turnEnded)
 	e.asKonduktor("send", exits, "exit")
-	e.waitNotified(exits, "exited")
+	e.waitNotified(exits, ": exited")
 	if c := e.conv(coordinatorID); c.Status != statusWorking || len(c.Queued) != 1 {
 		t.Fatalf("coordinator turn: %+v queued %+v", c.Conversation, c.Queued)
 	}
@@ -185,13 +185,13 @@ func TestNotifyEveryRaise(t *testing.T) {
 
 	// An agent that dies again right after a resume is news.
 	id := e.asKonduktor("new", "claude", "-C", e.work, "first")
-	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("answer", id, turnEnded)
 	e.asKonduktor("send", id, "exit")
-	e.waitNotified(id, "exited")
+	e.waitNotified(id, ": exited")
 	e.asKonduktor("resume", id)
 	e.waitFor("resumed", id, func(c convView) bool { return c.Status == statusIdle })
 	e.asKonduktor("send", id, "exit")
-	for deadline := time.Now().Add(10 * time.Second); countLines(e.notifications(), id, "exited") < 2; time.Sleep(100 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); countLines(e.notifications(), id, ": exited") < 2; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("second exit not reported: %q", e.notifications())
 		}

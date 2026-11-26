@@ -100,7 +100,7 @@ func TestWorkerPrompt(t *testing.T) {
 	codex := e.mustKK("new", "codex", "-C", e.work, "hi codex")
 	cursor := e.mustKK("new", "cursor", "-C", e.work, "hi cursor")
 	for _, id := range []string{claude, codex, cursor} {
-		e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+		e.waitFor("answer", id, turnEnded)
 	}
 	if p, _ := argOf(e.starts("claude")[0], "--append-system-prompt"); p != worker {
 		t.Fatalf("claude: %v", e.starts("claude")[0])

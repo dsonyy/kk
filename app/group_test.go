@@ -43,7 +43,9 @@ func TestFeatureGroups(t *testing.T) {
 	}
 
 	failed := e.mustKK("new", "claude", "-C", e.work, "GROUPFAIL and answer")
-	e.waitFor("answer", failed, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: GROUPFAIL and answer") })
+	e.waitFor("answer", failed, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: GROUPFAIL and answer")
+	})
 	if c := e.conv(failed); c.Group != "" || c.Status != statusIdle {
 		t.Fatalf("a session whose grouping failed: group %q, status %s", c.Group, c.Status)
 	}

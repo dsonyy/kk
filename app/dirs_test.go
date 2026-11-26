@@ -66,7 +66,7 @@ func (e *env) dirSessions() map[string]string {
 		dir := filepath.Join(e.work, s.dir)
 		os.MkdirAll(dir, 0o755)
 		ids[s.title] = e.mustKK("new", "claude", "-C", dir, "-g", s.group, s.title)
-		e.waitFor(s.title, ids[s.title], func(c convView) bool { return c.Status == statusIdle })
+		e.waitFor(s.title, ids[s.title], turnEnded)
 	}
 	e.mustKK("close", ids["Finished long ago"])
 	return ids

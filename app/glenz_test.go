@@ -10,9 +10,11 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -39,15 +41,27 @@ func chrome(t *testing.T, flags ...string) *exec.Cmd {
 	return nil
 }
 
+// killChrome ends Chrome and its helpers, which outlive it for a moment and still write into the profile.
+func killChrome(cmd *exec.Cmd) {
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	cmd.Wait()
+	for end := time.Now().Add(10 * time.Second); syscall.Kill(-cmd.Process.Pid, 0) == nil && time.Now().Before(end); {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // newBrowser starts headless Chrome with the given flags and connects to its first page over the DevTools protocol.
 func newBrowser(t *testing.T, flags ...string) *browser {
 	t.Helper()
-	cmd := chrome(t, append([]string{"--user-data-dir=" + t.TempDir(), "about:blank"}, flags...)...)
+	profile := t.TempDir()
+	cmd := chrome(t, append([]string{"--user-data-dir=" + profile, "about:blank"}, flags...)...)
+	cmd.Env = append(os.Environ(), "HOME="+profile, "XDG_CONFIG_HOME="+profile, "XDG_CACHE_HOME="+profile)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	t.Cleanup(func() { killChrome(cmd) })
 	var port string
 	for scan := bufio.NewScanner(stderr); scan.Scan() && port == ""; {
 		if m := regexp.MustCompile(`ws://127\.0\.0\.1:(\d+)/`).FindStringSubmatch(scan.Text()); m != nil {
@@ -235,7 +249,7 @@ func same(a, b image.Image) bool {
 
 // checkGlenz checks the animation in a browser started with the given flags and returns whether it drew with WebGL.
 func checkGlenz(t *testing.T, flags ...string) bool {
-	e := newEnv(t)
+	e := newSerialEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "Under the glenz")
 	b := newBrowser(t, flags...)
 	b.call("Page.enable", nil)

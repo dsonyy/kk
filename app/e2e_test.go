@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +29,10 @@ import (
 var kkBin, fakeBin string
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+	if !flagSet("test.parallel") {
+		flag.Set("test.parallel", strconv.Itoa(min(runtime.GOMAXPROCS(0), maxParallel)))
+	}
 	dir, err := os.MkdirTemp("", "kk-test-bin")
 	if err != nil {
 		panic(err)
@@ -59,13 +65,30 @@ type env struct {
 	token string
 }
 
+// maxParallel caps the end-to-end tests that run at once. Each has its own server, tmux server and agents, and most of its
+// time it waits on them, so more help little, and other agents run their own suites on the same machine.
+const maxParallel = 8
+
+func flagSet(name string) (set bool) {
+	flag.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
+}
+
 func freeAddr() string {
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer l.Close()
 	return l.Addr().String()
 }
 
+// newEnv starts a server for the test and runs the test in parallel with the others.
 func newEnv(t *testing.T, extra ...string) *env {
+	t.Helper()
+	t.Parallel()
+	return newSerialEnv(t, extra...)
+}
+
+// newSerialEnv starts a server for a test that measures time and has to run alone.
+func newSerialEnv(t *testing.T, extra ...string) *env {
 	t.Helper()
 	// The server's socket lies in root, and t.TempDir names a path too long for one on macOS, where sun_path has 104 bytes.
 	root, err := os.MkdirTemp("/tmp", "kk")
@@ -83,10 +106,10 @@ func newEnv(t *testing.T, extra ...string) *env {
 	codex := filepath.Join(root, "codex")
 	os.MkdirAll(codex, 0o755)
 	os.WriteFile(filepath.Join(codex, "models_cache.json"), []byte(`{"models":[{"slug":"gpt-test","visibility":"list"},{"slug":"hidden","visibility":"hide"}]}`), 0o644)
-	sock := fmt.Sprintf("kk-test-%d", time.Now().UnixNano())
+	sock := "kk-test-" + filepath.Base(root)
 	e.vars = append([]string{
 		"KK_HOME=" + e.home, "KK_ADDR=" + e.addr, "KK_TMUX=" + sock, "FAKE_HOME=" + e.fake, "CODEX_HOME=" + codex,
-		"PATH=" + fakeBin + ":" + os.Getenv("PATH"), "KK_START_TIMEOUT=2s", "KK_SOURCE=" + root, "HOME=" + root,
+		"PATH=" + fakeBin + ":" + os.Getenv("PATH"), "KK_START_TIMEOUT=10s", "KK_SOURCE=" + root, "HOME=" + root,
 		// The CLI tells agents from the user by this variable, which leaks in when the tests run inside a kk agent.
 		"KK_CONVERSATION=",
 	}, extra...)
@@ -97,7 +120,18 @@ func newEnv(t *testing.T, extra ...string) *env {
 		e.stop()
 		killTmux(t, sock)
 	})
-	e.start()
+	// Another test may take the free port before the server binds it.
+	for tries := 1; ; tries++ {
+		err := e.launch()
+		if err == nil {
+			break
+		}
+		if tries == 3 {
+			t.Fatalf("server did not start: %v", err)
+		}
+		e.addr = freeAddr()
+		e.vars = append(e.vars, "KK_ADDR="+e.addr)
+	}
 	return e
 }
 
@@ -135,21 +169,29 @@ func (e *env) environ() []string { return append(os.Environ(), e.vars...) }
 
 func (e *env) start() {
 	e.t.Helper()
+	if err := e.launch(); err != nil {
+		e.t.Fatalf("server did not start: %v", err)
+	}
+}
+
+func (e *env) launch() error {
 	cmd := exec.Command(kkBin)
 	cmd.Env = e.environ()
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		e.t.Fatal(err)
+		return err
 	}
-	e.proc = cmd
 	line, err := bufio.NewReader(out).ReadString('\n')
 	if err != nil {
-		e.t.Fatalf("server did not start: %v", err)
+		cmd.Wait()
+		return err
 	}
+	e.proc = cmd
 	e.url = strings.TrimSpace(strings.TrimPrefix(line, "kk is running: "))
 	e.token = e.url[strings.Index(e.url, "token=")+6:]
 	go io.Copy(io.Discard, out)
+	return nil
 }
 
 func (e *env) stop() {
@@ -190,26 +232,16 @@ func (e *env) asKonduktor(args ...string) string {
 
 func (e *env) conv(id string) convView {
 	e.t.Helper()
-	cmd := exec.Command("curl", "-s", "--unix-socket", filepath.Join(e.home, "kk.sock"), "http://kk/api/conversations/"+id)
-	out, err := cmd.Output()
-	if err != nil {
-		e.t.Fatal(err)
-	}
+	_, out := e.request("GET", "/api/conversations/"+id, nil)
 	var c convView
 	json.Unmarshal(out, &c)
 	return c
 }
 
 func (e *env) post(path string, body any) (int, string) {
+	e.t.Helper()
 	data, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", "http://kk"+path, bytes.NewReader(data))
-	t := &http.Transport{Dial: func(_, _ string) (net.Conn, error) { return net.Dial("unix", filepath.Join(e.home, "kk.sock")) }}
-	resp, err := (&http.Client{Transport: t}).Do(req)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
+	resp, out := e.request("POST", path, bytes.NewReader(data))
 	return resp.StatusCode, string(out)
 }
 
@@ -267,7 +299,9 @@ func TestClaudeConversation(t *testing.T) {
 	if code, body := e.post("/api/conversations/"+id+"/send", map[string]string{"text": "line one\nline two"}); code != 200 {
 		t.Fatalf("send: %d %s", code, body)
 	}
-	e.waitFor("multi-line reply", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: line one\nline two") })
+	e.waitFor("multi-line reply", id, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindAssistant, "echo: line one\nline two")
+	})
 	if c := e.conv(id); !hasEvent(c, kindUser, "line one\nline two") {
 		t.Fatalf("the reply did not arrive as one message: %+v", c.Events)
 	}
@@ -281,7 +315,7 @@ func TestClaudeConversation(t *testing.T) {
 		t.Fatalf("show: %s", show)
 	}
 	e.mustKK("send", id, "from", "the", "cli")
-	e.waitFor("cli reply", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: from the cli") })
+	e.waitFor("cli reply", id, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "echo: from the cli") })
 
 	e.post("/api/conversations/"+id+"/seen", struct{}{})
 	if c := e.conv(id); c.Unread {
@@ -325,7 +359,7 @@ func TestAPIErrorEndsTurn(t *testing.T) {
 }
 
 func TestAgentStuckBeforeStart(t *testing.T) {
-	e := newEnv(t)
+	e := newEnv(t, "KK_START_TIMEOUT=2s")
 	id := e.mustKK("new", "claude", "-C", e.work, "TRUST me")
 	c := e.waitFor("start timeout", id, func(c convView) bool { return c.Attention != "" })
 	if c.Status != statusStarting || !strings.Contains(c.Attention, "has not started") {
@@ -410,7 +444,8 @@ func TestCursorConversation(t *testing.T) {
 func TestServerRestartKeepsAgents(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "before restart")
-	e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: before restart") })
+	// The turn has to end before the server stops, or its Stop hook is lost.
+	e.waitFor("answer", id, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "echo: before restart") })
 	e.stop()
 	if _, err := e.kk("ls"); err == nil {
 		t.Fatal("ls works without a server")
@@ -439,7 +474,7 @@ func TestWindowNamedLikeSession(t *testing.T) {
 	// The agents inherit the environment of the tmux server, which this test started instead of kk.
 	exec.Command("tmux", "-L", sock, "set-environment", "-g", "FAKE_HOME", e.fake).Run()
 	id := e.mustKK("new", "claude", "-C", e.work, "hello")
-	e.waitFor("answer", id, func(c convView) bool { return hasEvent(c, kindAssistant, "echo: hello") })
+	e.waitFor("answer", id, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "echo: hello") })
 	// The server gives a launch one second before it believes that the window is gone.
 	time.Sleep(2 * time.Second)
 	if c := e.conv(id); c.Status != statusIdle {
@@ -450,7 +485,7 @@ func TestWindowNamedLikeSession(t *testing.T) {
 func TestClose(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "to close")
-	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("answer", id, turnEnded)
 	e.mustKK("close", id)
 	if ls := e.mustKK("ls"); strings.Contains(ls, id) {
 		t.Fatalf("closed conversation listed: %s", ls)
@@ -641,9 +676,10 @@ func TestCoordinatorCompacts(t *testing.T) {
 	}
 	e.mustKK("send", coordinatorID, "big context")
 	e.waitFor("big answer", coordinatorID, func(c convView) bool { return c.Context == 60000 })
-	// The note shows from the transcript as soon as it is read, the context only once the server's tick has stored it.
+	// The note shows from the transcript as soon as it is read, the context only once the server's tick has stored it. The
+	// compaction's turn has to end before the server stops, or its Stop hook is lost.
 	e.waitFor("compaction to 3000 tokens", coordinatorID, func(c convView) bool {
-		return hasEvent(c, kindNote, "Conversation compacted") && c.Context == 3000
+		return hasEvent(c, kindNote, "Conversation compacted") && c.Context == 3000 && c.Status == statusIdle
 	})
 
 	e.stop()
@@ -709,7 +745,7 @@ func TestWebAuth(t *testing.T) {
 func TestTerminal(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustKK("new", "claude", "-C", e.work, "hello")
-	e.waitFor("first answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("first answer", id, turnEnded)
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar}
 	resp, err := client.Get(e.url)
@@ -753,6 +789,7 @@ func TestTerminal(t *testing.T) {
 }
 
 func TestRewind(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, harness, target string
 		files                 bool
@@ -829,7 +866,8 @@ func TestRewindSaysWhatIsRestored(t *testing.T) {
 func (e *env) request(method, path string, body io.Reader) (*http.Response, []byte) {
 	e.t.Helper()
 	req, _ := http.NewRequest(method, "http://kk"+path, body)
-	t := &http.Transport{Dial: func(_, _ string) (net.Conn, error) { return net.Dial("unix", filepath.Join(e.home, "kk.sock")) }}
+	// Without keep-alive: the tests poll many times a second, and a restarted server drops the connections.
+	t := &http.Transport{DisableKeepAlives: true, Dial: func(_, _ string) (net.Conn, error) { return net.Dial("unix", filepath.Join(e.home, "kk.sock")) }}
 	resp, err := (&http.Client{Transport: t}).Do(req)
 	if err != nil {
 		e.t.Fatal(err)
@@ -1253,7 +1291,7 @@ func TestWhoseTurn(t *testing.T) {
 	}
 
 	id := e.asKonduktor("new", "claude", "-C", e.work, "hello")
-	c := e.waitFor("a stop that waits for the konduktor", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
+	c := e.waitFor("a stop that waits for the konduktor", id, func(c convView) bool { return turnEnded(c) && c.WaitingFor == waitingKonduktor })
 	if ls := e.mustKK("ls"); !strings.Contains(ls, id+"  idle             coordinator") {
 		t.Fatalf("ls: %s", ls)
 	}

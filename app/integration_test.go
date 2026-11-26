@@ -89,7 +89,10 @@ func TestIntegrationSession(t *testing.T) {
 	e.refreshInbox("gmail")
 	e.post("/api/inbox/tick", struct{}{})
 
-	c := e.waitFor("the first check", id, func(c convView) bool { return c.Status == statusIdle && hasEvent(c, kindAssistant, gmailAnswer) })
+	// The usage counts once the server's tick has stored them.
+	c := e.waitFor("the first check", id, func(c convView) bool {
+		return c.Status == statusIdle && hasEvent(c, kindAssistant, gmailAnswer) && c.Usage != nil && c.Usage.Output > 0
+	})
 	if c.Integration != "gmail" || c.Title != "Gmail inbox" || c.Attention != "" || c.WaitingFor != "" || c.Unread || c.Group != inboxGroup {
 		t.Fatalf("a normal run should leave the session quiet: %+v", c.Conversation)
 	}

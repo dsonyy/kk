@@ -22,6 +22,9 @@ func TestSleepingSession(t *testing.T) {
 	if ls := e.mustKK("ls"); !strings.Contains(ls, quiet+"  sleeping") {
 		t.Fatalf("ls: %s", ls)
 	}
+	// The konduktor hears of the quiet agent's turn and stays idle from its own turn on that.
+	e.waitNotified(quiet, "finished its turn")
+	e.waitFor("the konduktor's turn on the news", coordinatorID, func(c convView) bool { return turnEnded(c) && hasEvent(c, kindAssistant, "noted") })
 	time.Sleep(3 * time.Second)
 	if c := e.conv(busy); c.Status != statusWorking || c.Sleeping {
 		t.Fatalf("a working agent: %s, sleeping %v", c.Status, c.Sleeping)
@@ -76,7 +79,7 @@ func count(c convView, kind, text string) int {
 func TestScheduledSession(t *testing.T) {
 	e := newCoordinatorEnv(t)
 	id := e.asKonduktor("new", "claude", "-C", e.work, "first")
-	e.waitFor("the first turn", id, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
+	e.waitFor("the first turn", id, func(c convView) bool { return turnEnded(c) && c.WaitingFor == waitingKonduktor })
 
 	for _, bad := range []Schedule{
 		{Days: []int{7}, Times: []string{"09:00"}, Prompt: "x"},
@@ -165,7 +168,7 @@ func TestScheduledSession(t *testing.T) {
 func TestScheduleAndSleepInChain(t *testing.T) {
 	e := newCoordinatorEnv(t, "KK_SLEEP_AFTER=2s")
 	pred := e.asKonduktor("new", "claude", "-C", e.work, "hello")
-	e.waitFor("predecessor idle", pred, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("predecessor idle", pred, turnEnded)
 	next := e.asKonduktor("new", "claude", "-C", e.work, "-after", pred, "Second step")
 	if code, _ := e.schedule(next, Schedule{Days: []int{0, 1, 2, 3, 4, 5, 6}, Times: []string{"09:00"}, Prompt: "x"}); code != 409 {
 		t.Fatalf("scheduled a queued session: %d", code)

@@ -41,14 +41,7 @@ func (e *env) openPage(width, height int) *page {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	// Chrome's helpers outlive it for a moment and still write into the profile.
-	t.Cleanup(func() {
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		cmd.Wait()
-		for end := time.Now().Add(10 * time.Second); syscall.Kill(-cmd.Process.Pid, 0) == nil && time.Now().Before(end); {
-			time.Sleep(10 * time.Millisecond)
-		}
-	})
+	t.Cleanup(func() { killChrome(cmd) })
 	var socket string
 	for end := time.Now().Add(20 * time.Second); socket == ""; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(end) {
@@ -480,7 +473,7 @@ func TestWorktreeIcon(t *testing.T) {
 	ids, want := e.worktreeSessions()
 	for title, id := range ids {
 		if !strings.HasPrefix(title, "Resumed") {
-			e.waitFor(title, id, func(c convView) bool { return c.Status == statusIdle })
+			e.waitFor(title, id, turnEnded)
 		}
 	}
 	p := e.openPage(1600, 1000)
@@ -589,10 +582,10 @@ func TestNoAccentStripes(t *testing.T) {
 	idle := func(c convView) bool { return c.Status == statusIdle }
 	e.waitFor("konduktor start", coordinatorID, idle)
 	escalated := e.asKonduktor("new", "claude", "-C", e.work, "escalated work")
-	e.waitFor("a stop to escalate", escalated, idle)
+	e.waitFor("a stop to escalate", escalated, turnEnded)
 	e.asKonduktor("escalate", escalated, "Pick a database")
 	quoting := e.mustKK("new", "claude", "-C", e.work, "> a quoted line\n\nmy reply")
-	e.waitFor("answer to the quote", quoting, idle)
+	e.waitFor("answer to the quote", quoting, turnEnded)
 
 	p := e.openPage(1600, 900)
 	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+quoting), nil)
@@ -690,7 +683,7 @@ func TestMessageImages(t *testing.T) {
 	attached, inline, linked := e.upload("attached.png", data.Bytes()), e.upload("inline.png", data.Bytes()), e.upload("linked.png", data.Bytes())
 	prompt := fmt.Sprintf("![inline](%s)\n\n[![linked](%s)](https://example.com/)\n\n%s", inline.URL, linked.URL, attached.Path)
 	id := e.mustKK("new", "claude", "-C", e.work, prompt)
-	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("answer", id, turnEnded)
 
 	p := e.openPage(1600, 900)
 	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)
@@ -798,7 +791,7 @@ func TestLocalImagesInChat(t *testing.T) {
 	gone := filepath.Join(dir, "gone.png")
 	prompt := fmt.Sprintf("## Screenshots\n\n```\n%s\n```\n\nThe first is `%s`, and %s is gone.\n\n![second](%s)", strings.Join(shots, "\n"), shots[0], gone, shots[1])
 	id := e.mustKK("new", "claude", "-C", e.work, prompt)
-	e.waitFor("answer", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("answer", id, turnEnded)
 
 	p := e.openPage(1600, 900)
 	p.eval(fmt.Sprintf(`location.hash = %q`, "~"+id), nil)

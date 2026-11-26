@@ -15,7 +15,7 @@ func isQueued(c convView) bool { return c.Status == statusQueued }
 func TestChainQueuesAndStarts(t *testing.T) {
 	e := newEnv(t)
 	pred := e.mustKK("new", "claude", "-C", e.work, "-g", "Billing export", "hello")
-	e.waitFor("predecessor idle", pred, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("predecessor idle", pred, turnEnded)
 
 	next := e.mustKK("new", "claude", "-C", e.work, "-after", pred, "Second step")
 	branch := e.mustKK("new", "codex", "-C", e.work, "-after", pred, "-g", "Release notes", "Other branch")
@@ -110,7 +110,7 @@ func TestChainNotifiesKonduktor(t *testing.T) {
 	e := newCoordinatorEnv(t)
 	// The user's own agent: its turns go to the user, its handoff to the konduktor.
 	mine := e.mustKK("new", "claude", "-C", e.work, "hello")
-	e.waitFor("idle", mine, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("idle", mine, turnEnded)
 	a := e.asKonduktor("new", "claude", "-C", e.work, "-after", mine, "Step A")
 	b := e.asKonduktor("new", "claude", "-C", e.work, "-after", mine, "Step B")
 	e.mustKK("send", mine, "again")
@@ -122,14 +122,14 @@ func TestChainNotifiesKonduktor(t *testing.T) {
 		t.Fatal("a successor started without kk start")
 	}
 	e.asKonduktor("start", a, "Done in commit abc.")
-	c := e.waitFor("successor answer", a, func(c convView) bool { return c.Status == statusIdle && c.WaitingFor == waitingKonduktor })
+	c := e.waitFor("successor answer", a, func(c convView) bool { return turnEnded(c) && c.WaitingFor == waitingKonduktor })
 	if !hasEvent(c, kindUser, "Step A\n\nHandoff from the session before this one:\n\nDone in commit abc.") {
 		t.Fatalf("successor prompt: %+v", c.Events)
 	}
 
 	// A predecessor the user needs to answer is not the konduktor's, and its close is news.
 	asks := e.mustKK("new", "claude", "-C", e.work, "hello")
-	e.waitFor("idle", asks, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("idle", asks, turnEnded)
 	waits := e.asKonduktor("new", "claude", "-C", e.work, "-after", asks, "Waits")
 	e.mustKK("send", asks, "ask for permission")
 	e.waitFor("dialog", asks, func(c convView) bool { return c.Attention != "" })

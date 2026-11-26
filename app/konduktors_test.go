@@ -208,7 +208,7 @@ func TestOwnerlessSessionStaysWithTheMainKonduktor(t *testing.T) {
 	alpha := filepath.Join(e.work, "alpha")
 	os.MkdirAll(alpha, 0o755)
 	id := e.asKonduktor("new", "claude", "-C", alpha, "from before the owners")
-	e.waitFor("idle", id, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("idle", id, turnEnded)
 	// A session the main konduktor started before kk recorded owners.
 	e.stop()
 	path := filepath.Join(e.home, "conversations", id+".yaml")
@@ -225,7 +225,7 @@ func TestOwnerlessSessionStaysWithTheMainKonduktor(t *testing.T) {
 	// A session the user started goes to the konduktor of its directory once an agent of that konduktor takes it over.
 	mine := e.mustKK("new", "claude", "-C", alpha, "the user's own")
 	k := e.konduktors()[1].ID
-	e.waitFor("idle", mine, func(c convView) bool { return c.Status == statusIdle })
+	e.waitFor("idle", mine, turnEnded)
 	e.mustAs(k, "send", mine, "taken over")
 	e.waitFor("taken over", mine, func(c convView) bool { return c.Konduktor == k && c.WaitingFor == waitingKonduktor })
 }
