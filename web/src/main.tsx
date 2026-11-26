@@ -6,6 +6,7 @@ import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
 import { Controls } from "./controls";
 import { DirField } from "./dirpicker";
+import { Glenz } from "./glenz";
 import { Load } from "./load";
 import { ImageViewer, linkImages } from "./images";
 import { Board, CardTitle } from "./board";
@@ -257,6 +258,7 @@ function App() {
               );
             })}
           </div>
+          <Glenz page={`${tab} ${conductor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
           <Load />
         </aside>
         <div class="panels" hidden={tab !== "Agents"}>
