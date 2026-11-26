@@ -80,6 +80,8 @@ export type Settings = {
   skill_dirs: string[];
   coordinator: boolean;
   coordinator_model: string;
+  coordinator_prompt: string;
+  worker_prompt: string;
   source: string;
   start_timeout_seconds: number;
   compact_after_minutes: number;
