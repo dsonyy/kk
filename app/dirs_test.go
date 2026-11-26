@@ -96,7 +96,8 @@ func TestDirectoryTabs(t *testing.T) {
 
 	p.dirTab("alpha")
 	p.until(`document.querySelectorAll(".sidebar .tile").length === 2`)
-	if got := p.texts(".sidebar .group .name"); !slices.Equal(got, []string{"Billing export", "Search index"}) && !slices.Equal(got, []string{"Search index", "Billing export"}) {
+	// Inside a directory the sidebar is one list, without the groups of the sessions.
+	if got := p.texts(".sidebar .group .name"); len(got) != 0 {
 		t.Fatalf("groups in alpha: %q", got)
 	}
 	if got := p.texts(".sidebar .filters .menu > button"); slices.Contains(got, "Directory") {
@@ -126,6 +127,17 @@ func TestDirectoryTabs(t *testing.T) {
 	p.click(`[...document.querySelectorAll(".dir-menu .dir-item")].find((b) => b.title === ` + fmt.Sprintf("%q", gamma) + `)`)
 	p.until(`!document.querySelector(".dir-menu") && document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "gamma"`)
 	p.until(`document.querySelectorAll(".board .column.folded").length === 1`)
+	// The closed sessions of a directory sit in a group that starts collapsed.
+	p.view("Agents")
+	p.until(`document.querySelector(".sidebar .group:not([open]) .name")?.textContent === "Closed" && document.querySelector(".sidebar .group .count")?.textContent === "1"`)
+	if n := len(p.texts(".sidebar .groups > .group")); n != 1 {
+		t.Fatalf("groups in gamma: %d", n)
+	}
+	p.shot("gamma-agents")
+	p.click(`document.querySelector(".sidebar .group > summary")`)
+	p.until(`document.querySelector(".sidebar .group[open] .tile.closed")`)
+	p.shot("gamma-closed-open")
+	p.view("Sessions")
 	p.dirTab("beta")
 	p.until(`document.querySelector("nav.tabs .dirs .tab.on")?.textContent === "beta" && [...document.querySelectorAll("nav.tabs .dirs .tab")].some((a) => a.textContent === "gamma")`)
 

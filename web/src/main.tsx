@@ -303,16 +303,17 @@ function App() {
     localStorage.setItem("kk.collapsed", JSON.stringify(next));
     setCollapsed(next);
   };
-  // The sidebar groups sessions by directory in All and by feature inside a directory, with the ungrouped ones last. A group
-  // follows its first session, its name when sorting by title, and puts work in progress first when sorting by activity.
-  const keyOf = (c: Conversation) => (dir ? `${c.project}\n${c.group ?? ""}` : c.project);
-  const nameOf = (key: string) => (dir ? key.split("\n")[1] || "Ungrouped" : label(key));
+  // In All the sidebar groups sessions by directory. A group follows its first session, its name when sorting by title, and
+  // puts work in progress first when sorting by activity. Inside a directory the open sessions form one list, and the closed
+  // ones sit below it in a group that starts collapsed.
   const groups = new Map<string, Conversation[]>();
-  for (const c of list) groups.set(keyOf(c), [...(groups.get(keyOf(c)) ?? []), c]);
+  for (const c of list) groups.set(c.project, [...(groups.get(c.project) ?? []), c]);
   const keys = [...groups.keys()];
-  if (sort === "title") keys.sort((a, b) => byName(nameOf(a), nameOf(b)));
+  if (sort === "title") keys.sort((a, b) => byName(label(a), label(b)));
   if (sort === "active") keys.sort((a, b) => byActivity(groups.get(a)!, groups.get(b)!));
-  if (dir) keys.sort((a, b) => Number(a.endsWith("\n")) - Number(b.endsWith("\n")));
+  const going = list.filter((c) => !c.closed);
+  const gone = list.filter((c) => c.closed);
+  const goneKey = `${dir}\nclosed`;
 
   const [konduktor, setKonduktor] = useState(() => localStorage.getItem("kk.conductor") !== "hidden");
   // The panel shows the konduktor of the directory, or of the one picked in its menu until the directory changes.
@@ -447,24 +448,41 @@ function App() {
               </Scope>
               <div class="groups">
                 {list.length === 0 && <div class="empty">{empty}</div>}
-                {keys.map((key) => {
-                  const closed = allClosed((c) => keyOf(c) === key);
-                  return (
-                    <Group
-                      key={key}
-                      all={sessions}
-                      title={dir ? undefined : key}
-                      name={nameOf(key)}
-                      mono={!dir}
-                      muted={dir !== "" && key.endsWith("\n")}
-                      list={groups.get(key)!}
-                      open={open}
-                      collapsed={closed ? !unfolded.includes(key) : collapsed.includes(key)}
-                      onCollapse={(on) => (closed ? unfold(key, !on) : collapse(key, on))}
-                      onOpen={show}
-                    />
-                  );
-                })}
+                {dir ? (
+                  <>
+                    {going.length > 0 && <Tiles list={going} all={sessions} open={open} onOpen={show} />}
+                    {gone.length > 0 && (
+                      <Group
+                        all={sessions}
+                        name="Closed"
+                        muted
+                        list={gone}
+                        open={open}
+                        collapsed={!unfolded.includes(goneKey)}
+                        onCollapse={(on) => unfold(goneKey, !on)}
+                        onOpen={show}
+                      />
+                    )}
+                  </>
+                ) : (
+                  keys.map((key) => {
+                    const closed = allClosed((c) => c.project === key);
+                    return (
+                      <Group
+                        key={key}
+                        all={sessions}
+                        title={key}
+                        name={label(key)}
+                        mono
+                        list={groups.get(key)!}
+                        open={open}
+                        collapsed={closed ? !unfolded.includes(key) : collapsed.includes(key)}
+                        onCollapse={(on) => (closed ? unfold(key, !on) : collapse(key, on))}
+                        onOpen={show}
+                      />
+                    );
+                  })
+                )}
               </div>
               <Glenz page={`${tab} ${dir} ${konduktor} ${sessions.length} ${open.filter((id) => details[id]).join()}`} />
               <Load />
@@ -692,7 +710,6 @@ type GroupProps = {
 };
 
 function Group({ all, title, name, mono, muted, list, open, collapsed, onCollapse, onOpen }: GroupProps) {
-  const chains = arrange(list, all);
   const loud = loudest(list);
   const unread = list.some((c) => c.unread && !open.includes(c.id));
   const cls = ["group", collapsed && loud && attention(loud), collapsed && unread && "unread"];
@@ -709,14 +726,21 @@ function Group({ all, title, name, mono, muted, list, open, collapsed, onCollaps
         )}
         <span class="count">{list.length}</span>
       </summary>
-      <ChainLinks chains={chains} hot={(id) => open.includes(id)}>
-        <ul class="tiles">
-          {chains.order.map((c) => (
-            <Tile key={c.id} c={c} chains={chains} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
-          ))}
-        </ul>
-      </ChainLinks>
+      <Tiles list={list} all={all} open={open} onOpen={onOpen} />
     </details>
+  );
+}
+
+function Tiles({ list, all, open, onOpen }: { list: Conversation[]; all: Conversation[]; open: string[]; onOpen: (id: string) => void }) {
+  const chains = arrange(list, all);
+  return (
+    <ChainLinks chains={chains} hot={(id) => open.includes(id)}>
+      <ul class="tiles">
+        {chains.order.map((c) => (
+          <Tile key={c.id} c={c} chains={chains} on={open.includes(c.id)} onOpen={() => onOpen(c.id)} />
+        ))}
+      </ul>
+    </ChainLinks>
   );
 }
 
