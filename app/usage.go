@@ -1,10 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -141,34 +144,65 @@ const (
 
 var modelDate = regexp.MustCompile(`-\d{8}$`)
 
+// claudeUsage is the usage of a Claude Code message. A message that used a server-side tool such as the advisor made
+// several calls, each recorded in Calls; the advisor's carries the advisor's model. The top-level counts add up only
+// the calls of the message's own model, and Claude Code 2.1 before iterations records just them.
 type claudeUsage struct {
-	Input       int    `json:"input_tokens"`
-	CacheRead   int    `json:"cache_read_input_tokens"`
-	CacheCreate int    `json:"cache_creation_input_tokens"`
-	Output      int    `json:"output_tokens"`
+	claudeCall
 	Speed       string `json:"speed"`
 	Geo         string `json:"inference_geo"`
-	CacheWrite  *struct {
-		Hour int `json:"ephemeral_1h_input_tokens"`
-	} `json:"cache_creation"`
 	ServerTools struct {
 		Searches int `json:"web_search_requests"`
 	} `json:"server_tool_use"`
+	Calls []claudeCall `json:"iterations"`
 }
 
-// claudeRequest prices the usage of one request to the model.
-func claudeRequest(model string, u claudeUsage) Usage {
-	out := Usage{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheCreate, Output: u.Output}
+type claudeCall struct {
+	Input       int `json:"input_tokens"`
+	CacheRead   int `json:"cache_read_input_tokens"`
+	CacheCreate int `json:"cache_creation_input_tokens"`
+	Output      int `json:"output_tokens"`
+	CacheWrite  *struct {
+		Hour int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+	// Model is set only on a call to another model than the message's.
+	Model string `json:"model"`
+}
+
+func (c claudeCall) prompt() int { return c.Input + c.CacheRead + c.CacheCreate }
+
+func (u claudeUsage) calls() []claudeCall {
+	if len(u.Calls) == 0 {
+		return []claudeCall{u.claudeCall}
+	}
+	return u.Calls
+}
+
+// context is the prompt of the last call of the message's own model.
+func (u claudeUsage) context() int {
+	calls := u.calls()
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i].Model == "" {
+			return calls[i].prompt()
+		}
+	}
+	return 0
+}
+
+// claudeRequest prices one call to a model. Fast mode is a setting of the message's own model, so it prices only its
+// calls; the region applies to every call.
+func claudeRequest(model string, c claudeCall, fast bool, geo string) Usage {
+	out := Usage{Input: c.Input, CacheRead: c.CacheRead, CacheWrite: c.CacheCreate, Output: c.Output}
 	base := modelDate.ReplaceAllString(model, "")
 	p, ok := claudePrices[base]
-	if long, has := claudeLongPrices[base]; has && u.Input+u.CacheRead+u.CacheCreate > claudeLongPrompt {
+	if long, has := claudeLongPrices[base]; has && c.prompt() > claudeLongPrompt {
 		p = long
 	}
-	if u.Speed == "fast" {
+	if fast {
 		ok = ok && slices.Contains(claudeFast, base)
 		p = p.times(2)
 	}
-	if u.Geo == "us" {
+	if geo == "us" {
 		p = p.times(claudeUS)
 	}
 	if !ok {
@@ -176,12 +210,28 @@ func claudeRequest(model string, u claudeUsage) Usage {
 		return out
 	}
 	hour := 0
-	if u.CacheWrite != nil {
-		hour = min(u.CacheWrite.Hour, u.CacheCreate)
+	if c.CacheWrite != nil {
+		hour = min(c.CacheWrite.Hour, c.CacheCreate)
 	}
-	out.Cost = (float64(u.Input)*p.input + float64(u.CacheRead)*p.cacheRead + float64(u.CacheCreate-hour)*p.write5m +
-		float64(hour)*p.write1h + float64(u.Output)*p.output) / 1e6
-	out.Cost += float64(u.ServerTools.Searches) * claudeSearch
+	out.Cost = (float64(c.Input)*p.input + float64(c.CacheRead)*p.cacheRead + float64(c.CacheCreate-hour)*p.write5m +
+		float64(hour)*p.write1h + float64(c.Output)*p.output) / 1e6
+	return out
+}
+
+// claudeMessage prices every call of a message, by model. Its web searches are charged once, to its own model.
+func claudeMessage(model string, u claudeUsage) map[string]Usage {
+	out := map[string]Usage{}
+	for _, c := range u.calls() {
+		m := cmp.Or(c.Model, model)
+		r := claudeRequest(m, c, u.Speed == "fast" && c.Model == "", u.Geo)
+		sum := out[m]
+		sum.add(r)
+		out[m] = sum
+	}
+	if r := out[model]; r.Unpriced == nil {
+		r.Cost += float64(u.ServerTools.Searches) * claudeSearch
+		out[model] = r
+	}
 	return out
 }
 
@@ -192,20 +242,24 @@ func meterClaude(t *Tail, l *claudeLine) {
 	if l.Type != "assistant" || m.Usage == nil || m.Model == "<synthetic>" {
 		return
 	}
-	u := claudeRequest(m.Model, *m.Usage)
+	calls := claudeMessage(m.Model, *m.Usage)
 	if m.ID != "" {
 		if before, ok := t.metered[m.ID]; ok {
-			t.Activity.meter(before.at, m.Model, negate(before.usage))
+			for model, u := range before.calls {
+				t.Activity.meter(before.at, model, negate(u))
+			}
 		}
-		t.metered[m.ID] = metered{l.Timestamp, u}
+		t.metered[m.ID] = metered{l.Timestamp, calls}
 	}
-	t.Activity.meter(l.Timestamp, m.Model, u)
+	for model, u := range calls {
+		t.Activity.meter(l.Timestamp, model, u)
+	}
 }
 
-// metered is the usage counted for a Claude Code message, and when.
+// metered is the usage counted for a Claude Code message, by model, and when.
 type metered struct {
 	at    time.Time
-	usage Usage
+	calls map[string]Usage
 }
 
 func negate(u Usage) Usage {
@@ -400,4 +454,35 @@ func (s *Server) handleActivity(*http.Request) (any, error) {
 		out = append(out, activityRow{c.ID, c.Role, c.Harness, c.Project(), usageParser[c.Harness] != nil, c.Created, c.LastMessage, c.Closed, c.TotalActivity()})
 	}
 	return out, nil
+}
+
+// remeter counts the usage of every Claude Code transcript that conversations keep again, so that usage stored by an
+// earlier version of kk follows the current count. It keeps the turns and tools, which only the full parser counts,
+// and what is stored for a file that is gone.
+func (s *Server) remeter() {
+	for _, c := range s.store.list() {
+		if c.Harness != "claude" {
+			continue
+		}
+		fresh := map[string]Activity{}
+		for path := range c.Transcripts {
+			t := newTail(path)
+			if _, err := t.read(parseClaudeUsage); err == nil {
+				fresh[path] = t.Activity.clone()
+			}
+		}
+		s.store.update(c.ID, func(c *Conversation) bool {
+			changed := false
+			for path, f := range fresh {
+				a, ok := c.Transcripts[path]
+				if !ok || reflect.DeepEqual([]any{a.Usage, a.Days, a.Models}, []any{f.Usage, f.Days, f.Models}) {
+					continue
+				}
+				a.Usage, a.Days, a.Models = f.Usage, f.Days, f.Models
+				c.Transcripts = maps.Clone(c.Transcripts)
+				c.Transcripts[path], changed = a, true
+			}
+			return changed
+		})
+	}
 }

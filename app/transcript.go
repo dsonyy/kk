@@ -375,7 +375,7 @@ func parseClaude(t *Tail, raw []byte) {
 	case "assistant":
 		meterClaude(t, &l)
 		if u := l.Message.Usage; u != nil {
-			t.Context = u.Input + u.CacheRead + u.CacheCreate
+			t.Context = u.context()
 		}
 		t.carryOn()
 		var blocks []claudeBlock

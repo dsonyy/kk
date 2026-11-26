@@ -684,10 +684,15 @@ func handle(prompt string) {
 	}
 	toolCall("ls", "a.txt\nb.txt\n")
 	hook("PostToolUse", map[string]any{"tool_name": "Bash"})
+	advisor := strings.Contains(prompt, "advisor") && mode == "claude"
 	if strings.Contains(prompt, "subagent") {
-		subagent()
+		subagent(advisor)
 	}
-	answer("echo: "+prompt, tokens)
+	if advisor {
+		advisorAnswer("echo: " + prompt)
+	} else {
+		answer("echo: "+prompt, tokens)
+	}
 	if mode == "claude" {
 		words := strings.Fields(prompt)
 		if len(words) > 3 {
@@ -804,8 +809,42 @@ func answer(text string, tokens int) {
 	}
 }
 
-// subagent writes the transcript of a subagent that used 1000 tokens of input and 100 of output, where the harness keeps it.
-func subagent() {
+// call is the usage of one model call within a Claude Code message, as an entry of usage.iterations.
+func call(kind string, input, cacheRead, write1h, write5m, output int) map[string]any {
+	return map[string]any{"input_tokens": input, "output_tokens": output, "cache_read_input_tokens": cacheRead, "cache_creation_input_tokens": write1h + write5m,
+		"cache_creation": map[string]any{"ephemeral_5m_input_tokens": write5m, "ephemeral_1h_input_tokens": write1h}, "type": kind}
+}
+
+// advisorCall is the advisor's call, which Claude Code records under the model that made it.
+func advisorCall(input, output int) map[string]any {
+	c := call("advisor_message", input, 0, 0, 0, output)
+	c["model"] = "claude-fable-5-2"
+	return c
+}
+
+// advisorAnswer writes an answer that consulted the advisor, as Claude Code 2.1 records it: a message of three calls,
+// the main model's before and after the advisor's. The top-level usage adds up only the main model's calls and splits
+// the cache writes as the first call did.
+func advisorAnswer(text string) {
+	id := "msg_" + uuid()[:8]
+	usage := map[string]any{"input_tokens": 4, "cache_read_input_tokens": 1900, "cache_creation_input_tokens": 300, "output_tokens": 100,
+		"cache_creation":  map[string]any{"ephemeral_1h_input_tokens": 100, "ephemeral_5m_input_tokens": 0},
+		"server_tool_use": map[string]any{"web_search_requests": 0, "web_fetch_requests": 0}, "service_tier": "standard", "inference_geo": "global", "speed": "standard",
+		"iterations": []any{call("message", 2, 900, 100, 0, 40), advisorCall(5000, 300), call("message", 2, 1000, 0, 200, 60)}}
+	tool := "srvtoolu_" + uuid()[:8]
+	for _, block := range []map[string]any{
+		{"type": "thinking", "thinking": "", "signature": "x"},
+		{"type": "server_tool_use", "id": tool, "name": "advisor", "input": map[string]any{}},
+		{"type": "advisor_tool_result", "tool_use_id": tool, "content": map[string]any{"type": "advisor_result", "text": "advice"}},
+		{"type": "text", "text": text},
+	} {
+		write(map[string]any{"type": "assistant", "advisorModel": "claude-fable-5-2", "message": map[string]any{"id": id, "model": claudeModels[model], "role": "assistant", "content": []any{block}, "usage": usage}})
+	}
+}
+
+// subagent writes the transcript of a subagent that used 1000 tokens of input and 100 of output, where the harness
+// keeps it. A Claude Code subagent that consults the advisor adds 2000 tokens of input and 100 of output on its model.
+func subagent(advisor bool) {
 	if mode == "codex" {
 		child := uuid()
 		path := filepath.Join(filepath.Dir(transcript), "rollout-"+time.Now().Format("2006-01-02T15-04-05")+"-"+child+".jsonl")
@@ -821,9 +860,13 @@ func subagent() {
 	}
 	dir := filepath.Join(strings.TrimSuffix(transcript, ".jsonl"), "subagents")
 	os.MkdirAll(dir, 0o755)
+	usage := map[string]any{"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 100}
+	if advisor {
+		usage["iterations"] = []any{call("message", 1000, 0, 0, 0, 100), advisorCall(2000, 100)}
+	}
 	appendLines(filepath.Join(dir, "agent-a"+uuid()[:8]+".jsonl"), []map[string]any{{"type": "assistant", "isSidechain": true, "message": map[string]any{
 		"id": "msg_" + uuid()[:8], "model": "claude-haiku-5-5", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "found it"}},
-		"usage": map[string]any{"input_tokens": 1000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 100},
+		"usage": usage,
 	}}})
 }
 

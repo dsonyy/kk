@@ -3,11 +3,14 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // The fake agents answer with 1000 tokens of input, 990 of them from the cache, and 50 of output. A subagent adds
@@ -81,6 +84,68 @@ func TestClaudeUsage(t *testing.T) {
 	e.mustKK("close", id)
 	if u := usageOf(e.conv(id)); tokens(u) != 5*answerTokens+1100 || !near(u.Cost, want) {
 		t.Fatalf("usage after close: %+v", u)
+	}
+}
+
+// An answer that consulted the advisor is one message of three calls: the main model's with 1000 and 1202 tokens of
+// prompt, and the advisor's on Claude Fable 5.2. The subagent consults it too.
+const (
+	mainCalls      = (2*4+900*0.20+100*8+40*20)/1e6 + (2*4+1000*0.20+200*5+60*20)/1e6
+	advisorCall    = (5000*8 + 300*40) / 1e6
+	subagentAdvice = (2000*8 + 100*40) / 1e6
+	advisorTokens  = 1042 + 5300 + 1262 + 1100 + 2100
+)
+
+func TestClaudeAdvisorUsage(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-m", "opus", "-C", e.work, "ask the advisor and a subagent")
+	want := mainCalls + advisorCall + haikuAgent + subagentAdvice
+	c := waitUsage(e, id, advisorTokens, want)
+	if c.Context != 1202 {
+		t.Fatalf("context should be the prompt of the last call of the main model: %d", c.Context)
+	}
+	models := func() map[string]Usage {
+		for _, r := range activity(e) {
+			if r.ID == id {
+				return r.Models
+			}
+		}
+		return nil
+	}
+	if m := models(); m["claude-fable-5-2"].Input != 7000 || m["claude-fable-5-2"].Output != 400 || m["claude-opus-5-5"].Output != 100 || m["claude-haiku-5-5"].Output != 100 {
+		t.Fatalf("models: %+v", m)
+	}
+
+	// Usage stored by an earlier version is counted again from the transcripts that are still there.
+	e.mustKK("close", id)
+	e.stop()
+	path := filepath.Join(e.home, "conversations", id+".yaml")
+	data, _ := os.ReadFile(path)
+	var stored Conversation
+	if err := yaml.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	turns := 0
+	for p, a := range stored.Transcripts {
+		turns += a.Turns
+		a.Usage, a.Models, a.Days = Usage{Output: 1}, map[string]Usage{"claude-opus-5-5": {Output: 1}}, nil
+		stored.Transcripts[p] = a
+	}
+	stored.Transcripts["gone.jsonl"] = Activity{Usage: Usage{Output: 7, Cost: 1}, Turns: 1}
+	data, _ = yaml.Marshal(stored)
+	os.WriteFile(path, data, 0o600)
+	e.start()
+	c = e.waitFor("usage counted again", id, func(c convView) bool {
+		u := usageOf(c)
+		return tokens(u) == advisorTokens+7 && near(u.Cost, want+1)
+	})
+	if m := models(); m["claude-fable-5-2"].Input != 7000 {
+		t.Fatalf("models after a restart: %+v", m)
+	}
+	for _, r := range activity(e) {
+		if r.ID == id && r.Turns != turns+1 {
+			t.Fatalf("turns after a restart: %d, want %d", r.Turns, turns+1)
+		}
 	}
 }
 

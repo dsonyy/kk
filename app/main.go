@@ -126,6 +126,7 @@ func serve() error {
 	go watchStats()
 	go s.groupLoop()
 	s.backfillGroups()
+	s.remeter()
 	go http.Serve(unixLn, mux)
 	go http.Serve(tcpLn, s.guard(mux))
 	s.tick()
