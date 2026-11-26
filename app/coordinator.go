@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"log"
 	"os"
 	"path/filepath"
@@ -81,9 +82,27 @@ When you acted on your own, say in one line what you did.
 The source code is in {{SOURCE}} (Go server in app/, web client in web/, read AGENTS.md there first). After a change: run the tests, then "just install", which rebuilds the binary and restarts the kk service. Agents and your own session keep running in tmux across restarts.
 `
 
+// workerPrompt is the built-in text every session kk starts for work gets besides its own prompt.
+const workerPrompt = ""
+
+// placeholders maps each placeholder of the konduktor prompt to its value.
+func (s *Server) placeholders() map[string]string {
+	return map[string]string{"{{BIN}}": s.bin, "{{HOME}}": s.store.dir, "{{SOURCE}}": s.cfg().source()}
+}
+
+// coordinatorText is the konduktor's system prompt: the text from Settings, or the default, with its placeholders
+// filled. What kk generates per konduktor is appended after it here.
+func (s *Server) coordinatorText() string {
+	var pairs []string
+	for k, v := range s.placeholders() {
+		pairs = append(pairs, k, v)
+	}
+	return strings.NewReplacer(pairs...).Replace(cmp.Or(s.cfg().CoordinatorPrompt, coordinatorPrompt))
+}
+
 func (s *Server) ensureCoordinator() error {
 	cfg := s.cfg()
-	text := strings.NewReplacer("{{BIN}}", s.bin, "{{HOME}}", s.store.dir, "{{SOURCE}}", cfg.source()).Replace(coordinatorPrompt)
+	text := s.coordinatorText()
 	if err := os.WriteFile(filepath.Join(s.store.dir, "coordinator.md"), []byte(text), 0o600); err != nil {
 		return err
 	}

@@ -31,6 +31,11 @@ type Settings struct {
 	CompactTokens       int      `yaml:"compact_tokens" json:"compact_tokens"`
 	// Inbox holds, per inbox source, the ways kk reads it and how often it checks.
 	Inbox map[string]InboxSettings `yaml:"inbox" json:"inbox"`
+
+	// CoordinatorPrompt and WorkerPrompt hold only the user's own text. Empty means the built-in default, so a better
+	// default reaches everyone who never edited it.
+	CoordinatorPrompt string `yaml:"coordinator_prompt,omitempty" json:"coordinator_prompt"`
+	WorkerPrompt      string `yaml:"worker_prompt,omitempty" json:"worker_prompt"`
 }
 
 // InboxSettings switches each way of integrating a source on or off. The work_minutes and off_minutes of an earlier
@@ -147,6 +152,18 @@ type settingsView struct {
 	Settings Settings `json:"settings"`
 	// Env names the settings an environment variable overrides for this run.
 	Env map[string]string `json:"env"`
+	// Defaults holds the built-in prompts, which an empty prompt setting stands for.
+	Defaults map[string]string `json:"defaults"`
+	// Placeholders maps each placeholder of the konduktor prompt to what kk fills in.
+	Placeholders map[string]string `json:"placeholders"`
+}
+
+// override is what a prompt setting stores: nothing when the text is empty or the default.
+func override(text, def string) string {
+	if t := strings.TrimSpace(text); t == "" || t == strings.TrimSpace(def) {
+		return ""
+	}
+	return text
 }
 
 func (s *Server) handleSettings(*http.Request) (any, error) {
@@ -156,7 +173,8 @@ func (s *Server) handleSettings(*http.Request) (any, error) {
 			env[field] = name
 		}
 	}
-	return settingsView{s.cfg(), env}, nil
+	defaults := map[string]string{"coordinator_prompt": coordinatorPrompt, "worker_prompt": workerPrompt}
+	return settingsView{s.cfg(), env, defaults, s.placeholders()}, nil
 }
 
 // changedSettings names the settings that differ between a and b, without their values.
@@ -183,6 +201,8 @@ func (s *Server) handleSaveSettings(r *http.Request) (any, error) {
 	if err := decode(r, &st); err != nil {
 		return nil, err
 	}
+	st.CoordinatorPrompt = override(st.CoordinatorPrompt, coordinatorPrompt)
+	st.WorkerPrompt = override(st.WorkerPrompt, workerPrompt)
 	if _, _, err := net.SplitHostPort(st.Addr); err != nil {
 		return nil, fail(400, "address %q is not host:port", st.Addr)
 	}
