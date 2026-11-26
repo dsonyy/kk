@@ -95,6 +95,15 @@ function parsePanels(text: string): Panel[] {
 
 localStorage.removeItem("kk.konduktorPin");
 
+// A page that outlives a restart of the server still runs the build it was loaded with.
+async function newBuild() {
+  const src = document.querySelector("script[type=module][src]")?.getAttribute("src");
+  const page = await fetch("/", { cache: "no-store" })
+    .then((r) => (r.ok ? r.text() : ""))
+    .catch(() => "");
+  return !!src && !!page && !page.includes(src);
+}
+
 function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
   const [filter, setFilter] = useFilter();
@@ -203,11 +212,16 @@ function App() {
     loadList();
     const pending = new Set<string>();
     let timer = 0;
+    let opened = false;
+    let stale = false;
+    // Unsent text keeps the old build until it is sent or cleared.
+    const reloadIfStale = () => stale && ![...document.querySelectorAll("textarea")].some((t) => t.value.trim()) && location.reload();
     const source = new EventSource("/api/events");
     source.onmessage = (e) => {
       pending.add(e.data);
       clearTimeout(timer);
       timer = window.setTimeout(() => {
+        reloadIfStale();
         loadList();
         for (const id of pending) if (isOpen(id) || id === reading.current) loadDetail(id);
         // A subagent changes with its session.
@@ -215,7 +229,10 @@ function App() {
         pending.clear();
       }, 100);
     };
-    source.onopen = () => {
+    source.onopen = async () => {
+      if (opened) stale ||= await newBuild();
+      opened = true;
+      reloadIfStale();
       loadList();
       if (reading.current) loadDetail(reading.current);
       for (const p of placeRef.current.panels) loadDetail(p.id);

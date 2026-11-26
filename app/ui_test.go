@@ -1214,3 +1214,47 @@ func TestResumeEarlierSessionFromItsTile(t *testing.T) {
 	working("Typed session")
 	resumed(typed)
 }
+
+// A page that outlives a restart of the server loads again when the server brings a new build, but not while it holds
+// unsent text.
+func TestPageReloadsOnNewBuild(t *testing.T) {
+	e := newEnv(t)
+	id := e.mustKK("new", "claude", "-C", e.work, "hello")
+	e.waitFor("idle", id, turnEnded)
+	p := e.openPage(1600, 900)
+	p.openSession(id)
+	p.until(`document.querySelector(".panels textarea")`)
+	p.eval(`window.loaded = 1`, nil)
+	// Each reconnect asks for the page to compare its build.
+	checks := 0
+	restart := func() {
+		t.Helper()
+		checks++
+		e.stop()
+		e.start()
+		p.until(fmt.Sprintf(`performance.getEntriesByType("resource").filter((r) => new URL(r.name).pathname === "/").length === %d`, checks))
+		p.until(`document.querySelector(".tile")`)
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	restart()
+	var loaded bool
+	if p.eval(`window.loaded === 1`, &loaded); !loaded {
+		t.Fatal("the page loaded again after a restart with the same build")
+	}
+
+	p.eval(`document.querySelector("script[type=module][src]").setAttribute("src", "/assets/index-old.js")`, nil)
+	p.eval(`(() => { const a = document.querySelector(".panels textarea"); a.value = "unsent"; a.dispatchEvent(new Event("input", { bubbles: true })) })()`, nil)
+	restart()
+	var kept struct {
+		Loaded bool
+		Text   string
+	}
+	if p.eval(`({ loaded: window.loaded === 1, text: document.querySelector(".panels textarea").value })`, &kept); !kept.Loaded || kept.Text != "unsent" {
+		t.Fatalf("the page with unsent text after a new build: %+v", kept)
+	}
+
+	p.eval(`(() => { const a = document.querySelector(".panels textarea"); a.value = ""; a.dispatchEvent(new Event("input", { bubbles: true })) })()`, nil)
+	e.mustKK("send", id, "hello again")
+	p.until(`window.loaded === undefined && document.querySelector(".tile")`)
+}
