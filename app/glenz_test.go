@@ -155,7 +155,7 @@ func (b *browser) open(url string, width, height int, reducedMotion bool) {
 }
 
 // glenzProbe counts the frames the canvas draws, the animation frames the page asks for and the page maps it builds, one
-// text range each.
+// text range each. For each frame it keeps the solid's outline as drawn, uncut by the canvas: its left, right and bottom.
 const glenzProbe = `window.draws = 0;
 window.frames = 0;
 window.maps = 0;
@@ -170,7 +170,23 @@ const glenz = (ctx) => ctx.canvas.classList.contains("glenz");
 count(CanvasRenderingContext2D.prototype, "clearRect", "draws", glenz);
 count(WebGL2RenderingContext.prototype, "drawArrays", "draws", glenz);
 count(Document.prototype, "createRange", "maps", () => true);
-count(window, "requestAnimationFrame", "frames", () => true);`
+count(window, "requestAnimationFrame", "frames", () => true);
+window.spans = [];
+const span = () => (window.spans.push({ l: Infinity, r: -Infinity, b: -Infinity }), window.spans.at(-1));
+const point = (s, x, y) => Object.assign(s, { l: Math.min(s.l, x), r: Math.max(s.r, x), b: Math.max(s.b, y) });
+const watch = (proto, name, f) => {
+  const g = proto[name];
+  proto[name] = function (...args) {
+    if (glenz(this)) f(...args);
+    return g.apply(this, args);
+  };
+};
+watch(CanvasRenderingContext2D.prototype, "clearRect", span);
+for (const name of ["moveTo", "lineTo"]) watch(CanvasRenderingContext2D.prototype, name, (x, y) => point(window.spans.at(-1), x, y));
+watch(WebGL2RenderingContext.prototype, "bufferData", (_, data) => {
+  const s = span();
+  for (let i = 0; i < data.length; i += 13) point(s, data[i], data[i + 1]);
+});`
 
 func (b *browser) counter(name string) int {
 	b.t.Helper()
@@ -184,6 +200,50 @@ func (b *browser) countIn(name string, d time.Duration) int {
 	before := b.counter(name)
 	time.Sleep(d)
 	return b.counter(name) - before
+}
+
+// checkBounces records the solid's outline for 17.5 s, a round trip from wall to wall and more than a series of rebounds.
+// The outline touches both sides of the canvas, which are the inner sides of the sidebar, and never crosses them. Each series
+// starts with a launch to 72 px, and each rebound after it is lower than the one before by the share of the height a ball
+// keeps.
+func (b *browser) checkBounces(width, floor float64) {
+	b.t.Helper()
+	b.eval(`window.spans = [], true`, new(bool))
+	time.Sleep(17500 * time.Millisecond)
+	var spans []struct{ L, R, B float64 }
+	b.eval(`window.spans.filter((s) => s.l < Infinity)`, &spans)
+	left, right := width, 0.0
+	for _, s := range spans {
+		if s.L < -0.01 || s.R > width+0.01 {
+			b.t.Fatalf("the solid reaches from %.2f to %.2f px across, out of the %.0f px sidebar", s.L, s.R, width)
+		}
+		left, right = math.Min(left, s.L), math.Max(right, s.R)
+	}
+	if left > 1 || right < width-1 {
+		b.t.Fatalf("the solid reaches from %.2f to %.2f px across, want touching both sides of the %.0f px sidebar", left, right, width)
+	}
+	var peaks []float64
+	for i := 1; i+1 < len(spans); i++ {
+		lift := floor - 1 - spans[i].B
+		if lift > 1.5 && lift > floor-1-spans[i-1].B && lift >= floor-1-spans[i+1].B {
+			peaks = append(peaks, lift)
+		}
+	}
+	launches, rebounds := 0, 0
+	for i, p := range peaks {
+		switch {
+		case math.Abs(p-72) < 2:
+			launches++
+		case i == 0:
+		case p/peaks[i-1] > 0.3 && p/peaks[i-1] < 0.55:
+			rebounds++
+		default:
+			b.t.Fatalf("a hop of %.1f px in %.1f, want launches to 72 px, each followed by lower and lower rebounds", p, peaks)
+		}
+	}
+	if launches == 0 || rebounds < 3 {
+		b.t.Fatalf("%d launches and %d rebounds in %.1f, want a launch and three rebounds or more", launches, rebounds, peaks)
+	}
 }
 
 func (b *browser) tab(name string) {
@@ -298,21 +358,18 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if now, _ := b.glenzShot(); lit < 500 || same(first, now) {
 		t.Fatalf("the solid is not drawn or does not move: %d pixels drawn", lit)
 	}
-	// Over one 13.6 s bounce the solid stays in a low band just above the system load: the floor plus 72 px of travel and
-	// the solid's own height. Nothing is drawn below the floor, as the solid casts no shadow, and the solid keeps clear of
-	// the sidebar's sides.
-	left, high, right, low := size.Width, size.Height, 0.0, 0.0
+	// Over one 13.6 s series of bounces the solid stays in a low band just above the system load: the floor plus 72 px of
+	// travel and the solid's own height. Nothing is drawn below the floor, as the solid casts no shadow.
+	high, low := size.Height, 0.0
 	for end := time.Now().Add(14400 * time.Millisecond); time.Now().Before(end); time.Sleep(250 * time.Millisecond) {
 		img, _ := b.glenzShot()
-		l, top, r, bottom := litBox(img, size.Height)
-		left, high, right, low = math.Min(left, l), math.Min(high, top), math.Max(right, r), math.Max(low, bottom)
+		_, top, _, bottom := litBox(img, size.Height)
+		high, low = math.Min(high, top), math.Max(low, bottom)
 	}
-	if low > size.Floor || high < size.Floor-240 || low-high < 140 {
-		t.Fatalf("the solid reaches from %.0f to %.0f px, want 140 px tall or more and within 240 px above the floor at %.0f", high, low, size.Floor)
+	if low > size.Floor || high < size.Floor-280 || low-high < 200 {
+		t.Fatalf("the solid reaches from %.0f to %.0f px, want 200 px tall or more and within 280 px above the floor at %.0f", high, low, size.Floor)
 	}
-	if left < 2 || right > size.Width-2 {
-		t.Fatalf("the solid reaches from %.0f to %.0f px across, want inside the %.0f px sidebar", left, right, size.Width)
-	}
+	b.checkBounces(size.Width, size.Floor)
 	if n := b.counter("maps") - maps; n != 0 {
 		t.Fatalf("the page map was drawn %d times while nothing changed", n)
 	}
@@ -331,6 +388,14 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 	if n := b.counter("maps") - maps; webgl && n == 0 || !webgl && n != 0 {
 		t.Fatalf("the page map was drawn %d times after the tab changed and the window resized, with WebGL %v", n, webgl)
 	}
+	// A wider sidebar moves the walls with it.
+	b.eval(`document.querySelector("aside.sidebar").style.width = "420px", true`, new(bool))
+	time.Sleep(200 * time.Millisecond)
+	b.eval(measure, &size)
+	if !near(size.Width, size.SidebarWidth) || size.Width < 410 {
+		t.Fatalf("the canvas does not follow the wider sidebar: %+v", size)
+	}
+	b.checkBounces(size.Width, size.Floor)
 
 	b.open(e.url, 1400, 600, false)
 	if n := b.countIn("draws", time.Second); n == 0 {
@@ -351,8 +416,9 @@ func checkGlenz(t *testing.T, flags ...string) bool {
 		t.Fatalf("%.0f%% of the solid is clearly light and %.0f%% near black, want at least 25%% each", light*100, dark*100)
 	}
 	b.eval(measure, &size)
-	if _, top, _, bottom := litBox(still, size.Height); bottom > size.Floor || top < size.Floor-170 {
-		t.Fatalf("the still frame spans %.0f to %.0f px, want resting on the floor at %.0f", top, bottom, size.Floor)
+	if _, top, right, bottom := litBox(still, size.Height); bottom > size.Floor || top < size.Floor-260 || right < size.Width-1 {
+		t.Fatalf("the still frame spans %.0f to %.0f px down and ends %.0f px across, want resting on the floor at %.0f by the right wall at %.0f",
+			top, bottom, right, size.Floor, size.Width)
 	}
 
 	b.open(e.url, 1400, 900, false)
