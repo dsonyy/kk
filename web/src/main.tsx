@@ -14,7 +14,7 @@ import { Board, CardTitle, Star } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { AgentsFold, AgentTile, agentState, useUnfolded } from "./subagents";
 import { Inbox } from "./inbox";
-import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort, awaitsAnswer } from "./filter";
+import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort, acknowledge, blinks } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
@@ -133,6 +133,7 @@ async function newBuild() {
 
 function App() {
   const [sessions, setList] = useState<Conversation[]>([]);
+  const [, setAcknowledged] = useState(0);
   const [filter, setFilter] = useFilter();
   const [sort, setSort] = useSort();
   const [place, setPlace] = useState<Place>(readHash);
@@ -398,6 +399,7 @@ function App() {
   }, [focus]);
   // A session opens in its own directory, unless All is shown or the directory is given.
   const show = (id: string, to?: string) => {
+    acknowledge(sessions.find((c) => c.id === id));
     const cur = placeRef.current;
     const project = sessions.find((c) => c.id === id.split(":")[0])?.project;
     const target = to ?? (cur.dir && project ? project : cur.dir);
@@ -551,6 +553,7 @@ function App() {
                     before={sessions.find((x) => x.id === details[id].after)}
                     of={sessions.find((x) => x.id === details[id].subagent?.of)}
                     onShow={show}
+                    onAcknowledge={() => acknowledge(details[id]) && setAcknowledged((n) => n + 1)}
                     reload={() => loadDetail(id)}
                     onHide={() => hide(id)}
                     pinned={pinned}
@@ -805,7 +808,7 @@ function Tiles({ list, all, open, onOpen }: { list: Conversation[]; all: Convers
 }
 
 function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited", awaitsAnswer(c) && "yours"];
+  const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited", blinks(c) && "yours"];
   return (
     <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <CardTitle c={c} />
@@ -1028,11 +1031,12 @@ type ConversationViewProps = {
   // The session that started this subagent.
   of?: Conversation;
   onShow?: (id: string) => void;
+  onAcknowledge?: () => void;
   // What the konduktor panel shows in place of the title.
   head?: preact.ComponentChildren;
 };
 
-function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, onShow, head }: ConversationViewProps) {
+function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, onShow, onAcknowledge, head }: ConversationViewProps) {
   const [chosen, setView] = useState<"chat" | "terminal" | "media">("chat");
   // A subagent is read only: it has no window of its own and takes no input; its session does.
   const sub = c.subagent;
@@ -1127,7 +1131,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, 
   };
   const Tag = side ? "div" : "main";
   return (
-    <Tag class={onPin && !pinned ? "conversation unpinned" : "conversation"} id={`panel-${c.id}`} data-scope={side ? "coordinator" : `conversation-${c.id}`}>
+    <Tag class={onPin && !pinned ? "conversation unpinned" : "conversation"} id={`panel-${c.id}`} onPointerDown={onAcknowledge} onFocusIn={onAcknowledge} data-scope={side ? "coordinator" : `conversation-${c.id}`}>
       <Scope>
         <header class="conv-head">
           {onPin && (
@@ -1226,7 +1230,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, 
         {view === "media" && <Media items={images} />}
         <div
           hidden={view !== "chat"}
-          class={awaitsAnswer(c) ? "feed yours" : "feed"}
+          class={blinks(c) ? "feed yours" : "feed"}
           ref={feed}
           onScroll={(e) => {
             const el = e.currentTarget;

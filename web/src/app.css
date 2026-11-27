@@ -273,9 +273,10 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile.called { border-color: var(--schedule); animation: called 1s ease-in-out infinite alternate; }
 .tile.called .state { color: var(--schedule); }
 @keyframes called { from { background-color: var(--bg); } to { background-color: var(--schedule-bg); } }
-.tile.yours:not(.attention, .called), .feed.yours .feed-inner > :nth-last-child(1 of .msg) { outline: 1px solid transparent; outline-offset: -1px; animation: turn 1s ease-in-out infinite; }
+.tile.yours:not(.attention, .called), .feed.yours .feed-inner > :nth-last-child(1 of .msg) { outline: 1px solid transparent; outline-offset: -1px; animation: turn 2s ease-in-out infinite; }
 .tile.yours.on { outline-offset: -4px; }
-.feed.yours .feed-inner > :nth-last-child(1 of .msg) { outline-offset: 6px; }
+/* The fade in stays in the list, so the message does not fade in again when the blink stops. */
+.feed.yours .feed-inner > :nth-last-child(1 of .msg) { outline-offset: 6px; animation: enter .18s ease-out, turn 2s ease-in-out infinite; }
 @keyframes turn { 50% { outline-color: var(--text-strong); } }
 @media (prefers-reduced-motion: reduce) { .tile.yours:not(.attention, .called), .feed.yours .feed-inner > :nth-last-child(1 of .msg) { animation: none; outline-color: var(--text-strong); } }
 @media (prefers-reduced-motion: reduce) { .tile.working, .tile.attention, .tile.called, .group.attention > summary, .group.called > summary { animation: none; } .tile.attention, .group.attention > summary { background-color: var(--warn-bg); } .tile.called, .group.called > summary { background-color: var(--schedule-bg); } }

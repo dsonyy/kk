@@ -25,7 +25,7 @@ func TestYourTurnBlinks(t *testing.T) {
 	blinks := func(el string) string {
 		return fmt.Sprintf(`%s?.getAnimations().some((a) => a.animationName === "turn")`, el)
 	}
-	// at holds every blink at one moment of its second, so a screenshot shows one end of it.
+	// at holds every blink at one moment of its period, so a screenshot shows one end of it.
 	at := func(ms int) {
 		p.eval(fmt.Sprintf(`document.getAnimations().filter((a) => a.animationName === "turn").forEach((a) => { a.pause(); a.currentTime = %d })`, ms), nil)
 	}
@@ -48,11 +48,11 @@ func TestYourTurnBlinks(t *testing.T) {
 	still(card(".sidebar", held), card(".sidebar", busy))
 	var period float64
 	p.eval(card(".sidebar", mine)+`.getAnimations().find((a) => a.animationName === "turn").effect.getTiming().duration`, &period)
-	if period != 1000 {
-		t.Errorf("the blink takes %vms, want 1000", period)
+	if period != 2000 {
+		t.Errorf("the blink takes %vms, want 2000", period)
 	}
 	var frame []string
-	p.eval(fmt.Sprintf(`(() => { const el = %s, before = el.getBoundingClientRect().height; const colors = [0, 500].map((ms) => {
+	p.eval(fmt.Sprintf(`(() => { const el = %s, before = el.getBoundingClientRect().height; const colors = [0, 1000].map((ms) => {
 		el.getAnimations().forEach((a) => { a.pause(); a.currentTime = ms }); return getComputedStyle(el).outlineColor })
 		el.getAnimations().forEach((a) => a.play()); return [...colors, String(before === el.getBoundingClientRect().height)] })()`, card(".sidebar", mine)), &frame)
 	if frame[0] == frame[1] || frame[2] != "true" {
@@ -60,7 +60,7 @@ func TestYourTurnBlinks(t *testing.T) {
 	}
 	at(0)
 	p.shot("turn panel card off")
-	at(500)
+	at(1000)
 	p.shot("turn panel card on")
 	run()
 
@@ -70,7 +70,7 @@ func TestYourTurnBlinks(t *testing.T) {
 	still(card(".board", held), card(".board", busy))
 	at(0)
 	p.shot("turn board card off")
-	at(500)
+	at(1000)
 	p.shot("turn board card on")
 	run()
 
@@ -87,7 +87,7 @@ func TestYourTurnBlinks(t *testing.T) {
 	}
 	at(0)
 	p.shot("turn message off")
-	at(500)
+	at(1000)
 	p.shot("turn message on")
 	run()
 
@@ -98,6 +98,58 @@ func TestYourTurnBlinks(t *testing.T) {
 		t.Errorf("with reduced motion the card and the message are not steadily framed: %q", steady)
 	}
 	p.call("Emulation.setEmulatedMedia", map[string]any{"features": []map[string]string{}})
+
+	// Opening a waiting session acknowledges its wait until a new turn ends, also across a reload.
+	unframed := func(els ...string) {
+		t.Helper()
+		still(els...)
+		for _, el := range els {
+			var style string
+			p.eval(fmt.Sprintf(`getComputedStyle(%s).outlineStyle`, el), &style)
+			if style != "none" {
+				t.Errorf("%s is framed: %s", el, style)
+			}
+		}
+	}
+	// The headless timeline moves only on a new frame, so the messages could still be fading in on a screenshot.
+	settle := func() {
+		p.eval(`document.getAnimations().filter((a) => a.animationName === "enter").forEach((a) => a.finish())`, nil)
+	}
+	entering := func(el string) string {
+		return fmt.Sprintf(`%s.getAnimations().find((a) => a.animationName === "enter")`, el)
+	}
+	p.eval(`window.entering = `+entering(last(mine)), nil)
+	p.tap(card(".sidebar", mine))
+	p.until(`!` + card(".sidebar", mine) + `.classList.contains("yours")`)
+	unframed(card(".sidebar", mine), last(mine))
+	var faded bool
+	p.eval(`(`+entering(last(mine))+`) === window.entering`, &faded)
+	if !faded {
+		t.Error("the last message fades in again when its wait is acknowledged")
+	}
+	settle()
+	p.shot("turn acknowledged")
+	p.call("Page.reload", nil)
+	p.until(card(".sidebar", mine) + " && " + last(mine))
+	unframed(card(".sidebar", mine), last(mine))
+	again := func(prompt string) {
+		t.Helper()
+		ended := e.conv(mine).TurnEnded
+		e.mustKK("send", mine, prompt)
+		e.waitFor("a new stop for the user", mine, func(c convView) bool {
+			return turnEnded(c) && c.TurnEnded.After(ended) && c.WaitingFor == waitingUser
+		})
+		p.until(blinks(card(".sidebar", mine)) + " && " + blinks(last(mine)))
+	}
+	again("hello again")
+	settle()
+	at(1000)
+	p.shot("turn blinks again")
+	run()
+	p.tap(fmt.Sprintf(`document.querySelector("#panel-%s textarea")`, mine))
+	p.until(`!` + card(".sidebar", mine) + `.classList.contains("yours")`)
+	unframed(card(".sidebar", mine), last(mine))
+	again("hello once more")
 
 	e.mustKK("send", mine, "slow work")
 	e.waitFor("work again", mine, func(c convView) bool { return c.Status == statusWorking })

@@ -35,6 +35,7 @@ export type Conversation = {
   created: string;
   last_message: string;
   activity: string;
+  turn_ended: string;
   // A queued session waits with its prompt for a start; no agent runs yet.
   status: "queued" | "starting" | "working" | "background" | "idle" | "exited";
   // The session this one follows in a chain.

@@ -6,7 +6,16 @@ export type Filter = { dirs: string[]; states: string[]; starred: boolean };
 
 const yourTurn = (c: Conversation) => !c.closed && c.waiting_for === "user";
 // A konduktor waits for the user whenever it is idle; only an agent stopped mid-task awaits an answer.
-export const awaitsAnswer = (c: Conversation) => yourTurn(c) && !c.role;
+const awaitsAnswer = (c: Conversation) => yourTurn(c) && !c.role;
+// The end of the turn whose wait the user acknowledged, per session. A new turn ending makes the session blink again.
+const acknowledged: Record<string, string> = JSON.parse(localStorage.getItem("kk.acknowledged") || "{}");
+export const blinks = (c: Conversation) => awaitsAnswer(c) && acknowledged[c.id] !== c.turn_ended;
+export const acknowledge = (c: Conversation | undefined) => {
+  if (!c || !blinks(c)) return false;
+  acknowledged[c.id] = c.turn_ended;
+  localStorage.setItem("kk.acknowledged", JSON.stringify(acknowledged));
+  return true;
+};
 
 // The states overlap: an exited session also waits for someone, and a session that needs action is its own and someone's turn.
 const states: Record<string, (c: Conversation) => boolean> = {
