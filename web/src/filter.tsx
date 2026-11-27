@@ -4,11 +4,15 @@ import { Button, Check } from "./mnemonic";
 
 export type Filter = { dirs: string[]; states: string[]; starred: boolean };
 
+const yourTurn = (c: Conversation) => !c.closed && c.waiting_for === "user";
+// A konduktor waits for the user whenever it is idle; only an agent stopped mid-task awaits an answer.
+export const awaitsAnswer = (c: Conversation) => yourTurn(c) && !c.role;
+
 // The states overlap: an exited session also waits for someone, and a session that needs action is its own and someone's turn.
 const states: Record<string, (c: Conversation) => boolean> = {
   Working: (c) => !c.closed && (c.status === "working" || c.status === "starting"),
   "Background working": (c) => !c.closed && c.status === "background",
-  "Your turn": (c) => !c.closed && c.waiting_for === "user",
+  "Your turn": yourTurn,
   "konduktor's turn": (c) => !c.closed && c.waiting_for === "conductor",
   "Action required": (c) => !c.closed && !!c.attention,
   Idle: (c) => !c.closed && c.status === "idle",

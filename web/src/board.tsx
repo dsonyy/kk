@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { act, api, harnessLabel, type Conversation } from "./api";
 import { arrange, ChainLinks, ChainRefs } from "./chain";
-import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
+import { byActivity, byName, compare, groupTime, time, awaitsAnswer, type Sort } from "./filter";
 import { placedAt, TitleIcon } from "./schedule";
 import { AgentsFold, AgentTile, useUnfolded } from "./subagents";
 
@@ -140,7 +140,7 @@ export function Board({ list, all, sort, empty, projects, folded, onFold, onOpen
                           const c = r.c;
                           const [cls, label] = state(c);
                           return (
-                            <li key={c.id} class={`tile ${cls}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
+                            <li key={c.id} class={`tile ${cls}${awaitsAnswer(c) ? " yours" : ""}`} data-chain={c.id} onClick={() => onOpen(c.id)} title={c.attention || undefined}>
                               <CardTitle c={c} />
                               <ChainRefs chains={chains} id={c.id} />
                               <div class="meta">
