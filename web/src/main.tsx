@@ -10,7 +10,7 @@ import { Glenz } from "./glenz";
 import { Load } from "./load";
 import { ImageViewer, linkImages, showImages } from "./images";
 import { fitTables } from "./tables";
-import { Board, CardTitle } from "./board";
+import { Board, CardTitle, Star } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { AgentsFold, AgentTile, agentState, useUnfolded } from "./subagents";
 import { Inbox } from "./inbox";
@@ -1111,6 +1111,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, 
               <Icon name="pin" />
             </button>
           )}
+          {!side && !sub && <Star c={c} />}
           {head ?? <h1>{side ? "konduktor" : c.title || "Untitled"}</h1>}
           {sub && (
             <a class="subagent-of" title="Open the session that started this subagent" onClick={() => onShow?.(sub.of)}>

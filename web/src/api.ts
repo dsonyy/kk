@@ -29,6 +29,8 @@ export type Conversation = {
   in_worktree: boolean;
   // The feature the agent works on. Empty until kk or konduktor has decided.
   group?: string;
+  // The user starred the session to find it again.
+  starred?: boolean;
   title: string;
   created: string;
   last_message: string;

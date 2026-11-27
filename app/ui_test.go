@@ -488,8 +488,8 @@ func TestWorktreeIcon(t *testing.T) {
 	type card struct {
 		Title, Label, Tooltip, Dir string
 		Icon                       bool
-		// Distances in pixels: from the title to the icon, from the icon to the card's inner edge, and between the middles of the icon and the title's first line.
-		Gap, Edge, Middle float64
+		// Distances in pixels: from the title to the icon, from the icon to the star, and between the middles of the icon and the title's first line.
+		Gap, Star, Middle float64
 		// Start is how far below the top of the title its text begins, past the mark of an unread card.
 		Width, Height, Lines, Start float64
 	}
@@ -507,9 +507,9 @@ func TestWorktreeIcon(t *testing.T) {
 			first.setEnd(title.firstChild, 1)
 			out.start = first.getBoundingClientRect().top - t.top
 			if (!icon) return out
-			const i = icon.getBoundingClientRect(), s = getComputedStyle(tile)
+			const i = icon.getBoundingClientRect()
 			return { ...out, label: icon.getAttribute("aria-label"), tooltip: icon.title, width: i.width, height: i.height,
-				gap: i.left - t.right, edge: tile.getBoundingClientRect().right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth) - i.right,
+				gap: i.left - t.right, star: tile.querySelector(".star .icon").getBoundingClientRect().left - i.right,
 				middle: i.top + i.height / 2 - (t.top + line / 2) }
 		})`, view.cards), &cards)
 		long := 0
@@ -529,7 +529,7 @@ func TestWorktreeIcon(t *testing.T) {
 			if dir := e.conv(ids[c.Title]).Dir; c.Label != "Git worktree" || c.Tooltip != "Works in a git worktree: "+dir {
 				t.Errorf("%s: tooltip of %q: %q %q", view.tab, c.Title, c.Label, c.Tooltip)
 			}
-			if c.Width != 12 || c.Height != 12 || c.Gap < 6 || math.Abs(c.Edge) > 0.5 || math.Abs(c.Middle) > 1 {
+			if c.Width != 12 || c.Height != 12 || c.Gap < 6 || math.Abs(c.Star-c.Gap) > 0.5 || math.Abs(c.Middle) > 1 {
 				t.Errorf("%s: icon of %q is out of place: %+v", view.tab, c.Title, c)
 			}
 		}
@@ -1257,4 +1257,104 @@ func TestPageReloadsOnNewBuild(t *testing.T) {
 	p.eval(`(() => { const a = document.querySelector(".panels textarea"); a.value = ""; a.dispatchEvent(new Event("input", { bubbles: true })) })()`, nil)
 	e.mustKK("send", id, "hello again")
 	p.until(`window.loaded === undefined && document.querySelector(".tile")`)
+}
+
+func TestStarredSessions(t *testing.T) {
+	e := newEnv(t)
+	long := "Investigate why the nightly pipeline fails on the main branch only and fix the flaky integration tests for good"
+	starred := e.mustKK("new", "codex", "-C", e.work, long)
+	plain := e.mustKK("new", "codex", "-C", e.work, "Short one")
+	e.waitFor("answer", starred, turnEnded)
+	e.waitFor("answer", plain, turnEnded)
+	queued := e.mustKK("new", "codex", "-C", e.work, "-after", plain, "Queued follow-up")
+	p := e.openPage(1600, 900)
+	card := func(view, id string) string { return fmt.Sprintf(`document.querySelector("%s .tile[data-chain='%s']")`, view, id) }
+	star := func(view, id string) string { return card(view, id) + `.querySelector(".star")` }
+	shown := func(view string, ids ...string) {
+		t.Helper()
+		want := strings.Join(slices.Sorted(slices.Values(ids)), ",")
+		list := fmt.Sprintf(`[...document.querySelectorAll("%s .tile")].map((t) => t.dataset.chain).filter((id) => !id.startsWith("inbox-")).sort().join()`, view)
+		for end := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			var got string
+			p.eval(list, &got)
+			if got == want {
+				return
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s shows %s, want %s", view, got, want)
+			}
+		}
+	}
+	type box struct{ Width, Height float64 }
+	size := func(id string) (b box) {
+		p.eval(fmt.Sprintf(`(() => { const r = %s.getBoundingClientRect(); return { width: r.width, height: r.height } })()`, card(".sidebar", id)), &b)
+		return
+	}
+
+	shown(".sidebar", starred, plain, queued)
+	before := size(starred)
+	p.tap(star(".sidebar", starred))
+	p.until(star(".sidebar", starred) + `.classList.contains("on")`)
+	if after := size(starred); after != before {
+		t.Errorf("the card changed size when starred: %+v, then %+v", before, after)
+	}
+	var opened string
+	p.eval(`location.hash + [...document.querySelectorAll(".panels .conversation:not(.placeholder)")].map((c) => c.id).join()`, &opened)
+	if strings.Contains(opened, starred) {
+		t.Errorf("starring opened the session: %q", opened)
+	}
+	e.waitFor("star saved", starred, func(c convView) bool { return c.Starred })
+	p.tap(star(".sidebar", queued))
+	e.waitFor("queued star saved", queued, func(c convView) bool { return c.Starred })
+
+	// The star sits at the card's inner edge, centered on the first line of the title, and the long title still takes two lines.
+	var got struct{ Edge, Middle, Gap, Lines float64 }
+	p.eval(fmt.Sprintf(`(() => {
+		const tile = %s, title = tile.querySelector(".title"), icon = tile.querySelector(".star .icon")
+		const t = title.getBoundingClientRect(), i = icon.getBoundingClientRect(), s = getComputedStyle(tile), line = parseFloat(getComputedStyle(title).lineHeight)
+		return { edge: tile.getBoundingClientRect().right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth) - i.right,
+			middle: i.top + i.height / 2 - (t.top + line / 2), gap: i.left - t.right, lines: t.height / line }
+	})()`, card(".sidebar", starred)), &got)
+	if math.Abs(got.Edge) > 0.5 || math.Abs(got.Middle) > 1 || got.Gap < 6 || math.Abs(got.Lines-2) > 0.05 {
+		t.Errorf("star of a long title is out of place: %+v", got)
+	}
+	var colors []string
+	p.eval(fmt.Sprintf(`[%s, %s].map((s) => getComputedStyle(s).color)`, star(".sidebar", starred), star(".sidebar", plain)), &colors)
+	if colors[0] == colors[1] {
+		t.Errorf("starred and plain stars share the color %s", colors[0])
+	}
+	p.shot("star panel")
+
+	filter := `[...document.querySelectorAll(".sidebar .filters button")].find((b) => b.getAttribute("aria-label") === "Starred")`
+	p.click(filter)
+	shown(".sidebar", starred, queued)
+	p.shot("star filter")
+	// The filter combines with the state filter, as the other filters do.
+	p.eval(`localStorage.setItem("kk.filter", JSON.stringify({ dirs: [], states: ["Queued"], starred: true }))`, nil)
+	p.call("Page.reload", nil)
+	shown(".sidebar", queued)
+	p.eval(`localStorage.setItem("kk.filter", JSON.stringify({ dirs: [], states: [], starred: true }))`, nil)
+	p.call("Page.reload", nil)
+	shown(".sidebar", starred, queued)
+
+	p.click(`[...document.querySelectorAll(".views button")].find((b) => b.textContent === "Sessions")`)
+	shown(".board", starred, queued)
+	p.tap(star(".board", queued))
+	shown(".board", starred)
+	if e.conv(queued).Starred {
+		t.Error("the board did not remove the star")
+	}
+	p.click(`[...document.querySelectorAll(".sessions .filters button")].find((b) => b.textContent === "Clear")`)
+	shown(".board", starred, plain, queued)
+	p.shot("star sessions")
+
+	p.click(`[...document.querySelectorAll(".views button")].find((b) => b.textContent === "Agents")`)
+	p.openSession(plain)
+	head := fmt.Sprintf(`document.querySelector("#panel-%s .conv-head .star")`, plain)
+	p.tap(head)
+	e.waitFor("header star saved", plain, func(c convView) bool { return c.Starred })
+	p.until(head + `.classList.contains("on") && ` + star(".sidebar", plain) + `.classList.contains("on")`)
+	p.shot("star header")
+	p.call("Page.reload", nil)
+	p.until(head + `?.classList.contains("on")`)
 }

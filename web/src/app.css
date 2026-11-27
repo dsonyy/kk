@@ -94,6 +94,8 @@ u.mnemonic { text-decoration: underline; text-decoration-color: var(--text-dim);
 .icon-clock { mask-image: url("/icons/clock.svg"); }
 .icon-chain { mask-image: url("/icons/chain.svg"); }
 .icon-image { mask-image: url("/icons/image.svg"); }
+.icon-star { mask-image: url("/icons/star.svg"); }
+.icon-star-filled { mask-image: url("/icons/star-filled.svg"); }
 button:has(.icon) { display: inline-flex; align-items: center; gap: 6px; }
 button .icon { flex: none; width: 12px; height: 12px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--text-dim); vertical-align: 1px; }
@@ -221,6 +223,10 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .tile-top .title { flex: 1; min-width: 0; }
 /* The margin centers the icon on the first line of the title, however many lines the title takes. */
 .tile .icon-worktree { flex: none; width: 12px; height: 12px; margin-top: 4px; color: var(--text-dim); }
+/* The padding widens the click target; the margins keep the icon on the first line of the title and at the inner edge. */
+.star { flex: none; display: flex; padding: 4px; margin: 0 -4px; border: 0; background: none; color: var(--line-strong); }
+.star:hover, .star.on { color: var(--text-strong); }
+.star .icon { width: 12px; height: 12px; }
 .tile .meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-dim); font-size: 11px; }
 .tile .state.user { color: var(--text-strong); }
 .tile .reason { padding: 2px 6px; border: 1px solid var(--line-strong); color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -316,6 +322,9 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .conv-head .pin:hover { border-color: var(--line-strong); color: var(--text-strong); }
 .conv-head .pin.on { border-color: var(--line-strong); background: var(--surface-2); color: var(--text-strong); }
 .conv-head .pin .icon { width: 13px; height: 13px; }
+.conv-head .star { align-self: center; margin: 0 -6px 0 -5px; color: var(--text-dim); }
+.conv-head .star:hover, .conv-head .star.on { color: var(--text-strong); }
+.conv-head .star .icon { width: 14px; height: 14px; }
 .conv-head .subagent-of { flex: 0 0 100%; display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-dim); font-size: 12px; cursor: pointer; }
 .conv-head .subagent-of .icon { flex: none; width: 12px; height: 12px; }
 .conv-head .subagent-of bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }

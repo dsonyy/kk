@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Conversation } from "./api";
 import { Button, Check } from "./mnemonic";
 
-export type Filter = { dirs: string[]; states: string[] };
+export type Filter = { dirs: string[]; states: string[]; starred: boolean };
 
 // The states overlap: an exited session also waits for someone, and a session that needs action is its own and someone's turn.
 const states: Record<string, (c: Conversation) => boolean> = {
@@ -21,12 +21,12 @@ const states: Record<string, (c: Conversation) => boolean> = {
 };
 
 export function matches(f: Filter, c: Conversation) {
-  return (!f.dirs.length || f.dirs.includes(c.project)) && (!f.states.length || f.states.some((s) => states[s]?.(c)));
+  return (!f.dirs.length || f.dirs.includes(c.project)) && (!f.states.length || f.states.some((s) => states[s]?.(c))) && (!f.starred || !!c.starred);
 }
 
 export function useFilter(): [Filter, (f: Filter) => void] {
   const [filter, setFilter] = useState<Filter>(() => {
-    const f: Filter = { dirs: [], states: [], ...JSON.parse(localStorage.getItem("kk.filter") || "{}") };
+    const f: Filter = { dirs: [], states: [], starred: false, ...JSON.parse(localStorage.getItem("kk.filter") || "{}") };
     // A filter saved before the rebrand.
     return { ...f, states: f.states.map((s) => (s === "Conductor's turn" ? "konduktor's turn" : s)) };
   });
@@ -152,13 +152,21 @@ type FiltersProps = { sessions: Conversation[]; shown: number; filter: Filter; d
 
 export function Filters({ sessions, shown, filter, dirs, onChange, sort, onSort }: FiltersProps) {
   const projects = [...new Set([...sessions.map((c) => c.project), ...filter.dirs])].sort();
-  const active = filter.dirs.length + filter.states.length > 0;
+  const active = filter.dirs.length + filter.states.length > 0 || filter.starred;
   return (
     <div class="filters">
       {dirs && <Menu label="Directory" mono options={projects.map((p) => [p, shortName(p, projects)])} selected={filter.dirs} onChange={(d) => onChange({ ...filter, dirs: d })} />}
       <Menu label="State" options={Object.keys(states).map((s) => [s, s])} selected={filter.states} onChange={(s) => onChange({ ...filter, states: s })} />
+      <Button
+        label="Starred"
+        icon={filter.starred ? "star-filled" : "star"}
+        class={filter.starred ? "small on" : "small"}
+        aria-pressed={filter.starred}
+        title="Show only starred sessions"
+        onClick={() => onChange({ ...filter, starred: !filter.starred })}
+      />
       <Menu label="Sort" single options={Object.entries(sorts)} selected={[sort]} onChange={([s]) => onSort(s as Sort)} />
-      {active && <Button label="Clear" class="small" title="Show all sessions" onClick={() => onChange({ dirs: [], states: [] })} />}
+      {active && <Button label="Clear" class="small" title="Show all sessions" onClick={() => onChange({ dirs: [], states: [], starred: false })} />}
       {active && (
         <span class="muted">
           {shown} of {sessions.length}

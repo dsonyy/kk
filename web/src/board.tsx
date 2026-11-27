@@ -1,4 +1,5 @@
-import { harnessLabel, type Conversation } from "./api";
+import { useState } from "preact/hooks";
+import { act, api, harnessLabel, type Conversation } from "./api";
 import { arrange, ChainLinks, ChainRefs } from "./chain";
 import { byActivity, byName, compare, groupTime, time, type Sort } from "./filter";
 import { placedAt, TitleIcon } from "./schedule";
@@ -35,7 +36,32 @@ export function CardTitle({ c }: { c: Conversation }) {
       <TitleIcon c={c} />
       <div class="title">{c.title || "Untitled"}</div>
       {c.in_worktree && <i class="icon icon-worktree" role="img" aria-label="Git worktree" title={`Works in a git worktree: ${c.dir}`} />}
+      <Star c={c} />
     </div>
+  );
+}
+
+// The star shows the click at once; the list catches up when the server publishes the change.
+export function Star({ c }: { c: Conversation }) {
+  const [want, setWant] = useState<boolean>();
+  if (want === !!c.starred) setWant(undefined);
+  const on = want ?? !!c.starred;
+  const toggle = (e: Event) => {
+    e.stopPropagation();
+    setWant(!on);
+    act(async () => {
+      try {
+        await api(on ? "DELETE" : "PUT", `/api/conversations/${c.id}/star`);
+      } catch (err) {
+        setWant(undefined);
+        throw err;
+      }
+    });
+  };
+  return (
+    <button type="button" class={on ? "star on" : "star"} aria-label="Starred" aria-pressed={on} title={on ? "Remove the star" : "Star this session"} onClick={toggle}>
+      <i class={on ? "icon icon-star-filled" : "icon icon-star"} />
+    </button>
   );
 }
 
