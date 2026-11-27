@@ -102,4 +102,25 @@ func TestYourTurnBlinks(t *testing.T) {
 	e.mustKK("send", mine, "slow work")
 	e.waitFor("work again", mine, func(c convView) bool { return c.Status == statusWorking })
 	p.until(`!(` + blinks(card(".sidebar", mine)) + `) && !(` + blinks(last(mine)) + `)`)
+
+	// A konduktor waits for the user whenever it is idle, which is not a question to answer.
+	side := `[...document.querySelectorAll(".side-panel .feed-inner > .msg")].at(-1)`
+	e.mustKK("send", coordinatorID, "hello konduktor")
+	e.waitFor("an idle konduktor", coordinatorID, func(c convView) bool {
+		return hasEvent(c, kindAssistant, "echo: hello konduktor") && c.Status == statusIdle && c.WaitingFor == waitingUser
+	})
+	tab := func(title string) {
+		p.click(fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .dirs > div")].find((d) => d.title.startsWith(%q))`, title))
+	}
+	tab("Every directory")
+	p.until(side + `?.textContent.includes("echo: hello konduktor")`)
+	still(side, card("", coordinatorID))
+	k := e.startKonduktor(e.work, "hello work")
+	if c := e.conv(k); c.WaitingFor != waitingUser {
+		t.Fatalf("the konduktor of the directory waits for %q", c.WaitingFor)
+	}
+	tab(e.work)
+	p.until(side + `?.textContent.includes("echo: hello work")`)
+	still(side, card("", k))
+	p.shot("turn konduktor")
 }
