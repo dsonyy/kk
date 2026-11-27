@@ -21,11 +21,16 @@ for (let a = 0; a < 3; a++)
 
 const FPS = 30;
 const BOUNCE = 13.6;
-// The height of a bounce in pixels, the one the solid had in its own 110 px strip.
+// The height of the launch in pixels, the one the solid had in its own 110 px strip.
 const LIFT = 72;
-const SIZE = 36;
-// The still frame rests on the floor at the far right, just above the system load chart.
-const STILL = 14 * BOUNCE - 0.01;
+// The share of its speed the solid keeps at each rebound.
+const KEEP = 0.65;
+const SQUASH = 0.44;
+// The seconds the solid takes to cross from wall to wall.
+const CROSS = 8.5;
+const SIZE = 54;
+// The still frame rests on the floor at the right wall, where a series of rebounds has died out.
+const STILL = 5 * BOUNCE - 0.01;
 const CAMERA = 7;
 const LIGHT = norm([-0.5, -0.8, -0.6]);
 
@@ -53,7 +58,7 @@ function readStyle(canvas: HTMLCanvasElement): Style {
   return { light: rgb("--glenz-light"), dark: rgb("--glenz-dark"), edge: rgb("--glenz-edge") };
 }
 
-function frame(t: number, w: number, floor: number): Frame {
+function frame(t: number, w: number, floor: number, edge = 0): Frame {
   const [ax, ay, az] = [t * 0.105, t * 0.165 + 0.6, t * 0.065 + 0.3];
   const rot = ([x, y, z]: V): V => {
     [y, z] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
@@ -62,11 +67,16 @@ function frame(t: number, w: number, floor: number): Frame {
     return [x, y, z];
   };
 
-  // The bounce is a parabola. Each landing squashes the solid, and it wobbles like jelly until the wobble dies out.
+  // Every BOUNCE seconds the solid is launched to LIFT and rebounds like a ball. Hop n leaves the floor at KEEP^n of the
+  // launch speed, so it lasts KEEP^n as long and is KEEP^2n as high, and the hops add up to BOUNCE. Each landing squashes
+  // the solid by its speed, and it wobbles like jelly until the wobble dies out.
   const since = t % BOUNCE;
-  const u = since / BOUNCE;
-  const lift = LIFT * 4 * u * (1 - u);
-  const sy = 1 - 0.22 * Math.exp(-since / 0.32) * Math.cos(since * 13);
+  const n = Math.floor(Math.log(1 - since / BOUNCE) / Math.log(KEEP));
+  const speed = KEEP ** n;
+  const hop = since - BOUNCE * (1 - speed);
+  const u = Math.min(1, Math.max(0, hop / (BOUNCE * (1 - KEEP) * speed)));
+  const lift = LIFT * speed * speed * 4 * u * (1 - u);
+  const sy = 1 - SQUASH * KEEP ** Math.max(0, n - 1) * Math.exp(-hop / 0.32) * Math.cos(hop * 13);
   const sx = 1 / Math.sqrt(sy);
 
   const tris = FACES.map(({ v, tone }) => {
@@ -81,12 +91,16 @@ function frame(t: number, w: number, floor: number): Frame {
   });
   tris.sort((a, b) => b.depth - a.depth);
   const bottom = Math.max(...tris.flatMap((tr) => tr.p.map((p) => p[1])));
-  const margin = SIZE * 2.2;
-  const cx = w / 2 + (w / 2 - margin) * (0.75 * Math.sin(t * 0.085) + 0.25 * Math.sin(t * 0.205 + 1));
+  // The solid crosses at a steady speed and turns where its outline touches a wall. An edge stroked across the outline keeps
+  // its outer half, edge px, inside too.
+  const xs = tris.flatMap((tr) => tr.p.map((p) => p[0]));
+  const [left, right] = [edge - Math.min(...xs), edge + Math.max(...xs)];
+  const cx = left + (w - left - right) * Math.abs(((t / CROSS) % 2) - 1);
   return { tris, cx, cy: floor - 1 - bottom - lift };
 }
 
-// The floor is the top of the system load, the element after the canvas.
+// The floor is the top of the system load, the element after the canvas. The canvas fills the sidebar inside its border, so
+// its sides are the walls.
 function size(canvas: HTMLCanvasElement) {
   const dpr = window.devicePixelRatio || 1;
   const [w, h] = [canvas.clientWidth, canvas.clientHeight];
@@ -113,10 +127,10 @@ function draw2d(canvas: HTMLCanvasElement, style: Style, t: number) {
   const { w, h, dpr, floor } = size(canvas);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const { tris, cx, cy } = frame(t, w, floor);
+  ctx.lineWidth = 0.75;
+  const { tris, cx, cy } = frame(t, w, floor, ctx.lineWidth / 2);
 
   ctx.lineJoin = "round";
-  ctx.lineWidth = 0.75;
   ctx.strokeStyle = `rgb(${style.edge.join(" ")})`;
   for (const { p, tone, n, front } of tris) {
     ctx.beginPath();
