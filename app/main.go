@@ -34,6 +34,8 @@ const usage = `kk - konduktor, run and steer coding agents in tmux from the web
   kk start <id> [handoff|-]   start a queued conversation, the handoff added to its prompt
   kk group                    list the feature groups of every project
   kk group <id> <name>        move a conversation to a feature group
+  kk star <id>                star a conversation
+  kk unstar <id>              remove the star
   kk send <id> <text|->       type a message into the agent
   kk screen <id>              print the agent's tmux screen
   kk keys <id> <key>...       press keys in the agent's window
@@ -244,7 +246,11 @@ func runCLI(cmd string, args []string) error {
 			if c.After != "" {
 				after = "  (after " + c.After + ")"
 			}
-			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), c.Title, after)
+			star := ""
+			if c.Starred {
+				star = "★ "
+			}
+			fmt.Printf("%s  %-15s  %-11s  %-9s  %-14s  %s  %s%s%s\n", c.ID, state, waiting, c.Harness, model, lastActive(c.Conversation).Format("01-02 15:04"), star, c.Title, after)
 			printAgents(c.Subagents, false, c.Closed)
 		}
 	case "show":
@@ -345,6 +351,11 @@ func runCLI(cmd string, args []string) error {
 			return err
 		}
 		return call("POST", "/api/conversations/"+args[0]+"/group", map[string]string{"group": strings.Join(args[1:], " ")}, nil)
+	case "star", "unstar":
+		if err := need(1); err != nil {
+			return err
+		}
+		return call(map[bool]string{true: "PUT", false: "DELETE"}[cmd == "star"], "/api/conversations/"+args[0]+"/star", nil, nil)
 	case "send":
 		if err := need(2); err != nil {
 			return err

@@ -54,6 +54,8 @@ type Conversation struct {
 	Escalation string `yaml:"escalation,omitempty" json:"escalation,omitempty"`
 	// Group names the feature the agent works on, shared by the agents of one project that work on the same thing.
 	Group string `yaml:"group,omitempty" json:"group,omitempty"`
+	// Starred marks a conversation the user wants to find again.
+	Starred bool `yaml:"starred,omitempty" json:"starred,omitempty"`
 	// Sleeping marks an agent kk stopped after a long time without activity. It waits for nobody.
 	Sleeping bool      `yaml:"sleeping,omitempty" json:"sleeping,omitempty"`
 	Schedule *Schedule `yaml:"schedule,omitempty" json:"schedule,omitempty"`
@@ -278,6 +280,9 @@ func logChange(old, c *Conversation) {
 	}
 	if old.Group != c.Group {
 		log.Printf("conversation %s: group changed", c.ID)
+	}
+	if old.Starred != c.Starred {
+		log.Printf("conversation %s: %s", c.ID, map[bool]string{true: "starred", false: "unstarred"}[c.Starred])
 	}
 	if old.Sleeping != c.Sleeping {
 		log.Printf("conversation %s: %s", c.ID, map[bool]string{true: "asleep", false: "awake"}[c.Sleeping])

@@ -142,6 +142,8 @@ func (s *Server) routes() *http.ServeMux {
 	api("POST /api/conversations/{id}/reset", s.handleReset)
 	api("POST /api/conversations/{id}/escalate", s.handleEscalate)
 	api("POST /api/conversations/{id}/group", s.handleSetGroup)
+	api("PUT /api/conversations/{id}/star", s.handleStar)
+	api("DELETE /api/conversations/{id}/star", s.handleStar)
 	api("PUT /api/conversations/{id}/schedule", s.handleSchedule)
 	api("DELETE /api/conversations/{id}/schedule", s.handleUnschedule)
 	api("POST /api/conversations/{id}/start", s.handleStart)
@@ -690,6 +692,25 @@ func (s *Server) handleEscalate(r *http.Request) (any, error) {
 	})
 	s.publish(c.ID)
 	return map[string]bool{"ok": true}, nil
+}
+
+func (s *Server) handleStar(r *http.Request) (any, error) {
+	c, err := s.conv(r)
+	if err != nil {
+		return nil, err
+	}
+	on := r.Method == http.MethodPut
+	c, changed := s.store.update(c.ID, func(c *Conversation) bool {
+		if c.Starred == on {
+			return false
+		}
+		c.Starred = on
+		return true
+	})
+	if changed {
+		s.publish(c.ID)
+	}
+	return s.view(c, false), nil
 }
 
 // handleHandover hands a session to a konduktor, which hears of it and drives it from then on.
