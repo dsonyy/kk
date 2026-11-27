@@ -1,6 +1,6 @@
 import type * as preact from "preact";
-import { render } from "preact";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { createContext, render } from "preact";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { act, api, flash, harnessLabel, usageLabel, usageTitle, when, type Attachment, type Conversation, type Event, type Harness, type PastSession, type Repo, type Rewind } from "./api";
@@ -35,6 +35,29 @@ const isView = (t: Tab) => (views as readonly string[]).includes(t);
 
 reportErrors();
 
+// A konduktor names a session as a link to session:<id>. The link becomes an empty slot that SessionRef fills with the
+// session's current title instead of the written one.
+marked.use({
+  renderer: {
+    link({ href }) {
+      return href.startsWith("session:") ? `<span data-session="${href.slice(8)}"></span>` : false;
+    },
+  },
+});
+
+const Sessions = createContext<{ list: Conversation[]; show: (id: string) => void }>({ list: [], show: () => {} });
+
+function SessionRef({ id, list, show }: { id: string; list: Conversation[]; show: (id: string) => void }) {
+  const c = list.find((x) => x.id === id);
+  if (!c) return <span class="session-ref unknown mono">{id}</span>;
+  return (
+    <button type="button" class="session-ref" title={c.title || "Untitled"} onClick={() => show(id)}>
+      <Dot c={c} />
+      <bdi>{c.title || "Untitled"}</bdi>
+    </button>
+  );
+}
+
 const mdCache = new Map<string, string>();
 function Markdown({ text, images = [], partial }: { text: string; images?: Attachment[]; partial?: boolean }) {
   const key = images.length ? `${text}\0${images.map((i) => i.url).join("\0")}` : text;
@@ -50,10 +73,14 @@ function Markdown({ text, images = [], partial }: { text: string; images?: Attac
     if (!partial) mdCache.set(key, html);
   }
   const box = useRef<HTMLDivElement>(null);
+  const { list, show } = useContext(Sessions);
   useLayoutEffect(() => {
     linkImages(box.current!);
     fitTables(box.current!, key);
   }, [html]);
+  useLayoutEffect(() => {
+    for (const slot of box.current!.querySelectorAll<HTMLElement>("[data-session]")) render(<SessionRef id={slot.dataset.session!} list={list} show={show} />, slot);
+  }, [html, list]);
   return <div ref={box} class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -365,7 +392,9 @@ function App() {
   // An object, so that showing the same panel twice scrolls to it again.
   const [focus, setFocus] = useState<{ id: string }>();
   useEffect(() => {
-    if (focus) document.getElementById(`panel-${focus.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    if (!focus) return;
+    document.getElementById(`panel-${focus.id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+    document.querySelector(`.sidebar .tile[data-chain="${focus.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [focus]);
   // A session opens in its own directory, unless All is shown or the directory is given.
   const show = (id: string, to?: string) => {
@@ -378,9 +407,10 @@ function App() {
     go({ tab: "Agents", dir: target, panels: next });
     setFocus({ id });
   };
+  const links = useMemo(() => ({ list: sessions, show }), [sessions]);
 
   return (
-    <>
+    <Sessions.Provider value={links}>
       <nav class="tabs">
         <span class="logo">
           <b>k</b>ondu<b>k</b>tor
@@ -572,7 +602,7 @@ function App() {
         />
       )}
       <ImageViewer />
-    </>
+    </Sessions.Provider>
   );
 }
 

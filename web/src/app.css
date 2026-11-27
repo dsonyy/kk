@@ -493,6 +493,11 @@ button .icon { flex: none; width: 12px; height: 12px; }
 .md .col-resize:hover::after, .md .col-resize.dragging::after { background: var(--text-dim); }
 .md a { color: var(--read-strong); text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--text-dim); text-underline-offset: 3px; }
 .md a:hover { text-decoration-color: var(--read-strong); }
+.session-ref { display: inline-flex; align-items: baseline; max-width: min(100%, 320px); padding: 0 6px; border: 1px solid var(--line-strong); background: none; color: var(--read-strong); font-size: .9em; line-height: 1.4; white-space: nowrap; vertical-align: baseline; }
+button.session-ref:hover { border-color: var(--read-strong); color: var(--read-strong); }
+.session-ref bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.session-ref .dot { flex: none; align-self: center; }
+.session-ref.unknown { border-color: var(--line); color: var(--text-dim); }
 .msg.user .md { font-size: 14px; line-height: 1.5; }
 
 .overlay { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; padding: var(--gap); background: var(--backdrop); }

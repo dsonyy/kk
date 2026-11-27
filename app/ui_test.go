@@ -1358,3 +1358,92 @@ func TestStarredSessions(t *testing.T) {
 	p.call("Page.reload", nil)
 	p.until(head + `?.classList.contains("on")`)
 }
+
+// TestSessionBadges has the konduktor name sessions as links to session:<id> in a sentence, a list, a table, code and for an
+// id nobody knows. Each known one shows the session's current title in a badge that keeps the line height and opens the
+// session, with its card highlighted and scrolled into view.
+func TestSessionBadges(t *testing.T) {
+	e := newCoordinatorEnv(t)
+	var ids []string
+	for i := range 8 {
+		ids = append(ids, e.mustKK("new", "claude", "-C", e.work, fmt.Sprintf("task number %d", i)))
+	}
+	for _, id := range ids {
+		e.waitFor("answer", id, turnEnded)
+	}
+	first, long := ids[0], ids[1]
+	e.mustKK("send", long, "/rename", "Investigate why the nightly pipeline fails on the main branch only and fix the flaky tests")
+	e.waitFor("long title", long, func(c convView) bool { return strings.HasPrefix(c.Title, "Investigate") })
+	var list strings.Builder
+	for _, id := range ids {
+		fmt.Fprintf(&list, "- [Task](session:%s) is idle\n", id)
+	}
+	e.startKonduktor(e.work, fmt.Sprintf("Done in [Task zero](session:%[1]s), merged today.\n\n%[2]s\n| Session | State |\n|---|---|\n| [Task](session:%[1]s) | idle |\n| Plain | idle |\n\nNot `[Task](session:%[1]s)` in code, and closed: [Gone](session:deadbeef).\n\n```\n[Task](session:%[1]s)\n```\n", first, list.String()))
+
+	p := e.openPage(1600, 900)
+	p.click(fmt.Sprintf(`[...document.querySelectorAll("nav.tabs .dirs > div")].find((d) => d.title.startsWith(%q))`, e.work))
+	const md = `document.querySelector(".side-panel .msg.assistant .md")`
+	p.until(md + `?.querySelectorAll("button.session-ref").length === 10`)
+	var got struct {
+		Sentence, Code, Block, Unknown, UnknownTag string
+		Truncated                                  bool
+		Lines                                      []float64
+		Baselines                                  []float64
+	}
+	p.eval(`(() => {
+		const md = `+md+`, line = parseFloat(getComputedStyle(md).lineHeight)
+		const p = md.querySelector("p"), li = md.querySelector("li"), rows = md.querySelectorAll("tbody tr")
+		const bdi = md.querySelector(".session-ref[title^='Investigate'] bdi")
+		// An empty inline block sits on the baseline of its line: one in the text, one in a badge.
+		const mark = (parent, before) => { const m = document.createElement("span"); m.style.cssText = "display:inline-block;width:0;height:0"; parent.insertBefore(m, before); return m }
+		const baselines = [p, li, rows[0].cells[0]].map((box) => {
+			const slot = box.querySelector("[data-session]"), a = mark(box, slot), b = mark(slot.querySelector("bdi"), null)
+			const d = b.getBoundingClientRect().top - a.getBoundingClientRect().top
+			a.remove(); b.remove()
+			return d
+		})
+		const unknown = md.querySelector(".session-ref.unknown")
+		return {
+			sentence: p.textContent, code: md.querySelector("p code").textContent, block: md.querySelector("pre code").textContent.trim(),
+			unknown: unknown.textContent, unknownTag: unknown.tagName, truncated: bdi.scrollWidth > bdi.clientWidth,
+			lines: [p.getBoundingClientRect().height / line, li.getBoundingClientRect().height / line, rows[0].getBoundingClientRect().height - rows[1].getBoundingClientRect().height],
+			baselines,
+		}
+	})()`, &got)
+	if got.Sentence != "echo: Done in Title: task number 0, merged today." || got.Code != fmt.Sprintf("[Task](session:%s)", first) || got.Block != got.Code {
+		t.Errorf("badge text or code: %+v", got)
+	}
+	if got.Unknown != "deadbeef" || got.UnknownTag != "SPAN" || !got.Truncated {
+		t.Errorf("unknown id or long title: %+v", got)
+	}
+	if math.Abs(got.Lines[0]-1) > 0.01 || math.Abs(got.Lines[1]-1) > 0.01 || math.Abs(got.Lines[2]) > 0.5 {
+		t.Errorf("a badge changes the line height: %v (lines of the sentence and the list item, row height difference)", got.Lines)
+	}
+	for i, d := range got.Baselines {
+		if math.Abs(d) > 1 {
+			t.Errorf("badge %d sits %.1fpx off the baseline", i, d)
+		}
+	}
+	p.eval(md+`.scrollIntoView()`, nil)
+	p.shot("badges-sentence")
+	p.eval(md+`.querySelector("table").scrollIntoView()`, nil)
+	p.shot("badges-list")
+
+	e.mustKK("send", first, "/rename", "Billing export")
+	p.until(md + `.querySelector("p .session-ref").textContent === "Billing export"`)
+
+	p.eval(`document.querySelector(".sidebar .groups").scrollTop = 1e6`, nil)
+	var hidden string
+	p.eval(`(() => {
+		const box = document.querySelector(".sidebar .groups").getBoundingClientRect()
+		return [...document.querySelectorAll(".sidebar .tile")].find((t) => t.getBoundingClientRect().bottom <= box.top)?.dataset.chain ?? ""
+	})()`, &hidden)
+	if hidden == "" {
+		t.Fatal("no card is scrolled out of the sidebar")
+	}
+	p.click(fmt.Sprintf(md+`.querySelector("li:nth-child(%d) .session-ref")`, slices.Index(ids, hidden)+1))
+	card := fmt.Sprintf(`document.querySelector(".sidebar .tile[data-chain='%s']")`, hidden)
+	p.until(fmt.Sprintf(`document.querySelector("#panel-%s:not(.placeholder)") && %s.classList.contains("on")`, hidden, card))
+	p.until(`(() => { const r = ` + card + `.getBoundingClientRect(), box = document.querySelector(".sidebar .groups").getBoundingClientRect(); return r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5 })()`)
+	p.shot("badges-opened")
+}
