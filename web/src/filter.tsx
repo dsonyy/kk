@@ -4,11 +4,13 @@ import { Button, Check } from "./mnemonic";
 
 export type Filter = { dirs: string[]; states: string[]; starred: boolean };
 
+export const yourTurn = (c: Conversation) => !c.closed && c.waiting_for === "user";
+
 // The states overlap: an exited session also waits for someone, and a session that needs action is its own and someone's turn.
 const states: Record<string, (c: Conversation) => boolean> = {
   Working: (c) => !c.closed && (c.status === "working" || c.status === "starting"),
   "Background working": (c) => !c.closed && c.status === "background",
-  "Your turn": (c) => !c.closed && c.waiting_for === "user",
+  "Your turn": yourTurn,
   "konduktor's turn": (c) => !c.closed && c.waiting_for === "conductor",
   "Action required": (c) => !c.closed && !!c.attention,
   Idle: (c) => !c.closed && c.status === "idle",

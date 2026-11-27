@@ -14,7 +14,7 @@ import { Board, CardTitle, Star } from "./board";
 import { arrange, ChainLinks, ChainRefs, type Chains } from "./chain";
 import { AgentsFold, AgentTile, agentState, useUnfolded } from "./subagents";
 import { Inbox } from "./inbox";
-import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort } from "./filter";
+import { byActivity, byName, compare, Filters, matches, shortName, useFilter, useSort, yourTurn } from "./filter";
 import { Attachments, PromptInput, useAttachments, useSkills, withPaths } from "./prompt";
 import { UserMessage, useRewind } from "./rewind";
 import { SettingsView } from "./settings";
@@ -775,7 +775,7 @@ function Tiles({ list, all, open, onOpen }: { list: Conversation[]; all: Convers
 }
 
 function Tile({ c, chains, on, onOpen }: { c: Conversation; chains: Chains; on: boolean; onOpen: () => void }) {
-  const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited"];
+  const cls = ["tile", on && "on", attention(c) || (["working", "background", "queued"].includes(c.status) && c.status), c.unread && !on && "unread", c.closed ? "closed" : c.status === "exited" && "exited", yourTurn(c) && "yours"];
   return (
     <li class={cls.filter(Boolean).join(" ")} data-chain={c.id} onClick={onOpen} title={c.attention || c.escalation || undefined}>
       <CardTitle c={c} />
@@ -1196,7 +1196,7 @@ function ConversationView({ c, reload, side, onHide, pinned, onPin, before, of, 
         {view === "media" && <Media items={images} />}
         <div
           hidden={view !== "chat"}
-          class="feed"
+          class={yourTurn(c) ? "feed yours" : "feed"}
           ref={feed}
           onScroll={(e) => {
             const el = e.currentTarget;
@@ -1800,6 +1800,12 @@ function NewSession({ initial, dir: here, onClose, onCreated }: { initial: strin
     </div>
   );
 }
+
+// Every blink of a session waiting for the user runs on the document clock, so a card and its open chat blink together.
+document.addEventListener("animationstart", (e) => {
+  if (e.animationName !== "turn") return;
+  for (const a of (e.target as Element).getAnimations()) if ((a as CSSAnimation).animationName === "turn") a.startTime = 0;
+});
 
 const root = document.createElement("div");
 root.id = "app";
