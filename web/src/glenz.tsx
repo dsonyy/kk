@@ -20,17 +20,15 @@ for (let a = 0; a < 3; a++)
       }
 
 const FPS = 30;
-const BOUNCE = 13.6;
-// The height of the launch in pixels, the one the solid had in its own 110 px strip.
+// The seconds of one hop and its height in pixels.
+const HOP = 19.04;
 const LIFT = 72;
-// The share of its speed the solid keeps at each rebound.
-const KEEP = 0.65;
 const SQUASH = 0.44;
 // The seconds the solid takes to cross from wall to wall.
 const CROSS = 8.5;
 const SIZE = 54;
-// The still frame rests on the floor at the right wall, where a series of rebounds has died out.
-const STILL = 5 * BOUNCE - 0.01;
+// The still frame lands on the floor at the right wall: 25 hops take as long as 28 round trips.
+const STILL = 25 * HOP - 0.01;
 const CAMERA = 7;
 const LIGHT = norm([-0.5, -0.8, -0.6]);
 
@@ -67,16 +65,11 @@ function frame(t: number, w: number, floor: number, edge = 0): Frame {
     return [x, y, z];
   };
 
-  // Every BOUNCE seconds the solid is launched to LIFT and rebounds like a ball. Hop n leaves the floor at KEEP^n of the
-  // launch speed, so it lasts KEEP^n as long and is KEEP^2n as high, and the hops add up to BOUNCE. Each landing squashes
-  // the solid by its speed, and it wobbles like jelly until the wobble dies out.
-  const since = t % BOUNCE;
-  const n = Math.floor(Math.log(1 - since / BOUNCE) / Math.log(KEEP));
-  const speed = KEEP ** n;
-  const hop = since - BOUNCE * (1 - speed);
-  const u = Math.min(1, Math.max(0, hop / (BOUNCE * (1 - KEEP) * speed)));
-  const lift = LIFT * speed * speed * 4 * u * (1 - u);
-  const sy = 1 - SQUASH * KEEP ** Math.max(0, n - 1) * Math.exp(-hop / 0.32) * Math.cos(hop * 13);
+  // Each landing squashes the solid, and it wobbles like jelly while it rises again.
+  const hop = t % HOP;
+  const u = hop / HOP;
+  const lift = LIFT * 4 * u * (1 - u);
+  const sy = 1 - SQUASH * Math.exp(-hop / 1.28) * Math.cos(hop * 3.25);
   const sx = 1 / Math.sqrt(sy);
 
   const tris = FACES.map(({ v, tone }) => {
