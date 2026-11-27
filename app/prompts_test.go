@@ -86,6 +86,10 @@ func TestKonduktorPrompt(t *testing.T) {
 			t.Fatalf("%q did not reset to the default: %q\n%s", text, v.Settings.CoordinatorPrompt, read())
 		}
 	}
+	// The default tells the konduktor to name sessions to the user by title, as badges the web app renders.
+	if !strings.Contains(read(), "name it by its title as a link to session:<id>, for example [Billing export](session:3fa2b1c0)") {
+		t.Fatalf("the default prompt does not describe session badges:\n%s", read())
+	}
 	if data, _ := os.ReadFile(settingsPath(e.home)); strings.Contains(string(data), "coordinator_prompt") {
 		t.Fatalf("settings.yaml keeps the default:\n%s", data)
 	}
